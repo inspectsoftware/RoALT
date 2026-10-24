@@ -57,15 +57,23 @@ fn main_window(app: &TauriApp, data_dir: &Path, theme: Theme) -> tauri::Result<(
         Theme::Light => Color(242, 243, 240, 255),
         _ => Color(10, 11, 13, 255),
     };
-    WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+    #[allow(unused_mut)]
+    let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
         .title("RoALT")
         .inner_size(1280.0, 800.0)
         .min_inner_size(960.0, 600.0)
         .decorations(false)
         .background_color(bg)
         // The UI's own WebView2 profile; never used for roblox.com.
-        .data_directory(data_dir.join("webview"))
-        .build()?;
+        .data_directory(data_dir.join("webview"));
+    // Debug builds only: DevTools protocol for automated UI checks on a hidden desktop.
+    #[cfg(debug_assertions)]
+    if let Ok(port) = std::env::var("ROALT_CDP_PORT") {
+        builder = builder.additional_browser_args(&format!(
+            "--remote-debugging-port={port} --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"
+        ));
+    }
+    builder.build()?;
     Ok(())
 }
 

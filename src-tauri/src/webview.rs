@@ -2,15 +2,20 @@
 
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use tauri::webview::{Cookie, PlatformWebview};
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
-use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings4;
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use url::Url;
+use webview2_com::Microsoft::Web::WebView2::Win32::{
+    COREWEBVIEW2_COOKIE_SAME_SITE_KIND_LAX, ICoreWebView2_2, ICoreWebView2Settings4,
+};
 use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
-use windows::core::Interface;
+use windows::core::{Interface, PCWSTR, w};
+use zeroize::Zeroizing;
 
 use crate::error::{AppError, Result};
 use crate::roblox_api::endpoints;
@@ -19,6 +24,7 @@ use crate::vault::Secret;
 const TMP_DIR: &str = "tmp-webview";
 const POLL: Duration = Duration::from_millis(700);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const HOME_PAGE: &str = "https://www.roblox.com/home";
 
 /// Variables WebView2 reads before (and instead of) the options Tauri passes it.
 const WEBVIEW2_VARS: [&str; 6] = [
@@ -42,8 +48,7 @@ pub async fn capture_login(app: &AppHandle, data_dir: &Path) -> Result<Secret> {
     let id = uuid::Uuid::new_v4();
     let label = format!("login-{id}");
     let profile = data_dir.join(TMP_DIR).join(id.to_string());
-    let url = endpoints::LOGIN_PAGE.parse().map_err(|e: url::ParseError| AppError::Internal(e.to_string()))?;
-    let built = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
+    let built = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(parse_url(endpoints::LOGIN_PAGE)?))
         .title("Sign in to Roblox — RoALT")
         .inner_size(480.0, 760.0)
         .center()
@@ -59,7 +64,7 @@ pub async fn capture_login(app: &AppHandle, data_dir: &Path) -> Result<Secret> {
             return Err(e.into());
         }
     };
-    let (pid, cookie) = match harden(&window).await {
+    let (pid, cookie) = match harden(&window, None).await {
         Ok(pid) => (Some(pid), wait_for_cookie(app.clone(), label).await),
         Err(e) => (None, Err(e)),
     };
@@ -85,8 +90,50 @@ pub async fn open_session(
     cookie: Secret,
     on_close: impl FnOnce(Option<Secret>) + Send + 'static,
 ) -> Result<()> {
-    let _ = (app, data_dir, title, cookie, on_close);
-    todo!("webview: open_session")
+    let home = parse_url(HOME_PAGE)?;
+    let id = uuid::Uuid::new_v4();
+    let label = format!("session-{id}");
+    let profile = data_dir.join(TMP_DIR).join(id.to_string());
+    // Blank first, so nothing loads from Roblox before the cookie is in place.
+    let built = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(parse_url("about:blank")?))
+        .title(title)
+        .inner_size(1180.0, 800.0)
+        .center()
+        .data_directory(profile.clone())
+        .incognito(true)
+        .devtools(cfg!(debug_assertions))
+        .general_autofill_enabled(false)
+        .build();
+    let window = match built {
+        Ok(w) => w,
+        Err(e) => {
+            cleanup(None, profile).await;
+            return Err(e.into());
+        }
+    };
+    let pid = match harden(&window, Some(cookie)).await {
+        Ok(pid) => pid,
+        Err(e) => {
+            let _ = window.destroy();
+            cleanup(None, profile).await;
+            return Err(e);
+        }
+    };
+    // ponytail: a close in the instant before this handler exists skips on_close; the start-up
+    // sweep deletes the profile, as after an app exit.
+    let (app, title) = (app.clone(), title.to_owned());
+    let pending = Mutex::new(Some(move || end_session(&app, &label, &title, pid, &profile, on_close)));
+    window.on_window_event(move |event| {
+        // `cookies()` deadlocks in here: keep the window and finish on another thread.
+        if let WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            if let Some(end) = take_once(&pending) {
+                tauri::async_runtime::spawn_blocking(end);
+            }
+        }
+    });
+    window.navigate(home)?;
+    Ok(())
 }
 
 /// Deletes leftover `tmp-webview/*` profiles from earlier runs.
@@ -95,14 +142,14 @@ pub fn sweep_temp_profiles(data_dir: &Path) {
         Ok(entries) => entries,
         Err(e) if e.kind() == ErrorKind::NotFound => return,
         Err(e) => {
-            log::warn!("could not list old login profiles: {e}");
+            log::warn!("could not list old browser profiles: {e}");
             return;
         }
     };
     for path in entries.flatten().map(|e| e.path()) {
         let removed = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
         if let Err(e) = removed {
-            log::warn!("could not delete old login profile {}: {e}", path.display());
+            log::warn!("could not delete old browser profile {}: {e}", path.display());
         }
     }
 }
@@ -139,19 +186,21 @@ impl Drop for LoginSlot {
     }
 }
 
-/// Turns off what Tauri does not expose and returns the profile's browser process id.
-async fn harden(window: &WebviewWindow) -> Result<u32> {
+/// Turns off what Tauri does not expose, adds `cookie` as `.ROBLOSECURITY` if given, and
+/// returns the profile's browser process id.
+async fn harden(window: &WebviewWindow, cookie: Option<Secret>) -> Result<u32> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     window.with_webview(move |pv| {
-        let r = harden_webview(&pv).map_err(|e| AppError::Internal(format!("WebView2 setup failed: {e}")));
+        let r = harden_webview(&pv, cookie.as_ref()).map_err(|e| AppError::Internal(format!("WebView2 setup failed: {e}")));
         let _ = tx.send(r);
     })?;
     // The closure is dropped unrun if the window is already gone.
     rx.await.map_err(|_| AppError::Cancelled)?
 }
 
-fn harden_webview(pv: &PlatformWebview) -> windows::core::Result<u32> {
-    // SAFETY: COM calls on the main thread (with_webview), on live interfaces from WebView2.
+fn harden_webview(pv: &PlatformWebview, cookie: Option<&Secret>) -> windows::core::Result<u32> {
+    // SAFETY: COM calls on the main thread (with_webview), on live interfaces from WebView2;
+    // `value` outlives the call that reads it.
     unsafe {
         let wv = pv.controller().CoreWebView2()?;
         let settings = wv.Settings()?;
@@ -159,10 +208,57 @@ fn harden_webview(pv: &PlatformWebview) -> windows::core::Result<u32> {
         let settings = settings.cast::<ICoreWebView2Settings4>()?;
         settings.SetAreBrowserAcceleratorKeysEnabled(false)?;
         settings.SetIsPasswordAutosaveEnabled(false)?;
+        if let Some(cookie) = cookie {
+            // WebView2's own manager: `.roblox.com` keeps its dot (Tauri's `set_cookie` drops it).
+            let value = wide(cookie.expose());
+            let mgr = wv.cast::<ICoreWebView2_2>()?.CookieManager()?;
+            let c = mgr.CreateCookie(w!(".ROBLOSECURITY"), PCWSTR(value.as_ptr()), w!(".roblox.com"), w!("/"))?;
+            c.SetIsHttpOnly(true)?;
+            c.SetIsSecure(true)?;
+            c.SetSameSite(COREWEBVIEW2_COOKIE_SAME_SITE_KIND_LAX)?;
+            mgr.AddOrUpdateCookie(&c)?;
+        }
         let mut pid = 0;
         wv.BrowserProcessId(&mut pid)?;
         Ok(pid)
     }
+}
+
+/// NUL-terminated UTF-16 for a `PCWSTR`, zeroed on drop.
+fn wide(s: &str) -> Zeroizing<Vec<u16>> {
+    Zeroizing::new(s.encode_utf16().chain([0]).collect())
+}
+
+fn parse_url(s: &str) -> Result<Url> {
+    s.parse().map_err(|e: url::ParseError| AppError::Internal(e.to_string()))
+}
+
+/// The first close request gets the close path; clicks while it runs get nothing.
+fn take_once<T>(slot: &Mutex<Option<T>>) -> Option<T> {
+    slot.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
+
+/// Blocking (see `poll_cookie`): reads the profile's cookie while the window still exists,
+/// hands it to `on_close`, then destroys the window and deletes the profile.
+fn end_session(app: &AppHandle, label: &str, title: &str, pid: u32, profile: &Path, on_close: impl FnOnce(Option<Secret>)) {
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.hide();
+        let last = match window.cookies().map(pick_roblosecurity) {
+            Ok(Some(c)) => Some(c),
+            Ok(None) => {
+                log::warn!("session window \"{title}\" closed signed out of Roblox; stored cookie not changed");
+                None
+            }
+            Err(e) => {
+                log::warn!("could not read the cookies of session window \"{title}\": {e}");
+                None
+            }
+        };
+        on_close(last);
+        let _ = window.destroy();
+    }
+    wait_for_exit(pid);
+    remove_profile(profile);
 }
 
 async fn wait_for_cookie(app: AppHandle, label: String) -> Result<Secret> {
@@ -241,7 +337,7 @@ fn remove_profile(dir: &Path) {
         match std::fs::remove_dir_all(dir) {
             Ok(()) => return,
             Err(e) if e.kind() == ErrorKind::NotFound => return,
-            Err(e) if attempt == 5 => log::warn!("could not delete login profile {}: {e}", dir.display()),
+            Err(e) if attempt == 5 => log::warn!("could not delete browser profile {}: {e}", dir.display()),
             Err(_) => std::thread::sleep(Duration::from_millis(500)),
         }
     }
@@ -274,6 +370,21 @@ mod tests {
         assert_eq!(picked(vec![Cookie::new(".ROBLOSECURITY", "no-domain")]), None);
         assert_eq!(picked(vec![cookie(".roblosecurity", "x", "roblox.com")]), None);
         assert_eq!(picked(vec![]), None);
+    }
+
+    #[test]
+    fn session_helpers() {
+        assert_eq!(*wide("aZ_9"), [97, 90, 95, 57, 0]);
+        assert_eq!(*wide(""), [0]);
+        assert_eq!(parse_url(HOME_PAGE).unwrap().host_str(), Some("www.roblox.com"));
+        assert!(parse_url("about:blank").is_ok());
+    }
+
+    #[test]
+    fn close_path_runs_once() {
+        let pending = Mutex::new(Some(7));
+        assert_eq!(take_once(&pending), Some(7));
+        assert_eq!(take_once(&pending), None);
     }
 
     #[test]

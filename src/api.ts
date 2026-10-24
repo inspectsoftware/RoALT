@@ -1,12 +1,15 @@
 // Typed wrappers for every Tauri command and event. Types come from src/bindings (ts-rs).
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { AccountInfo } from "./bindings/AccountInfo";
 import type { AccountPatch } from "./bindings/AccountPatch";
+import type { AccountPresence } from "./bindings/AccountPresence";
 import type { AccountSummary } from "./bindings/AccountSummary";
 import type { ConflictPolicy } from "./bindings/ConflictPolicy";
 import type { ErrorPayload } from "./bindings/ErrorPayload";
 import type { Group } from "./bindings/Group";
 import type { GroupInput } from "./bindings/GroupInput";
+import type { Headshot } from "./bindings/Headshot";
 import type { ImportReport } from "./bindings/ImportReport";
 import type { Settings } from "./bindings/Settings";
 import type { SettingsPatch } from "./bindings/SettingsPatch";
@@ -14,11 +17,15 @@ import type { VaultMode } from "./bindings/VaultMode";
 import type { VaultStatus } from "./bindings/VaultStatus";
 
 export type {
+  AccountInfo, AccountPresence, Headshot,
   AccountPatch, AccountSummary, ConflictPolicy, ErrorPayload, Group, GroupInput,
   ImportReport, Settings, SettingsPatch, VaultMode, VaultStatus,
 };
 export type { AccountStatus } from "./bindings/AccountStatus";
 export type { Density } from "./bindings/Density";
+export type { Presence } from "./bindings/Presence";
+export type { PresenceKind } from "./bindings/PresenceKind";
+export type { Subscription } from "./bindings/Subscription";
 export type { Theme } from "./bindings/Theme";
 
 /** Rejected invokes carry an ErrorPayload; anything else becomes an "internal" one. */
@@ -46,6 +53,15 @@ export const api = {
   /** Master mode needs the password; DPAPI mode shows Windows Hello. */
   accountRevealCookie: (id: number, password?: string) => invoke<string>("account_reveal_cookie", { id, password }),
   accountCopyCookie: (id: number, password?: string) => invoke<void>("account_copy_cookie", { id, password }),
+
+  /** Cached for settings.cacheMinutes unless refresh. Parts Roblox didn't answer are null and named in `unavailable`. */
+  accountInfo: (id: number, refresh = false) => invoke<AccountInfo>("account_info", { id, refresh }),
+  /** Avatar URLs for all accounts (cached 6 h); accounts without one are missing from the list. */
+  accountsHeadshots: (refresh = false) => invoke<Headshot[]>("accounts_headshots", { refresh }),
+  /** One batched presence check for every account (empty when no account is valid). */
+  accountsPresence: () => invoke<AccountPresence[]>("accounts_presence"),
+  /** Opens roblox.com signed in as the account in its own window. */
+  accountOpenSession: (id: number) => invoke<void>("account_open_session", { id }),
 
   groupsList: () => invoke<Group[]>("groups_list"),
   groupSave: (input: GroupInput) => invoke<Group>("group_save", { input }),

@@ -10,4 +10,8 @@ export type Settings = { theme: Theme, density: Density,
 /**
  * Master-password mode only.
  */
-autoLockMinutes: number, clipboardClearSeconds: number, };
+autoLockMinutes: number, clipboardClearSeconds: number, 
+/**
+ * How long account info is reused before Roblox is asked again.
+ */
+cacheMinutes: number, };

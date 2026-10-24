@@ -27,7 +27,7 @@ use zeroize::Zeroizing;
 
 use crate::error::{AppError, Result};
 use crate::vault::Secret;
-use types::AuthenticatedUser;
+use types::{AuthenticatedUser, SocialCounts, UserDetails, UserPresence};
 
 /// Called with `(account_id, new cookie)` when Roblox rotates a stored account's cookie.
 pub type RotationSink = Arc<dyn Fn(i64, Secret) + Send + Sync>;
@@ -81,6 +81,69 @@ impl Client {
         let url = endpoints::USERS_AUTHENTICATED;
         let (_, body, rotated) = self.request(Method::GET, url, url, None, account_id, cookie).await?;
         Ok((json(&body)?, rotated))
+    }
+
+    /// `GET users.roblox.com/v1/users/{id}` (public). Sent with the account's cookie when
+    /// one is given (higher limit than anonymous: 30/min).
+    pub async fn user_details(&self, account_id: i64, cookie: Option<&Secret>, user_id: i64) -> Result<UserDetails> {
+        let _ = (account_id, cookie, user_id);
+        todo!("roblox_api: user_details")
+    }
+
+    /// Avatar headshot URLs, 150x150 PNG, no cookie. ≤100 ids per call (chunks larger
+    /// lists); re-requests only the `Pending` ids up to 5 times (0.5 s, 1 s, … steps).
+    /// Ids that end Blocked / Error / still Pending, or with an empty `imageUrl`, are absent.
+    pub async fn headshots(&self, user_ids: &[i64]) -> Result<HashMap<i64, String>> {
+        let _ = user_ids;
+        todo!("roblox_api: headshots")
+    }
+
+    /// `GET economy.roblox.com/v1/user/currency` → `robux` of the cookie's own account.
+    pub async fn robux(&self, account_id: i64, cookie: &Secret) -> Result<i64> {
+        let _ = (account_id, cookie);
+        todo!("roblox_api: robux")
+    }
+
+    /// Legacy Premium: `GET premiumfeatures.roblox.com/v1/users/{id}/validate-membership`
+    /// (body is a bare JSON boolean). Marked for removal by Roblox; callers treat errors as unknown.
+    pub async fn premium(&self, account_id: i64, cookie: &Secret, user_id: i64) -> Result<bool> {
+        let _ = (account_id, cookie, user_id);
+        todo!("roblox_api: premium")
+    }
+
+    /// Roblox Plus via `POST apis.roblox.com/user-profile-api/v1/user/profiles/get-profiles`
+    /// `{userIds, fields:["hasRobloxSubscription"]}`, no cookie, ≤200 ids per call. A row
+    /// without the field (unknown user, renamed field) is absent: never guess `false`.
+    pub async fn plus(&self, user_ids: &[i64]) -> Result<HashMap<i64, bool>> {
+        let _ = user_ids;
+        todo!("roblox_api: plus")
+    }
+
+    /// `friends.roblox.com/v1/users/{id}/{friends,followers,followings}/count` (public).
+    pub async fn social_counts(&self, user_id: i64) -> Result<SocialCounts> {
+        let _ = user_id;
+        todo!("roblox_api: social_counts")
+    }
+
+    /// `POST presence.roblox.com/v1/presence/users {userIds}` as the viewer (its cookie),
+    /// ≤50 ids per call (chunks), ids ≤ 0 dropped and duplicates removed before sending.
+    pub async fn presence(&self, account_id: i64, cookie: &Secret, user_ids: &[i64]) -> Result<Vec<UserPresence>> {
+        let _ = (account_id, cookie, user_ids);
+        todo!("roblox_api: presence")
+    }
+
+    /// `GET accountsettings.roblox.com/v1/email` → `verified`. The address is not kept.
+    pub async fn email_verified(&self, account_id: i64, cookie: &Secret) -> Result<bool> {
+        let _ = (account_id, cookie);
+        todo!("roblox_api: email_verified")
+    }
+
+    /// `GET twostepverification.roblox.com/v1/users/{id}/configuration` → names of the
+    /// enabled methods ("Email", "SMS", "Authenticator", "SecurityKey", "Passkey", …).
+    /// `mediaType` may arrive as a number or a string.
+    pub async fn two_step_methods(&self, account_id: i64, cookie: &Secret, user_id: i64) -> Result<Vec<String>> {
+        let _ = (account_id, cookie, user_id);
+        todo!("roblox_api: two_step_methods")
     }
 
     /// One API call with throttle, CSRF retry, 429 backoff and cookie rotation.

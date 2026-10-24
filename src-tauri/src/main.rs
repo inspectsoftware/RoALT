@@ -31,7 +31,7 @@ pub struct App {
 
 impl App {
     /// Roblox handed out a new `.ROBLOSECURITY` for a stored account: keep it.
-    fn store_rotated(&self, account_id: i64, cookie: Secret) {
+    pub fn store_rotated(&self, account_id: i64, cookie: Secret) {
         let stored = self
             .db
             .account_cookie(account_id)
@@ -184,6 +184,10 @@ fn main() {
             commands::accounts_validate,
             commands::account_reveal_cookie,
             commands::account_copy_cookie,
+            commands::account_info,
+            commands::accounts_headshots,
+            commands::accounts_presence,
+            commands::account_open_session,
             commands::groups_list,
             commands::group_save,
             commands::group_remove,

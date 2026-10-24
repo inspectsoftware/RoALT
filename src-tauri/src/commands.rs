@@ -11,7 +11,8 @@ use crate::model::*;
 use crate::storage::{AccountMeta, NewAccount};
 use crate::vault::backup::{self, BackupAccount, BackupGroup, BackupPayload};
 use crate::vault::{Secret, cookie_aad};
-use crate::{App, roblox_api::types::AuthenticatedUser, webview};
+use crate::roblox_api::types::{AuthenticatedUser, UserPresence};
+use crate::{App, webview};
 
 pub fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
@@ -244,6 +245,179 @@ pub fn clear_copied_cookie(app: &AppHandle) {
     }
 }
 
+// ---------- account info ----------
+
+const HEADSHOT_TTL_MS: i64 = 6 * 60 * 60 * 1000;
+
+fn presence_of(p: UserPresence) -> Presence {
+    Presence {
+        kind: PresenceKind::from_code(p.user_presence_type),
+        last_location: p.last_location,
+        place_id: p.place_id,
+        root_place_id: p.root_place_id,
+        universe_id: p.universe_id,
+        game_id: p.game_id,
+    }
+}
+
+/// The info panel. Served from the cache unless `refresh` or older than `cache_minutes`.
+/// Each part is fetched on its own; parts Roblox doesn't answer are listed in `unavailable`.
+#[tauri::command]
+pub async fn account_info(s: State<'_, App>, id: i64, refresh: bool) -> Result<AccountInfo> {
+    let a = s.db.account(id)?;
+    let key = format!("info:{}", a.user_id);
+    let ttl = s.db.settings()?.cache_minutes as i64 * 60_000;
+    if !refresh
+        && let Some((json, _)) = s.db.cache_get(&key, ttl, now_ms())?
+        && let Ok(info) = serde_json::from_str::<AccountInfo>(&json)
+    {
+        return Ok(info);
+    }
+    let cookie = stored_cookie(&s, id)?;
+    let uid = a.user_id;
+    let one = [uid];
+    let (details, heads, robux, premium, plus, counts, presence, email, two_step) = tokio::join!(
+        s.api.user_details(id, Some(&cookie), uid),
+        s.api.headshots(&one),
+        s.api.robux(id, &cookie),
+        s.api.premium(id, &cookie, uid),
+        s.api.plus(&one),
+        s.api.social_counts(uid),
+        s.api.presence(id, &cookie, &one),
+        s.api.email_verified(id, &cookie),
+        s.api.two_step_methods(id, &cookie, uid),
+    );
+    let mut unavailable = Vec::new();
+    let mut part = |name: &str, ok: bool| {
+        if !ok {
+            unavailable.push(name.to_owned());
+        }
+    };
+    part("profile", details.is_ok());
+    part("avatar", heads.as_ref().is_ok_and(|h| h.contains_key(&uid)));
+    part("robux", robux.is_ok());
+    part("friends", counts.is_ok());
+    part("presence", presence.as_ref().is_ok_and(|p| !p.is_empty()));
+    part("email", email.is_ok());
+    part("2-step", two_step.is_ok());
+    let subscription = match (plus.as_ref().ok().and_then(|p| p.get(&uid).copied()), premium.as_ref().ok().copied()) {
+        (Some(true), _) => Some(Subscription::Plus),
+        (_, Some(true)) => Some(Subscription::Premium),
+        (Some(false), _) => Some(Subscription::None),
+        (None, _) => None,
+    };
+    part("subscription", subscription.is_some());
+
+    // Everything failed the same way (offline, cookie dead): say why instead of an empty panel.
+    if unavailable.len() == 8
+        && let Err(e) = robux
+    {
+        return Err(e);
+    }
+    let details = details.ok();
+    let counts = counts.ok();
+    let info = AccountInfo {
+        account_id: id,
+        user_id: uid,
+        username: details.as_ref().map_or(a.username.clone(), |d| d.name.clone()),
+        display_name: details.as_ref().map_or(a.display_name.clone(), |d| d.display_name.clone()),
+        description: details.as_ref().map(|d| d.description.clone()).unwrap_or_default(),
+        created: details.as_ref().and_then(|d| d.created.clone()),
+        is_banned: details.as_ref().is_some_and(|d| d.is_banned),
+        verified_badge: details.as_ref().is_some_and(|d| d.has_verified_badge),
+        headshot_url: heads.ok().and_then(|mut h| h.remove(&uid)),
+        robux: robux.ok(),
+        subscription,
+        friends: counts.map(|c| c.friends),
+        followers: counts.map(|c| c.followers),
+        following: counts.map(|c| c.following),
+        email_verified: email.ok(),
+        two_step_methods: two_step.ok(),
+        presence: presence.ok().and_then(|p| p.into_iter().find(|p| p.user_id == uid)).map(presence_of),
+        fetched_at: now_ms(),
+        unavailable,
+    };
+    let json = serde_json::to_string(&info).map_err(|e| AppError::Internal(e.to_string()))?;
+    s.db.cache_put(&key, &json, info.fetched_at)?;
+    if let Some(url) = &info.headshot_url {
+        s.db.cache_put(&format!("headshot:{uid}"), url, info.fetched_at)?;
+    }
+    Ok(info)
+}
+
+/// Avatar URLs for every account (cached 6 h); one batched call for the missing ones.
+#[tauri::command]
+pub async fn accounts_headshots(s: State<'_, App>, refresh: bool) -> Result<Vec<Headshot>> {
+    let now = now_ms();
+    let accounts = s.db.accounts()?;
+    let mut out = Vec::new();
+    let mut missing = Vec::new();
+    for a in &accounts {
+        match s.db.cache_get(&format!("headshot:{}", a.user_id), HEADSHOT_TTL_MS, now)? {
+            Some((url, _)) if !refresh => out.push(Headshot { account_id: a.id, url }),
+            _ => missing.push(a.user_id),
+        }
+    }
+    if !missing.is_empty() {
+        let urls = s.api.headshots(&missing).await?;
+        for a in accounts.iter().filter(|a| missing.contains(&a.user_id)) {
+            if let Some(url) = urls.get(&a.user_id) {
+                s.db.cache_put(&format!("headshot:{}", a.user_id), url, now)?;
+                out.push(Headshot { account_id: a.id, url: url.clone() });
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Presence of every account in one batched call, seen by the first valid account.
+/// Game details are only filled in where Roblox lets that viewer see them; the info panel
+/// asks each account about itself. No valid account → empty.
+// ponytail: one viewer for the whole list; query per account if hidden game details matter.
+#[tauri::command]
+pub async fn accounts_presence(s: State<'_, App>) -> Result<Vec<AccountPresence>> {
+    let accounts = s.db.accounts()?;
+    let Some(viewer) = accounts.iter().find(|a| a.status == AccountStatus::Valid) else {
+        return Ok(Vec::new());
+    };
+    let cookie = stored_cookie(&s, viewer.id)?;
+    let ids: Vec<i64> = accounts.iter().map(|a| a.user_id).collect();
+    let rows = s.api.presence(viewer.id, &cookie, &ids).await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|p| {
+            let account_id = accounts.iter().find(|a| a.user_id == p.user_id)?.id;
+            Some(AccountPresence { account_id, presence: presence_of(p) })
+        })
+        .collect())
+}
+
+/// Opens roblox.com signed in as the account, in its own throw-away browser profile.
+/// When the window closes, a rotated cookie is kept if it still signs in as the same user;
+/// a sign-out or account switch there is logged and the stored cookie left as it was.
+#[tauri::command]
+pub async fn account_open_session(app: AppHandle, s: State<'_, App>, id: i64) -> Result<()> {
+    let a = s.db.account(id)?;
+    let cookie = stored_cookie(&s, id)?;
+    let name = if a.alias.is_empty() { a.display_name.clone() } else { a.alias.clone() };
+    let title = format!("{name} (@{}) — Roblox — RoALT", a.username);
+    let (user_id, handle) = (a.user_id, app.clone());
+    let original = cookie.clone();
+    webview::open_session(&app, &s.data_dir, &title, cookie, move |last| {
+        let Some(last) = last.filter(|c| c.expose() != original.expose()) else { return };
+        tauri::async_runtime::spawn(async move {
+            let s = handle.state::<App>();
+            match s.api.authenticated_user(0, &last).await {
+                Ok((u, _)) if u.id == user_id => s.store_rotated(id, last),
+                Ok(_) => log::warn!("session window for account {id} ended signed in as another user; cookie not changed"),
+                Err(e) => log::warn!("session window for account {id} ended with an unusable cookie ({e}); cookie not changed"),
+            }
+            accounts_changed(&handle);
+        });
+    })
+    .await
+}
+
 // ---------- groups ----------
 
 #[tauri::command]
@@ -372,6 +546,12 @@ pub fn settings_set(s: State<'_, App>, patch: SettingsPatch) -> Result<Settings>
             return Err(AppError::Invalid("Clipboard clearing must be between 5 and 300 seconds.".into()));
         }
         v.clipboard_clear_seconds = c;
+    }
+    if let Some(c) = patch.cache_minutes {
+        if !(1..=24 * 60).contains(&c) {
+            return Err(AppError::Invalid("Cache time must be between 1 minute and 24 hours.".into()));
+        }
+        v.cache_minutes = c;
     }
     s.db.save_settings(&v)?;
     Ok(v)

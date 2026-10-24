@@ -289,6 +289,26 @@ impl Db {
         self.conn().execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('settings', ?1)", [json])?;
         Ok(())
     }
+
+    /// A cached API answer no older than `max_age_ms`, with when it was fetched (unix ms).
+    pub fn cache_get(&self, key: &str, max_age_ms: i64, now: i64) -> Result<Option<(String, i64)>> {
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT value, fetched_at FROM cache WHERE key = ?1 AND fetched_at >= ?2",
+                params![key, now - max_age_ms],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
+    }
+
+    pub fn cache_put(&self, key: &str, value: &str, fetched_at: i64) -> Result<()> {
+        self.conn().execute(
+            "INSERT OR REPLACE INTO cache (key, value, fetched_at) VALUES (?1, ?2, ?3)",
+            params![key, value, fetched_at],
+        )?;
+        Ok(())
+    }
 }
 
 fn account_row(r: &Row) -> rusqlite::Result<AccountSummary> {

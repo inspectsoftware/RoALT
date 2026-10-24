@@ -69,6 +69,26 @@ pub async fn capture_login(app: &AppHandle, data_dir: &Path) -> Result<Secret> {
     cookie
 }
 
+/// Opens `https://www.roblox.com/home` signed in as a stored account: a `session-<uuid>`
+/// window titled `title` on a fresh profile under `<data_dir>/tmp-webview/<uuid>` (not
+/// incognito-shared, no devtools in release, no IPC capability, same hardening as login).
+/// The cookie is injected through WebView2's own `ICoreWebView2CookieManager` with domain
+/// `.roblox.com`, path `/`, HttpOnly, Secure, SameSite=Lax (never Tauri's `set_cookie`, which
+/// drops the leading dot), before the first navigation. Returns once the window shows.
+/// When the user closes it, `on_close` gets the profile's last non-empty `.ROBLOSECURITY`
+/// (Roblox may have rotated it, or the user may have signed out / switched accounts), read
+/// before the window is destroyed; then the profile is deleted as in `capture_login`.
+pub async fn open_session(
+    app: &AppHandle,
+    data_dir: &Path,
+    title: &str,
+    cookie: Secret,
+    on_close: impl FnOnce(Option<Secret>) + Send + 'static,
+) -> Result<()> {
+    let _ = (app, data_dir, title, cookie, on_close);
+    todo!("webview: open_session")
+}
+
 /// Deletes leftover `tmp-webview/*` profiles from earlier runs.
 pub fn sweep_temp_profiles(data_dir: &Path) {
     let entries = match std::fs::read_dir(data_dir.join(TMP_DIR)) {

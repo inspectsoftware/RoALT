@@ -146,11 +146,19 @@ pub struct Settings {
     /// Master-password mode only.
     pub auto_lock_minutes: u32,
     pub clipboard_clear_seconds: u32,
+    /// How long account info is reused before Roblox is asked again.
+    pub cache_minutes: u32,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { theme: Theme::Dark, density: Density::Detailed, auto_lock_minutes: 15, clipboard_clear_seconds: 30 }
+        Self {
+            theme: Theme::Dark,
+            density: Density::Detailed,
+            auto_lock_minutes: 15,
+            clipboard_clear_seconds: 30,
+            cache_minutes: 10,
+        }
     }
 }
 
@@ -166,6 +174,106 @@ pub struct SettingsPatch {
     pub auto_lock_minutes: Option<u32>,
     #[ts(optional)]
     pub clipboard_clear_seconds: Option<u32>,
+    #[ts(optional)]
+    pub cache_minutes: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum Subscription {
+    None,
+    /// Legacy Premium (no longer sold since 2026-04-30).
+    Premium,
+    /// Roblox Plus.
+    Plus,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum PresenceKind {
+    Offline,
+    Online,
+    InGame,
+    Studio,
+    Unknown,
+}
+
+impl PresenceKind {
+    /// presence.roblox.com `userPresenceType`.
+    pub fn from_code(code: i64) -> Self {
+        match code {
+            0 => Self::Offline,
+            1 => Self::Online,
+            2 => Self::InGame,
+            3 => Self::Studio,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// What Roblox shows about where a user is. Game fields are `None` when the viewer
+/// is not allowed to see them.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Presence {
+    pub kind: PresenceKind,
+    /// Game name when in game, else e.g. "Website".
+    pub last_location: Option<String>,
+    pub place_id: Option<i64>,
+    pub root_place_id: Option<i64>,
+    pub universe_id: Option<i64>,
+    /// The server (job) id.
+    pub game_id: Option<String>,
+}
+
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AccountPresence {
+    pub account_id: i64,
+    pub presence: Presence,
+}
+
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Headshot {
+    pub account_id: i64,
+    pub url: String,
+}
+
+/// The account info panel. Each part is `None` when Roblox did not answer for it;
+/// `unavailable` names those parts for the UI.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AccountInfo {
+    pub account_id: i64,
+    pub user_id: i64,
+    pub username: String,
+    pub display_name: String,
+    pub description: String,
+    /// ISO 8601 account creation time.
+    pub created: Option<String>,
+    pub is_banned: bool,
+    pub verified_badge: bool,
+    pub headshot_url: Option<String>,
+    pub robux: Option<i64>,
+    pub subscription: Option<Subscription>,
+    pub friends: Option<i64>,
+    pub followers: Option<i64>,
+    pub following: Option<i64>,
+    pub email_verified: Option<bool>,
+    /// Enabled 2-step methods ("Email", "Authenticator", ...); empty = 2SV off.
+    pub two_step_methods: Option<Vec<String>>,
+    /// The account seen with its own cookie.
+    pub presence: Option<Presence>,
+    /// Unix ms.
+    pub fetched_at: i64,
+    pub unavailable: Vec<String>,
 }
 
 #[derive(Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]

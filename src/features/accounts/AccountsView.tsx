@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type PointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, type AccountStatus, type AccountSummary, type Density, type Group, type VaultMode } from "../../api";
+import { api, type AccountStatus, type AccountSummary, type Density, type Group, type Presence, type VaultMode } from "../../api";
 import { groupColor, qk, setAccounts, usePresence, useSetSettings, useUpdateAccount } from "../../data";
 import { Segmented } from "../../ui/controls";
 import { ConfirmDialog } from "../../ui/Dialog";
@@ -9,17 +9,27 @@ import { toast } from "../../ui/Toast";
 import { DetailPanel } from "./DetailPanel";
 import { accountName, ago, Avatar, plural, Status } from "./shared";
 
-type Filter = "all" | AccountStatus | "fav";
+type Filter = "all" | "inGame" | "online" | "offline" | Exclude<AccountStatus, "valid"> | "fav";
+// The chips match what the Status column shows.
 const FILTERS: { key: Filter; label: string }[] = [
   { key: "all", label: "All" },
-  { key: "valid", label: "Valid" },
-  { key: "invalid", label: "Expired / invalid" },
-  { key: "challenged", label: "Challenged" },
-  { key: "unknown", label: "Unknown" },
+  { key: "inGame", label: "In game" },
+  { key: "online", label: "Online" },
+  { key: "offline", label: "Offline" },
+  { key: "invalid", label: "Cookie expired" },
+  { key: "challenged", label: "Needs a check" },
+  { key: "unknown", label: "Not checked" },
   { key: "fav", label: "Favourites" },
 ];
 
-const inFilter = (a: AccountSummary, f: Filter) => f === "all" || (f === "fav" ? a.favourite : a.status === f);
+/** What the Status cell shows: presence for a valid cookie (Studio counts as online), else the cookie status. */
+const shownKey = (a: AccountSummary, p?: Presence): Filter | "valid" => {
+  if (a.status !== "valid") return a.status;
+  if (!p || p.kind === "unknown") return "valid";
+  return p.kind === "studio" ? "online" : p.kind;
+};
+const inFilter = (a: AccountSummary, f: Filter, p?: Presence) =>
+  f === "all" || (f === "fav" ? a.favourite : shownKey(a, p) === f);
 const isTyping = (t: EventTarget | null) =>
   t instanceof HTMLElement &&
   (t.matches("textarea, select, input:not([type=checkbox]):not([type=radio])") || t.isContentEditable);
@@ -69,17 +79,22 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
   // A group deleted while it was the filter means no filter.
   const inGroup = group === null || !groupById.has(group) ? ordered : ordered.filter((a) => a.groupIds.includes(group));
   const needle = q.trim().toLowerCase();
-  const shown = inGroup.filter(
-    (a) =>
-      inFilter(a, filter) &&
-      (!needle || `${a.alias}\n${a.displayName}\n@${a.username}\n${a.userId}`.toLowerCase().includes(needle)),
+  const matching = inGroup.filter(
+    (a) => !needle || `${a.alias}\n${a.displayName}\n@${a.username}\n${a.userId}`.toLowerCase().includes(needle),
   );
+  // Presence only for rows that can be on screen, and only for valid cookies (DESIGN: visible rows only).
+  const presenceIds = useMemo(
+    () => matching.filter((a) => a.status === "valid").map((a) => a.id).sort((x, y) => x - y),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [matching.map((a) => `${a.id}:${a.status}`).join()],
+  );
+  const presence = usePresence(presenceIds).data;
+  const shown = matching.filter((a) => inFilter(a, filter, presence?.get(a.id)));
   const checkedIds = accounts.filter((a) => checked.has(a.id)).map((a) => a.id);
   const current = (selected !== null && byId.get(selected)) || shown[0] || null;
   const needsSignIn = accounts.filter((a) => a.status === "invalid").length;
   const lastChecked = Math.max(0, ...accounts.map((a) => a.statusCheckedAt ?? 0)) || null;
   const activeGroup = group === null ? null : groupById.get(group) ?? null;
-  const presence = usePresence(accounts.some((a) => a.status === "valid")).data;
 
   const validate = useMutation({
     mutationFn: async (ids?: number[]) => ({ started: Date.now(), list: await api.accountsValidate(ids) }),
@@ -115,6 +130,8 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
     mutationFn: (ids: number[]) => api.accountsRemove(ids),
     onSuccess: (_, ids) => {
       setAccounts(qc, (list) => list.filter((a) => !ids.includes(a.id)));
+      // Ids can be reused by the next account added: drop what belonged to these.
+      for (const id of ids) qc.removeQueries({ queryKey: qk.info(id) });
       setChecked(new Set());
       setRemoveOpen(false);
       toast(`Removed ${plural(ids.length, "account")}`);
@@ -297,7 +314,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
     }
   }
 
-  const counts = (f: Filter) => inGroup.filter((a) => inFilter(a, f)).length;
+  const counts = (f: Filter) => matching.filter((a) => inFilter(a, f, presence?.get(a.id))).length;
 
   return (
     <>

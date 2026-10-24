@@ -34,11 +34,20 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
   const info = useAccountInfo(a.id);
   const refresh = useMutation({
     mutationFn: () => api.accountInfo(a.id, true),
-    onSuccess: (fresh) => qc.setQueryData(qk.info(a.id), fresh),
+    onSuccess: (fresh) => {
+      qc.setQueryData(qk.info(a.id), fresh);
+      // account_info just cached the new avatar URL; the list reads it from there.
+      qc.invalidateQueries({ queryKey: qk.headshots });
+    },
   });
   const session = useMutation({
     mutationFn: () => api.accountOpenSession(a.id),
-    onSuccess: () => toast("Opened a signed-in roblox.com window. Signing out there signs this account out of RoALT too."),
+    onSuccess: () =>
+      toast(
+        a.status === "valid"
+          ? "Opened a signed-in roblox.com window. Signing out there signs this account out of RoALT too."
+          : "Opened roblox.com for this account. Sign in or finish the check there; RoALT keeps the new session when you close the window.",
+      ),
   });
   const [alias, setAlias] = useState(a.alias);
   const [notes, setNotes] = useState(a.notes);
@@ -46,7 +55,8 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
   const [cookie, setCookie] = useState<string | null>(null);
   const [ask, setAsk] = useState<"reveal" | "copy" | null>(null);
   const [lastAsk, setLastAsk] = useState<"reveal" | "copy">("reveal");
-  const d = info.data;
+  // Only info that belongs to this Roblox user (local ids can be reused after a removal).
+  const d = info.data?.userId === a.userId ? info.data : undefined;
   const username = d?.username || a.username;
   const busy = refresh.isPending || info.isFetching;
 

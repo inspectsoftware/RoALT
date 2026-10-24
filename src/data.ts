@@ -37,21 +37,30 @@ export const useHeadshot = (accountId: number) =>
   useQuery({ ...headshots, select: (list) => list.find((h) => h.accountId === accountId)?.url }).data;
 
 const byAccount = (list: AccountPresence[]) => new Map(list.map((p) => [p.accountId, p.presence]));
-/** Polled once a minute while a caller is mounted and the window is visible. */
-export const usePresence = (enabled: boolean) =>
+/** Presence of the given (on-screen, valid) accounts, polled once a minute while a caller is
+ * mounted and the window is visible. Each account asks about itself, so keep the list short. */
+export const usePresence = (ids: number[]) =>
   useQuery({
-    queryKey: qk.presence,
-    queryFn: () => api.accountsPresence(),
+    queryKey: [...qk.presence, ids],
+    queryFn: () => api.accountsPresence(ids),
     select: byAccount,
-    enabled,
+    enabled: ids.length > 0,
     staleTime: 60_000,
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
+    placeholderData: (prev) => prev,
   });
 
-/** The backend caches info for settings.cacheMinutes, so asking again on every open is cheap. */
+/** The backend caches info for settings.cacheMinutes (presence inside it refreshes at most once
+ * a minute), so asking again on open and once a minute while shown is cheap. */
 export const useAccountInfo = (id: number) =>
-  useQuery({ queryKey: qk.info(id), queryFn: () => api.accountInfo(id), staleTime: 0 });
+  useQuery({
+    queryKey: qk.info(id),
+    queryFn: () => api.accountInfo(id),
+    staleTime: 0,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
+  });
 
 export function setAccounts(qc: ReturnType<typeof useQueryClient>, f: (list: AccountSummary[]) => AccountSummary[]) {
   qc.setQueryData<AccountSummary[]>(qk.accounts, (old) => (old ? f(old) : old));

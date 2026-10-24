@@ -217,8 +217,9 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       return accounts.filter((a) => a.id !== NO_HEADSHOT).map((a) => ({ accountId: a.id, url: headshot(a.userId) }));
     case "accounts_presence":
       await sleep(250);
-      if (!accounts.some((a) => a.status === "valid")) return [];
-      return accounts.map((a) => ({ accountId: a.id, presence: presenceOf(a) }));
+      return accounts
+        .filter((a) => (args.ids as number[]).includes(a.id) && a.status === "valid")
+        .map((a) => ({ accountId: a.id, presence: presenceOf(a) }));
     case "account_open_session":
       await sleep(500);
       return find(args.id) ? null : fail("notFound", "Not found.");

@@ -58,8 +58,8 @@ export const api = {
   accountInfo: (id: number, refresh = false) => invoke<AccountInfo>("account_info", { id, refresh }),
   /** Avatar URLs for all accounts (cached 6 h); accounts without one are missing from the list. */
   accountsHeadshots: (refresh = false) => invoke<Headshot[]>("accounts_headshots", { refresh }),
-  /** One batched presence check for every account (empty when no account is valid). */
-  accountsPresence: () => invoke<AccountPresence[]>("accounts_presence"),
+  /** Presence of these accounts, each asked with its own cookie (accounts without a valid cookie are left out). */
+  accountsPresence: (ids: number[]) => invoke<AccountPresence[]>("accounts_presence", { ids }),
   /** Opens roblox.com signed in as the account in its own window. */
   accountOpenSession: (id: number) => invoke<void>("account_open_session", { id }),
 

@@ -471,14 +471,109 @@ pub async fn user_lookup(s: State<'_, App>, name: String) -> Result<UserRef> {
     Ok(UserRef { user_id: u.id, username: u.name, display_name: u.display_name })
 }
 
-/// Launches one account. `favourite_id` marks that favourite as used.
+/// Launches one account and starts following its client. `favourite_id` marks that
+/// favourite as used.
 #[tauri::command]
-pub async fn launch(s: State<'_, App>, account_id: i64, target: LaunchTarget, favourite_id: Option<i64>) -> Result<LaunchInfo> {
+pub async fn launch(app: AppHandle, s: State<'_, App>, account_id: i64, target: LaunchTarget, favourite_id: Option<i64>) -> Result<LaunchInfo> {
     let info = crate::launcher::launch(&s, account_id, &target).await?;
+    s.tracker.register(&info, target);
+    instances_changed(&app);
     if let Some(f) = favourite_id {
         let _ = s.db.touch_favourite(f, now_ms());
     }
     Ok(info)
+}
+
+// ---------- instances ----------
+
+pub fn instances_changed(app: &AppHandle) {
+    let _ = app.emit("instances://changed", ());
+}
+
+#[tauri::command]
+pub fn instances_list(s: State<'_, App>) -> Vec<Instance> {
+    s.tracker.list()
+}
+
+/// Asks one client to close (graceful unless `force`); not treated as an unexpected exit.
+#[tauri::command]
+pub async fn instance_close(s: State<'_, App>, id: String, force: bool) -> Result<()> {
+    let inst = s.tracker.get(&id).ok_or(AppError::NotFound)?;
+    s.tracker.mark_closing(&id);
+    tauri::async_runtime::spawn_blocking(move || crate::instances::process::close(inst.pid, force, Duration::from_secs(5)))
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?
+}
+
+#[tauri::command]
+pub async fn instances_close_all(s: State<'_, App>, force: bool) -> Result<()> {
+    let running: Vec<Instance> = s.tracker.list().into_iter().filter(|i| i.state != InstanceState::Exited).collect();
+    for i in &running {
+        s.tracker.mark_closing(&i.id);
+    }
+    let pids: Vec<u32> = running.iter().map(|i| i.pid).collect();
+    tauri::async_runtime::spawn_blocking(move || {
+        for pid in pids {
+            if let Err(e) = crate::instances::process::close(pid, force, Duration::from_secs(5)) {
+                log::warn!("could not close Roblox client {pid}: {e}");
+            }
+        }
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))
+}
+
+#[tauri::command]
+pub fn instances_clear_ended(app: AppHandle, s: State<'_, App>) {
+    s.tracker.clear_ended();
+    instances_changed(&app);
+}
+
+#[tauri::command]
+pub fn multi_instance_status(s: State<'_, App>) -> Result<MultiInstanceStatus> {
+    let v = s.db.settings()?;
+    Ok(s.multi.status(v.multi_instance, v.protect_shared_login))
+}
+
+/// Turns multi-instance on or off (saved). Turning it on while Roblox runs saves the setting
+/// but reports why the lock isn't held yet; it is taken at the next start, or after
+/// `roblox_close_all`.
+#[tauri::command]
+pub fn multi_instance_set(s: State<'_, App>, enabled: bool) -> Result<MultiInstanceStatus> {
+    let mut v = s.db.settings()?;
+    v.multi_instance = enabled;
+    s.db.save_settings(&v)?;
+    if enabled {
+        if let Err(e) = s.multi.enable(v.protect_shared_login) {
+            log::info!("multi-instance not active yet: {e}");
+        }
+    } else {
+        s.multi.disable();
+    }
+    Ok(s.multi.status(v.multi_instance, v.protect_shared_login))
+}
+
+/// Closes every Roblox client, tracked or not (including Roblox's tray process), then takes
+/// the multi-instance lock if it is enabled.
+#[tauri::command]
+pub async fn roblox_close_all(s: State<'_, App>, force: bool) -> Result<MultiInstanceStatus> {
+    for i in s.tracker.list() {
+        s.tracker.mark_closing(&i.id);
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        for p in crate::instances::process::roblox_processes() {
+            if let Err(e) = crate::instances::process::close(p.pid, force, Duration::from_secs(5)) {
+                log::warn!("could not close Roblox process {}: {e}", p.pid);
+            }
+        }
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+    let v = s.db.settings()?;
+    if v.multi_instance {
+        let _ = s.multi.enable(v.protect_shared_login);
+    }
+    Ok(s.multi.status(v.multi_instance, v.protect_shared_login))
 }
 
 const FAVOURITE_AAD: &[u8] = b"roalt.favourite";
@@ -722,6 +817,16 @@ pub fn settings_set(s: State<'_, App>, patch: SettingsPatch) -> Result<Settings>
             return Err(AppError::Invalid("Cache time must be between 1 minute and 24 hours.".into()));
         }
         v.cache_minutes = c;
+    }
+    // Multi-instance itself goes through multi_instance_set (it has to take or drop the lock).
+    if let Some(p) = patch.protect_shared_login
+        && p != v.protect_shared_login
+    {
+        v.protect_shared_login = p;
+        if s.multi.is_active() {
+            s.multi.disable();
+            let _ = s.multi.enable(p);
+        }
     }
     s.db.save_settings(&v)?;
     Ok(v)

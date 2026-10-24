@@ -37,7 +37,7 @@ function Root() {
 
   const markLocked = () => {
     qc.setQueryData<VaultStatus>(qk.vault, (old) => old && { ...old, locked: true });
-    qc.removeQueries({ queryKey: qk.accounts });
+    for (const queryKey of [qk.accounts, qk.presence, ["info"]]) qc.removeQueries({ queryKey });
   };
 
   const lock = () => {
@@ -112,12 +112,22 @@ function Root() {
 }
 
 function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) {
+  const qc = useQueryClient();
   const accounts = useAccounts();
   const groups = useGroups();
   const [view, setView] = useState<"accounts" | "settings">("accounts");
   const [group, setGroup] = useState<number | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const [adding, setAdding] = useState(false);
+  const known = useRef<Set<number> | null>(null);
+
+  // A new account needs its headshot; the backend only asks Roblox for the missing ones.
+  useEffect(() => {
+    if (!accounts.data) return;
+    const ids = new Set(accounts.data.map((a) => a.id));
+    if (known.current && [...ids].some((id) => !known.current?.has(id))) qc.invalidateQueries({ queryKey: qk.headshots });
+    known.current = ids;
+  }, [accounts.data, qc]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

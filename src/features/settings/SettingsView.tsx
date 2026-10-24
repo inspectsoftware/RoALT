@@ -14,7 +14,7 @@ import { PasswordDialog } from "../vault/PasswordDialog";
 export const SETTINGS_SECTIONS = [
   ["general", "General"],
   ["security", "Security"],
-  ["backup", "Backup"],
+  ["data", "Data"],
   ["shortcuts", "Shortcuts"],
   ["about", "About"],
 ] as const;
@@ -42,24 +42,11 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
   const [dlg, setDlg] = useState<VaultDialog | null>(null);
   const [importPath, setImportPath] = useState("");
   const [importOpen, setImportOpen] = useState(false);
-  const [clip, setClip] = useState(String(settings.clipboardClearSeconds));
-
-  useEffect(() => setClip(String(settings.clipboardClearSeconds)), [settings.clipboardClearSeconds]);
 
   const setMode = async (mode: "dpapi" | "master", current?: string, next?: string, done?: string) => {
     await api.vaultSetMode(mode, current || undefined, next || undefined);
     qc.invalidateQueries({ queryKey: qk.vault });
     if (done) toast(done);
-  };
-
-  const commitClip = () => {
-    const n = Number(clip);
-    if (n === settings.clipboardClearSeconds) return;
-    if (Number.isInteger(n) && n >= 5 && n <= 300) set.mutate({ clipboardClearSeconds: n });
-    else {
-      toast("Use a whole number of seconds from 5 to 300.", "error");
-      setClip(String(settings.clipboardClearSeconds));
-    }
   };
 
   async function pickImport() {
@@ -133,23 +120,30 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
           title="Clear clipboard after copying a cookie"
           hint={`Copying or revealing a cookie asks for ${master ? "your master password" : "Windows Hello"} first.`}
         >
-          <label className="flex items-center gap-2">
-            <span className="sr-only">Seconds</span>
-            <input
-              className="field mono w-20"
-              type="number"
-              min={5}
-              max={300}
-              value={clip}
-              onChange={(e) => setClip(e.target.value)}
-              onBlur={commitClip}
-              onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
-            />
-            <span className="text-dim">s</span>
-          </label>
+          <NumberField
+            unit="seconds"
+            short="s"
+            min={5}
+            max={300}
+            value={settings.clipboardClearSeconds}
+            onCommit={(clipboardClearSeconds) => set.mutate({ clipboardClearSeconds })}
+          />
         </Row>
 
-        <Heading id="backup">Backup</Heading>
+        <Heading id="data">Data</Heading>
+        <Row
+          title="Keep account info for"
+          hint="How long the info panel reuses what Roblox said before asking again. Presence refreshes every minute while Accounts is open."
+        >
+          <NumberField
+            unit="minutes"
+            short="min"
+            min={1}
+            max={1440}
+            value={settings.cacheMinutes}
+            onCommit={(cacheMinutes) => set.mutate({ cacheMinutes })}
+          />
+        </Row>
         <Row title="Backup file" hint="One password-protected .roalt file with every account, its cookie and its groups.">
           <div className="flex gap-2">
             <button className="btn" onClick={pickImport}>
@@ -316,6 +310,44 @@ function ImportDialog({ open, path, onClose }: { open: boolean; path: string; on
         </form>
       )}
     </Dialog>
+  );
+}
+
+/** Whole-number input that saves on blur or Enter and snaps back when out of range. */
+function NumberField({ unit, short, min, max, value, onCommit }: {
+  unit: string;
+  short: string;
+  min: number;
+  max: number;
+  value: number;
+  onCommit: (n: number) => void;
+}) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => setText(String(value)), [value]);
+  const commit = () => {
+    const n = Number(text);
+    if (n === value) return;
+    if (Number.isInteger(n) && n >= min && n <= max) onCommit(n);
+    else {
+      toast(`Use a whole number of ${unit} from ${min} to ${max}.`, "error");
+      setText(String(value));
+    }
+  };
+  return (
+    <label className="flex items-center gap-2">
+      <span className="sr-only">{unit}</span>
+      <input
+        className="field mono w-20"
+        type="number"
+        min={min}
+        max={max}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+      />
+      <span className="text-dim">{short}</span>
+    </label>
   );
 }
 

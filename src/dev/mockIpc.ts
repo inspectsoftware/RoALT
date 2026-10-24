@@ -3,7 +3,7 @@
 // Master password for the fake vault: "password". A pasted cookie containing "bad" is rejected.
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
-import type { AccountStatus, AccountSummary, Group, Settings, VaultMode } from "../api";
+import type { AccountInfo, AccountStatus, AccountSummary, Group, Presence, Settings, VaultMode } from "../api";
 
 const MIN = 60_000;
 const DAY = 86_400_000;
@@ -45,7 +45,7 @@ let accounts: AccountSummary[] = seed.map(([alias, displayName, username, userId
   createdAt: now - (40 - i * 3) * DAY,
 }));
 
-let settings: Settings = { theme: "dark", density: "detailed", autoLockMinutes: 15, clipboardClearSeconds: 30 };
+let settings: Settings = { theme: "dark", density: "detailed", autoLockMinutes: 15, clipboardClearSeconds: 30, cacheMinutes: 10 };
 const vault = { mode: "master" as VaultMode, locked: false, password: "password" };
 const FAKE_COOKIE = "_|WARNING:-DO-NOT-SHARE-THIS.--DEV-PREVIEW-FAKE-VALUE|_" + "0F1E2D3C4B5A69788796A5B4C3D2E1F0".repeat(6);
 
@@ -64,6 +64,68 @@ function addFake(username: string): AccountSummary {
   accounts.push(a);
   changed();
   return a;
+}
+
+// ---------- M2: headshots, presence, account info ----------
+
+/** A blocky head on a transparent background, so the account colour shows behind it. */
+function headshot(seed: number) {
+  const skin = ["#F5CD9B", "#E0A878", "#C68642", "#8D5524", "#FFDBAC"][seed % 5];
+  const shirt = ["#2B2F36", "#3A6EA5", "#7A3E9D", "#2E7D5B", "#B23A48"][seed % 7 % 5];
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x="8" y="36" width="32" height="12" fill="${shirt}"/><rect x="13" y="9" width="22" height="24" fill="${skin}"/><rect x="18" y="18" width="3" height="4" fill="#111"/><rect x="27" y="18" width="3" height="4" fill="#111"/><rect x="20" y="27" width="8" height="2" fill="#111"/></svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+const NO_HEADSHOT = 8; // shows the initials fallback
+
+const SKY: Presence = {
+  kind: "inGame", lastLocation: "Sky Islands", placeId: 4410028153, rootPlaceId: 4410028153, universeId: 1559201384,
+  gameId: "8f3a1c2e-77b0-4c1d-9e52-0b6c1d3fa911",
+};
+const OBBY: Presence = {
+  kind: "inGame", lastLocation: "Mega Obby", placeId: 7719004215, rootPlaceId: 7719004215, universeId: 2650339475,
+  gameId: "1c0e9b44-3a2f-4f6e-a1d8-55e0c2b97a03",
+};
+const plain = (kind: Presence["kind"], lastLocation: string | null = null): Presence =>
+  ({ kind, lastLocation, placeId: null, rootPlaceId: null, universeId: null, gameId: null });
+const PRESENCE: Record<number, Presence> = { 1: SKY, 2: plain("online", "Website"), 3: SKY, 5: OBBY, 7: plain("studio", "Studio") };
+const presenceOf = (a: AccountSummary) => PRESENCE[a.id] ?? plain("offline");
+
+const ABOUT: Record<number, string> = {
+  1: [
+    "Builder and scripter. Sky Islands team since 2019.",
+    "Commissions open for maps, UI and small systems; message me first.",
+    "No trades, no group invites, please. Alts: nova_alt01, nova_alt02, nova_event.",
+    "If you find a bug in one of my games, the group wall is the fastest way to reach me.",
+  ].join("\n"),
+  4: "Fair trades only. Check my rap before asking.",
+  7: "Studio account for testing places.",
+};
+
+const infos = new Map<number, AccountInfo>();
+
+function makeInfo(a: AccountSummary): AccountInfo {
+  const i = a.id;
+  const r = (n: number) => (a.userId % 9973) * (i + 3) % n;
+  // A dead cookie still gets the public parts, like the real backend.
+  const missing = a.status === "invalid" ? ["robux", "presence", "email", "2-step"] : [];
+  if (i === NO_HEADSHOT) missing.push("avatar");
+  const has = (part: string) => !missing.includes(part);
+  return {
+    accountId: i, userId: a.userId, username: a.username, displayName: a.displayName,
+    description: ABOUT[i] ?? "",
+    created: new Date(now - (420 + r(2400)) * DAY).toISOString(),
+    isBanned: i === 9,
+    verifiedBadge: i === 1,
+    headshotUrl: has("avatar") ? headshot(a.userId) : null,
+    robux: has("robux") ? (i === 1 ? 1_284_500 : r(15000)) : null,
+    subscription: i === 1 ? "plus" : i === 4 ? "premium" : "none",
+    friends: r(200), followers: r(1500), following: r(90),
+    emailVerified: has("email") ? i % 3 !== 2 : null,
+    twoStepMethods: has("2-step") ? (i % 4 === 3 ? [] : ["Authenticator", "Email"].slice(0, 1 + (i % 2))) : null,
+    presence: has("presence") ? presenceOf(a) : null,
+    fetchedAt: Date.now(),
+    unavailable: missing,
+  };
 }
 
 function reauth(password?: string) {
@@ -142,6 +204,24 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "account_copy_cookie":
       await reauth(args.password);
       return null;
+
+    case "account_info": {
+      const a = find(args.id);
+      if (!a) return fail("notFound", "Not found.");
+      await sleep(args.refresh ? 900 : 600);
+      if (args.refresh || !infos.has(a.id)) infos.set(a.id, makeInfo(a));
+      return structuredClone(infos.get(a.id));
+    }
+    case "accounts_headshots":
+      await sleep(300);
+      return accounts.filter((a) => a.id !== NO_HEADSHOT).map((a) => ({ accountId: a.id, url: headshot(a.userId) }));
+    case "accounts_presence":
+      await sleep(250);
+      if (!accounts.some((a) => a.status === "valid")) return [];
+      return accounts.map((a) => ({ accountId: a.id, presence: presenceOf(a) }));
+    case "account_open_session":
+      await sleep(500);
+      return find(args.id) ? null : fail("notFound", "Not found.");
 
     case "groups_list":
       return structuredClone(groups);

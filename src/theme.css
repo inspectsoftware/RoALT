@@ -681,6 +681,12 @@
 .pulse {
   animation: pulse 1s ease-in-out infinite;
 }
+/* Loading placeholder; reduced motion leaves it still. */
+.skel {
+  background: linear-gradient(90deg, var(--hover) 25%, var(--line) 50%, var(--hover) 75%);
+  background-size: 200% 100%;
+  animation: flow 1.2s linear infinite;
+}
 .live-bar {
   height: 2px;
   background: linear-gradient(90deg, var(--line) 0%, var(--accent-text) 50%, var(--line) 100%);

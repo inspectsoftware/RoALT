@@ -1,6 +1,6 @@
 // TanStack Query wiring: one cache, keys, and the hooks the views share.
-import { MutationCache, QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type AccountPatch, type AccountSummary, type Group, type Settings, type SettingsPatch } from "./api";
+import { MutationCache, QueryClient, queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, type AccountPatch, type AccountPresence, type AccountSummary, type Group, type Settings, type SettingsPatch } from "./api";
 import { toastError } from "./ui/Toast";
 
 export const qk = {
@@ -8,6 +8,9 @@ export const qk = {
   settings: ["settings"],
   accounts: ["accounts"],
   groups: ["groups"],
+  headshots: ["headshots"],
+  presence: ["presence"],
+  info: (id: number) => ["info", id],
 } as const;
 
 export const queryClient = new QueryClient({
@@ -27,6 +30,28 @@ export const useVault = () => useQuery({ queryKey: qk.vault, queryFn: api.vaultS
 export const useSettings = () => useQuery({ queryKey: qk.settings, queryFn: api.settingsGet });
 export const useAccounts = () => useQuery({ queryKey: qk.accounts, queryFn: api.accountsList, select: bySortOrder });
 export const useGroups = () => useQuery({ queryKey: qk.groups, queryFn: api.groupsList, select: bySortOrder });
+
+const headshots = queryOptions({ queryKey: qk.headshots, queryFn: () => api.accountsHeadshots(), staleTime: 6 * 3_600_000 });
+/** One shared query; each avatar picks its own URL out of it. */
+export const useHeadshot = (accountId: number) =>
+  useQuery({ ...headshots, select: (list) => list.find((h) => h.accountId === accountId)?.url }).data;
+
+const byAccount = (list: AccountPresence[]) => new Map(list.map((p) => [p.accountId, p.presence]));
+/** Polled once a minute while a caller is mounted and the window is visible. */
+export const usePresence = (enabled: boolean) =>
+  useQuery({
+    queryKey: qk.presence,
+    queryFn: () => api.accountsPresence(),
+    select: byAccount,
+    enabled,
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
+  });
+
+/** The backend caches info for settings.cacheMinutes, so asking again on every open is cheap. */
+export const useAccountInfo = (id: number) =>
+  useQuery({ queryKey: qk.info(id), queryFn: () => api.accountInfo(id), staleTime: 0 });
 
 export function setAccounts(qc: ReturnType<typeof useQueryClient>, f: (list: AccountSummary[]) => AccountSummary[]) {
   qc.setQueryData<AccountSummary[]>(qk.accounts, (old) => (old ? f(old) : old));

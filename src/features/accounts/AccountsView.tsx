@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type PointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type AccountStatus, type AccountSummary, type Density, type Group, type VaultMode } from "../../api";
-import { groupColor, qk, setAccounts, useSetSettings, useUpdateAccount } from "../../data";
+import { groupColor, qk, setAccounts, usePresence, useSetSettings, useUpdateAccount } from "../../data";
 import { Segmented } from "../../ui/controls";
 import { ConfirmDialog } from "../../ui/Dialog";
 import { Icon } from "../../ui/Icon";
@@ -79,6 +79,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
   const needsSignIn = accounts.filter((a) => a.status === "invalid").length;
   const lastChecked = Math.max(0, ...accounts.map((a) => a.statusCheckedAt ?? 0)) || null;
   const activeGroup = group === null ? null : groupById.get(group) ?? null;
+  const presence = usePresence(accounts.some((a) => a.status === "valid")).data;
 
   const validate = useMutation({
     mutationFn: async (ids?: number[]) => ({ started: Date.now(), list: await api.accountsValidate(ids) }),
@@ -440,9 +441,10 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
                             </div>
                           </div>
                         </td>
-                        <td className="pr-3">
+                        <td className="pr-3 max-w-0">
                           <Status
                             status={a.status}
+                            presence={presence?.get(a.id)}
                             checking={isChecking(a.id)}
                             detail={!compact && a.statusCheckedAt ? ago(a.statusCheckedAt, now) : undefined}
                           />

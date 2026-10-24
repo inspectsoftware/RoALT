@@ -63,7 +63,16 @@ if ($LASTEXITCODE -ne 0) { Stop-Build 'cargo metadata failed' 'run it yourself t
 $exe = Join-Path $meta.target_directory 'release\roalt.exe'
 
 Write-Host 'Compiling the installer'
-Invoke-Native $iscc @('/Q', "/DAppVersion=$version", "/DAppNumVersion=$($version -replace '[-+].*$','')", "/DAppExe=$exe", "$root\installer\RoALT.iss") 'fix the error ISCC names above, then run this again'
+$isccArgs = @('/Q', "/DAppVersion=$version", "/DAppNumVersion=$($version -replace '[-+].*$','')", "/DAppExe=$exe", "$root\installer\RoALT.iss")
+# Antivirus scanning the fresh setup.exe can make ISCC's resource update fail once (error 110).
+foreach ($try in 1..2) {
+    $ErrorActionPreference = 'Continue'
+    & $iscc @isccArgs
+    $ErrorActionPreference = 'Stop'
+    if ($LASTEXITCODE -eq 0) { break }
+    Start-Sleep -Seconds 3
+}
+if ($LASTEXITCODE -ne 0) { Stop-Build "ISCC failed (exit $LASTEXITCODE)" 'fix the error ISCC names above, then run this again' }
 
 $setup = Get-Item "$root\dist-installer\RoALT-Setup-$version.exe"
 Write-Host ''

@@ -47,3 +47,56 @@ pub struct UserPresence {
     pub game_id: Option<String>,
     pub universe_id: Option<i64>,
 }
+
+/// `thumbnails.roblox.com/v1/users/avatar-headshot` (and `/v1/batch`).
+#[derive(Deserialize, Debug)]
+pub struct Thumbnails {
+    pub data: Vec<Thumbnail>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Thumbnail {
+    pub target_id: i64,
+    /// Completed, Pending, Blocked, Error, InReview, TemporarilyUnavailable.
+    pub state: String,
+    /// `""` while Pending; Blocked may carry a placeholder.
+    pub image_url: Option<String>,
+}
+
+/// `get-profiles`. Roblox silently drops fields it doesn't know, row by row.
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Profiles {
+    #[serde(default)]
+    pub profile_details: Vec<Profile>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Profile {
+    pub user_id: i64,
+    pub has_roblox_subscription: Option<bool>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Presences {
+    pub user_presences: Vec<UserPresence>,
+}
+
+/// `GET twostepverification.roblox.com/v1/users/{id}/configuration`.
+#[derive(Deserialize, Debug)]
+pub struct TwoStepConfig {
+    #[serde(default)]
+    pub methods: Vec<TwoStepMethod>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TwoStepMethod {
+    /// An enum int (0 Email … 7 Passkey) or its name.
+    pub media_type: serde_json::Value,
+    #[serde(default)]
+    pub enabled: bool,
+}

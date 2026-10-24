@@ -27,7 +27,7 @@ use zeroize::Zeroizing;
 
 use crate::error::{AppError, Result};
 use crate::vault::Secret;
-use types::{AuthenticatedUser, SocialCounts, UserDetails, UserPresence};
+use types::{AuthenticatedUser, Presences, Profiles, SocialCounts, Thumbnails, TwoStepConfig, UserDetails, UserPresence};
 
 /// Called with `(account_id, new cookie)` when Roblox rotates a stored account's cookie.
 pub type RotationSink = Arc<dyn Fn(i64, Secret) + Send + Sync>;
@@ -37,6 +37,14 @@ const USER_AGENT: &str =
 const MAX_ATTEMPTS: u32 = 3;
 const CSRF: &str = "x-csrf-token";
 const CHALLENGE: &str = "rblx-challenge-id";
+const HEADSHOT_RETRIES: u32 = 5;
+#[cfg(not(test))]
+const HEADSHOT_STEP: Duration = Duration::from_millis(500);
+#[cfg(test)]
+const HEADSHOT_STEP: Duration = Duration::from_millis(1);
+/// 2-step `mediaType` names by enum value.
+const MEDIA_TYPES: [&str; 8] =
+    ["Email", "SMS", "Authenticator", "RecoveryCode", "SecurityKey", "CrossDevice", "Password", "Passkey"];
 
 /// Headers, body and the rotated cookie (if any) of a 2xx answer.
 type Reply = (HeaderMap, Vec<u8>, Option<Secret>);
@@ -79,75 +87,119 @@ impl Client {
     /// rotated the cookie during the call, the new value.
     pub async fn authenticated_user(&self, account_id: i64, cookie: &Secret) -> Result<(AuthenticatedUser, Option<Secret>)> {
         let url = endpoints::USERS_AUTHENTICATED;
-        let (_, body, rotated) = self.request(Method::GET, url, url, None, account_id, cookie).await?;
+        let (_, body, rotated) = self.request(Method::GET, url, url, None, account_id, Some(cookie)).await?;
         Ok((json(&body)?, rotated))
     }
 
     /// `GET users.roblox.com/v1/users/{id}` (public). Sent with the account's cookie when
     /// one is given (higher limit than anonymous: 30/min).
     pub async fn user_details(&self, account_id: i64, cookie: Option<&Secret>, user_id: i64) -> Result<UserDetails> {
-        let _ = (account_id, cookie, user_id);
-        todo!("roblox_api: user_details")
+        self.get(endpoints::USER, &endpoints::fill(endpoints::USER, user_id), account_id, cookie).await
     }
 
     /// Avatar headshot URLs, 150x150 PNG, no cookie. ≤100 ids per call (chunks larger
     /// lists); re-requests only the `Pending` ids up to 5 times (0.5 s, 1 s, … steps).
     /// Ids that end Blocked / Error / still Pending, or with an empty `imageUrl`, are absent.
     pub async fn headshots(&self, user_ids: &[i64]) -> Result<HashMap<i64, String>> {
-        let _ = user_ids;
-        todo!("roblox_api: headshots")
+        let mut out = HashMap::new();
+        for chunk in valid_ids(user_ids).chunks(100) {
+            let mut pending = chunk.to_vec();
+            for retry in 0..=HEADSHOT_RETRIES {
+                if retry > 0 {
+                    tokio::time::sleep(HEADSHOT_STEP * retry).await;
+                }
+                let url = endpoints::fill(endpoints::HEADSHOTS, csv(&pending));
+                let page: Thumbnails = self.get(endpoints::HEADSHOTS, &url, 0, None).await?;
+                pending = sort_headshots(page, &mut out);
+                if pending.is_empty() {
+                    break;
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// `GET economy.roblox.com/v1/user/currency` → `robux` of the cookie's own account.
     pub async fn robux(&self, account_id: i64, cookie: &Secret) -> Result<i64> {
-        let _ = (account_id, cookie);
-        todo!("roblox_api: robux")
+        let url = endpoints::CURRENCY;
+        field(self.get(url, url, account_id, Some(cookie)).await?, "robux")
     }
 
     /// Legacy Premium: `GET premiumfeatures.roblox.com/v1/users/{id}/validate-membership`
     /// (body is a bare JSON boolean). Marked for removal by Roblox; callers treat errors as unknown.
     pub async fn premium(&self, account_id: i64, cookie: &Secret, user_id: i64) -> Result<bool> {
-        let _ = (account_id, cookie, user_id);
-        todo!("roblox_api: premium")
+        self.get(endpoints::PREMIUM, &endpoints::fill(endpoints::PREMIUM, user_id), account_id, Some(cookie)).await
     }
 
     /// Roblox Plus via `POST apis.roblox.com/user-profile-api/v1/user/profiles/get-profiles`
     /// `{userIds, fields:["hasRobloxSubscription"]}`, no cookie, ≤200 ids per call. A row
     /// without the field (unknown user, renamed field) is absent: never guess `false`.
     pub async fn plus(&self, user_ids: &[i64]) -> Result<HashMap<i64, bool>> {
-        let _ = user_ids;
-        todo!("roblox_api: plus")
+        let (url, mut out) = (endpoints::PROFILES, HashMap::new());
+        for chunk in valid_ids(user_ids).chunks(200) {
+            let body = serde_json::json!({ "userIds": chunk, "fields": ["hasRobloxSubscription"] });
+            let (_, bytes, _) = self.request(Method::POST, url, url, Some(&body), 0, None).await?;
+            let page: Profiles = json(&bytes)?;
+            out.extend(page.profile_details.into_iter().filter_map(|p| Some((p.user_id, p.has_roblox_subscription?))));
+        }
+        Ok(out)
     }
 
     /// `friends.roblox.com/v1/users/{id}/{friends,followers,followings}/count` (public).
     pub async fn social_counts(&self, user_id: i64) -> Result<SocialCounts> {
-        let _ = user_id;
-        todo!("roblox_api: social_counts")
+        let count = move |route: &'static str| async move {
+            field::<i64>(self.get(route, &endpoints::fill(route, user_id), 0, None).await?, "count")
+        };
+        let (friends, followers, following) = tokio::try_join!(
+            count(endpoints::FRIENDS_COUNT),
+            count(endpoints::FOLLOWERS_COUNT),
+            count(endpoints::FOLLOWINGS_COUNT)
+        )?;
+        Ok(SocialCounts { friends, followers, following })
     }
 
     /// `POST presence.roblox.com/v1/presence/users {userIds}` as the viewer (its cookie),
     /// ≤50 ids per call (chunks), ids ≤ 0 dropped and duplicates removed before sending.
     pub async fn presence(&self, account_id: i64, cookie: &Secret, user_ids: &[i64]) -> Result<Vec<UserPresence>> {
-        let _ = (account_id, cookie, user_ids);
-        todo!("roblox_api: presence")
+        let (url, mut out) = (endpoints::PRESENCE, Vec::new());
+        for chunk in valid_ids(user_ids).chunks(50) {
+            let body = serde_json::json!({ "userIds": chunk });
+            let (_, bytes, _) = self.request(Method::POST, url, url, Some(&body), account_id, Some(cookie)).await?;
+            out.extend(json::<Presences>(&bytes)?.user_presences);
+        }
+        Ok(out)
     }
 
     /// `GET accountsettings.roblox.com/v1/email` → `verified`. The address is not kept.
     pub async fn email_verified(&self, account_id: i64, cookie: &Secret) -> Result<bool> {
-        let _ = (account_id, cookie);
-        todo!("roblox_api: email_verified")
+        let url = endpoints::EMAIL;
+        field(self.get(url, url, account_id, Some(cookie)).await?, "verified")
     }
 
     /// `GET twostepverification.roblox.com/v1/users/{id}/configuration` → names of the
     /// enabled methods ("Email", "SMS", "Authenticator", "SecurityKey", "Passkey", …).
     /// `mediaType` may arrive as a number or a string.
     pub async fn two_step_methods(&self, account_id: i64, cookie: &Secret, user_id: i64) -> Result<Vec<String>> {
-        let _ = (account_id, cookie, user_id);
-        todo!("roblox_api: two_step_methods")
+        let url = endpoints::fill(endpoints::TWO_STEP, user_id);
+        let config: TwoStepConfig = self.get(endpoints::TWO_STEP, &url, account_id, Some(cookie)).await?;
+        Ok(enabled_methods(config))
+    }
+
+    /// A GET whose JSON answer is `T`.
+    async fn get<T: DeserializeOwned>(
+        &self,
+        route: &'static str,
+        url: &str,
+        account_id: i64,
+        cookie: Option<&Secret>,
+    ) -> Result<T> {
+        let (_, body, _) = self.request(Method::GET, route, url, None, account_id, cookie).await?;
+        json(&body)
     }
 
     /// One API call with throttle, CSRF retry, 429 backoff and cookie rotation.
-    /// `route` keys the throttle (one per endpoint, not per URL).
+    /// `route` keys the throttle (one per endpoint, not per URL). No cookie: no `Cookie`
+    /// header, CSRF cached as account 0, no rotation.
     async fn request(
         &self,
         method: Method,
@@ -155,15 +207,19 @@ impl Client {
         url: &str,
         body: Option<&Value>,
         account_id: i64,
-        cookie: &Secret,
+        cookie: Option<&Secret>,
     ) -> Result<Reply> {
+        let account_id = if cookie.is_some() { account_id } else { 0 };
         let http = self.http.as_ref().map_err(|e| AppError::Internal(format!("HTTP client unavailable: {e}")))?;
         let (url, web) = self.target(url)?;
         let (mut rotated, mut csrf_retried, mut attempts) = (None::<Secret>, false, 0);
         loop {
             self.wait_turn(route).await;
-            let current = rotated.as_ref().unwrap_or(cookie);
-            let mut req = http.request(method.clone(), url.clone()).header(COOKIE, cookie_header(current)?);
+            let current = rotated.as_ref().or(cookie);
+            let mut req = http.request(method.clone(), url.clone());
+            if let Some(current) = current {
+                req = req.header(COOKIE, cookie_header(current)?);
+            }
             if web {
                 req = req.header(REFERER, endpoints::WWW).header(ORIGIN, endpoints::WEB_ORIGIN);
             }
@@ -184,7 +240,9 @@ impl Client {
             if let (Some(remaining), Some(reset)) = (limits.remaining, limits.reset_secs()) {
                 self.set_window(route, remaining, reset);
             }
-            if let Some(new) = rotated_cookie(&headers).filter(|new| new.expose() != current.expose()) {
+            if let Some(current) = current
+                && let Some(new) = rotated_cookie(&headers).filter(|new| new.expose() != current.expose())
+            {
                 if account_id != 0 {
                     (self.on_rotate)(account_id, new.clone());
                 }
@@ -347,7 +405,60 @@ fn network(e: reqwest::Error) -> AppError {
 }
 
 fn json<T: DeserializeOwned>(body: &[u8]) -> Result<T> {
-    serde_json::from_slice(body).map_err(|_| AppError::Roblox("unreadable response".into()))
+    serde_json::from_slice(body).map_err(|_| unreadable())
+}
+
+/// One top-level field of a JSON object answer; missing or mistyped is unreadable.
+fn field<T: DeserializeOwned>(mut v: Value, name: &str) -> Result<T> {
+    serde_json::from_value(v.get_mut(name).map(Value::take).unwrap_or_default()).map_err(|_| unreadable())
+}
+
+fn unreadable() -> AppError {
+    AppError::Roblox("unreadable response".into())
+}
+
+/// Positive ids, each once (Roblox fails a whole presence batch on one id ≤ 0).
+fn valid_ids(ids: &[i64]) -> Vec<i64> {
+    let mut ids: Vec<i64> = ids.iter().copied().filter(|&id| id > 0).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+fn csv(ids: &[i64]) -> String {
+    ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
+}
+
+/// Keeps Completed rows with a URL in `out`; returns the ids still Pending.
+fn sort_headshots(page: Thumbnails, out: &mut HashMap<i64, String>) -> Vec<i64> {
+    let mut pending = Vec::new();
+    for t in page.data {
+        match (t.state.as_str(), t.image_url) {
+            ("Completed", Some(url)) if !url.is_empty() => {
+                out.insert(t.target_id, url);
+            }
+            ("Pending", _) => pending.push(t.target_id),
+            _ => {}
+        }
+    }
+    pending
+}
+
+/// Names of the enabled 2-step methods; recovery codes and the password don't count.
+fn enabled_methods(config: TwoStepConfig) -> Vec<String> {
+    let name = |v: &Value| match v {
+        Value::Number(n) => MEDIA_TYPES.get(usize::try_from(n.as_u64()?).ok()?).copied(),
+        Value::String(s) => MEDIA_TYPES.iter().find(|m| m.eq_ignore_ascii_case(s)).copied(),
+        _ => None,
+    };
+    config
+        .methods
+        .iter()
+        .filter(|m| m.enabled)
+        .filter_map(|m| name(&m.media_type))
+        .filter(|n| !matches!(*n, "RecoveryCode" | "Password"))
+        .map(String::from)
+        .collect()
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {

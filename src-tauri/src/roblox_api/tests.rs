@@ -200,7 +200,7 @@ async fn csrf_token_is_stored_and_retried_once() {
     let (c, _) = client(&base);
     let (old, body) = (Secret::new("OLD"), serde_json::json!({}));
 
-    let (_, _, rotated) = c.request(Method::POST, "ticket", TICKET, Some(&body), 3, &old).await.unwrap();
+    let (_, _, rotated) = c.request(Method::POST, "ticket", TICKET, Some(&body), 3, Some(&old)).await.unwrap();
     assert_eq!(rotated.unwrap().expose(), "NEW");
     let (first, retry) = (reqs.recv().unwrap(), reqs.recv().unwrap());
     assert!(!has(&first, "x-csrf-token"));
@@ -214,7 +214,7 @@ async fn csrf_token_is_stored_and_retried_once() {
     }
 
     // The cached token goes out with the account's next call straight away.
-    c.request(Method::POST, "ticket", TICKET, Some(&body), 3, &old).await.unwrap();
+    c.request(Method::POST, "ticket", TICKET, Some(&body), 3, Some(&old)).await.unwrap();
     assert!(has(&reqs.recv().unwrap(), "\r\nx-csrf-token: TOK1\r\n"));
 }
 
@@ -223,7 +223,7 @@ async fn csrf_retry_happens_only_once() {
     let csrf_403 = reply("403 Forbidden", &["x-csrf-token: TOK"], "{}");
     let (base, _reqs) = serve(vec![csrf_403.clone(), csrf_403]);
     let (c, _) = client(&base);
-    let r = c.request(Method::POST, "ticket", TICKET, None, 3, &Secret::new("OLD")).await;
+    let r = c.request(Method::POST, "ticket", TICKET, None, 3, Some(&Secret::new("OLD"))).await;
     assert!(matches!(r, Err(AppError::Roblox(m)) if m == "HTTP 403"));
 }
 
@@ -298,7 +298,7 @@ async fn challenge_is_not_retried() {
     let (base, _reqs) = serve(vec![challenge]);
     let (c, _) = client(&base);
     let url = "https://apis.roblox.com/sharelinks/v1/resolve-link";
-    let r = c.request(Method::POST, "share", url, None, 1, &Secret::new("OLD")).await;
+    let r = c.request(Method::POST, "share", url, None, 1, Some(&Secret::new("OLD"))).await;
     assert!(matches!(r, Err(AppError::Challenge)));
 }
 
@@ -325,4 +325,290 @@ async fn used_up_window_delays_the_next_call() {
     c.wait_turn("route").await;
     assert!(start.elapsed() < Duration::from_millis(500));
     assert_eq!(lock(&c.windows)["route"].remaining, 0);
+}
+
+// Account info: recorded answers.
+
+/// The recorded HTTP status of a JSON fixture.
+fn fixture_status(name: &str) -> StatusCode {
+    let v: Value = serde_json::from_str(&fixture(name)).unwrap();
+    StatusCode::from_bytes(v["_status"].as_str().unwrap().split(' ').nth(1).unwrap().as_bytes()).unwrap()
+}
+
+fn is_http(e: AppError, code: &str) -> bool {
+    matches!(e, AppError::Roblox(m) if m == format!("HTTP {code}"))
+}
+
+#[test]
+fn user_details_fixture() {
+    let d: UserDetails = json(&fixture_body("acctinfo-users-user-1.json")).unwrap();
+    assert_eq!((d.id, d.name.as_str(), d.display_name.as_str()), (1, "Roblox", "Roblox"));
+    assert_eq!(d.created.as_deref(), Some("2006-02-27T21:06:40.3Z"));
+    assert!(!d.is_banned && d.has_verified_badge && d.description.starts_with("Welcome"));
+    let invalid = "acctinfo-users-user-invalid.json";
+    assert!(is_http(classify(fixture_status(invalid), &HeaderMap::new(), &fixture_body(invalid)), "404"));
+}
+
+#[test]
+fn headshot_fixtures() {
+    let sort = |name: &str| {
+        let mut out = HashMap::new();
+        let pending = sort_headshots(json(&fixture_body(name)).unwrap(), &mut out);
+        let mut ids: Vec<i64> = out.keys().copied().collect();
+        ids.sort_unstable();
+        (ids, pending, out)
+    };
+    let (ids, pending, out) = sort("acctinfo-thumbnails-headshot-1-150-png.json");
+    assert_eq!((ids, pending), (vec![1, 156], vec![]));
+    assert!(out[&156].starts_with("https://tr.rbxcdn.com/30DAY-AvatarHeadshot-635A2AA0"));
+    // Unknown ids are simply left out; /v1/batch rows carry extra fields.
+    assert_eq!(sort("acctinfo-thumbnails-headshot-invalid-and-nonexistent.json").0, [1]);
+    assert_eq!(sort("acctinfo-thumbnails-headshot-1-420-webp-circular.json").0, [1]);
+    assert_eq!(sort("acctinfo-thumbnails-batch-headshot.json").0, [1, 156]);
+
+    // Pending rows have "" URLs; Blocked rows (empty or a placeholder URL) are never kept.
+    let (ids, pending, _) = sort("acctinfo-thumbnails-headshot-pending-first-request.json");
+    assert_eq!((ids, pending), (vec![], vec![4123400, 4123401, 4123402]));
+    let (ids, pending, _) = sort("acctinfo-thumbnails-headshot-pending-after-retry.json");
+    assert_eq!((ids, pending), (vec![4123400, 4123401, 4123402], vec![]));
+    assert_eq!(sort("acctinfo-thumbnails-headshot-blocked-states.json").0, [3000000]);
+
+    for name in ["acctinfo-thumbnails-headshot-101ids.json", "acctinfo-thumbnails-headshot-badsize.json"] {
+        assert!(is_http(classify(fixture_status(name), &HeaderMap::new(), &fixture_body(name)), "400"), "{name}");
+    }
+}
+
+#[test]
+fn social_count_fixtures() {
+    let count = |name: &str| field::<i64>(json(&fixture_body(name)).unwrap(), "count").unwrap();
+    assert_eq!(count("acctinfo-friends-count-1.json"), 0);
+    assert_eq!(count("acctinfo-friends-followers-count-1.json"), 16821485);
+    assert_eq!(count("acctinfo-friends-followings-count-1.json"), 0);
+    // A missing field or a non-object answer is unreadable, never a default 0.
+    assert!(field::<i64>(serde_json::json!({ "total": 3 }), "count").is_err());
+    assert!(field::<i64>(Value::Bool(true), "count").is_err());
+}
+
+#[test]
+fn presence_fixtures() {
+    let rows = |name: &str| json::<Presences>(&fixture_body(name)).unwrap().user_presences;
+    let three = rows("acctinfo-presence-users-1-156-nocookie.json");
+    assert_eq!(three.iter().map(|p| p.user_id).collect::<Vec<_>>(), [1, 156, 261]);
+    let offline = UserPresence {
+        user_id: 1,
+        user_presence_type: 0,
+        last_location: Some("Website".into()),
+        place_id: None,
+        root_place_id: None,
+        game_id: None,
+        universe_id: None,
+    };
+    assert_eq!(three[0], offline);
+    assert!(rows("acctinfo-presence-users-empty.json").is_empty());
+    // Unknown ids still get an offline row.
+    assert_eq!(rows("acctinfo-presence-users-nonexistent.json")[0].user_id, 999999999999);
+
+    let too_many = "acctinfo-presence-users-51ids-error.json";
+    assert_eq!(fixture_status(too_many), StatusCode::BAD_REQUEST);
+    assert_eq!(error_code(&fixture_body(too_many)), Some((3, 0)));
+}
+
+#[test]
+fn plus_fixtures() {
+    let rows = |name: &str| json::<Profiles>(&fixture_body(name)).unwrap().profile_details;
+    let two: Vec<_> = rows("acctinfo-userprofile-get-profiles-nocookie.json")
+        .into_iter()
+        .map(|p| (p.user_id, p.has_roblox_subscription))
+        .collect();
+    assert_eq!(two, [(1, Some(true)), (156, Some(true))]);
+    // Over 200 ids (or only unknown fields): an empty 200, not an error.
+    assert!(rows("acctinfo-userprofile-get-profiles-201ids-silent-empty.json").is_empty());
+}
+
+#[test]
+fn two_step_and_cookie_only_fixtures() {
+    // The swagger's UserConfiguration (no recording with a cookie exists).
+    let config = br#"{"primaryMediaType":2,"methods":[
+        {"mediaType":0,"enabled":true,"updated":"2026-01-02T03:04:05Z"},{"mediaType":2,"enabled":true,"updated":null},
+        {"mediaType":3,"enabled":true},{"mediaType":1,"enabled":false}]}"#;
+    assert_eq!(enabled_methods(json(config).unwrap()), ["Email", "Authenticator"]);
+    assert!(enabled_methods(json(b"{}").unwrap()).is_empty());
+
+    // Without a cookie 2SV answers 400, the others 401.
+    let tsv = "acctinfo-twostepverification-configuration-1-nocookie.json";
+    assert!(is_http(classify(fixture_status(tsv), &HeaderMap::new(), &fixture_body(tsv)), "400"));
+    for name in [
+        "acctinfo-economy-user-currency-nocookie.json",
+        "acctinfo-premiumfeatures-validate-membership-1-nocookie.json",
+        "acctinfo-accountsettings-email-nocookie.json",
+    ] {
+        let e = classify(fixture_status(name), &HeaderMap::new(), &fixture_body(name));
+        assert!(matches!(e, AppError::CookieInvalid), "{name}");
+    }
+}
+
+// Account info end to end.
+
+fn ok(body: &str) -> String {
+    reply("200 OK", &[], body)
+}
+
+fn first_line(req: &str) -> &str {
+    req.lines().next().unwrap()
+}
+
+fn body_of(req: &str) -> Value {
+    serde_json::from_str(req.split_once("\r\n\r\n").unwrap().1).unwrap()
+}
+
+const HEADSHOT_QUERY: &str = "&size=150x150&format=Png&isCircular=false HTTP/1.1";
+
+#[tokio::test]
+async fn headshots_re_request_only_pending() {
+    let first = r#"{"data":[
+        {"targetId":1,"state":"Completed","imageUrl":"https://tr.rbxcdn.com/a"},
+        {"targetId":2,"state":"Pending","imageUrl":""},
+        {"targetId":3,"state":"Blocked","imageUrl":"https://tr.rbxcdn.com/placeholder"},
+        {"targetId":4,"state":"Pending","imageUrl":""}]}"#;
+    let second = r#"{"data":[{"targetId":2,"state":"Completed","imageUrl":"https://t6.rbxcdn.com/b"},
+        {"targetId":4,"state":"Pending","imageUrl":""}]}"#;
+    let third = r#"{"data":[{"targetId":4,"state":"Completed","imageUrl":""}]}"#;
+    let (base, reqs) = serve(vec![ok(first), ok(second), ok(third)]);
+    let (c, _) = client(&base);
+
+    let urls = c.headshots(&[3, 1, 2, 4, 2, 0]).await.unwrap();
+    let want = HashMap::from([(1, "https://tr.rbxcdn.com/a".to_string()), (2, "https://t6.rbxcdn.com/b".to_string())]);
+    assert_eq!(urls, want);
+    for ids in ["1,2,3,4", "2,4", "4"] {
+        let req = reqs.recv().unwrap();
+        assert_eq!(first_line(&req), format!("GET /v1/users/avatar-headshot?userIds={ids}{HEADSHOT_QUERY}"));
+        assert!(!has(&req, "\r\ncookie:"));
+    }
+}
+
+#[tokio::test]
+async fn headshots_give_up_after_five_retries() {
+    let pending = ok(r#"{"data":[{"targetId":8,"state":"Pending","imageUrl":""}]}"#);
+    let (base, reqs) = serve(vec![pending; 6]);
+    let (c, _) = client(&base);
+    // A seventh call would hit a closed port and fail as Network.
+    assert!(c.headshots(&[8]).await.unwrap().is_empty());
+    assert_eq!(reqs.iter().count(), 6);
+}
+
+#[tokio::test]
+async fn plus_row_without_the_field_is_absent() {
+    let body = r#"{"profileDetails":[{"userId":1,"hasRobloxSubscription":true},
+        {"userId":2,"hasRobloxSubscription":false},{"userId":3,"names":{"username":null}},
+        {"userId":4,"hasRobloxSubscription":null}],"errors":[]}"#;
+    let (base, reqs) = serve(vec![ok(body)]);
+    let (c, _) = client(&base);
+    assert_eq!(c.plus(&[1, 2, 3, 4]).await.unwrap(), HashMap::from([(1, true), (2, false)]));
+
+    let req = reqs.recv().unwrap();
+    assert_eq!(first_line(&req), "POST /user-profile-api/v1/user/profiles/get-profiles HTTP/1.1");
+    assert_eq!(body_of(&req), serde_json::json!({ "userIds": [1, 2, 3, 4], "fields": ["hasRobloxSubscription"] }));
+    assert!(!has(&req, "\r\ncookie:"));
+}
+
+#[tokio::test]
+async fn presence_drops_bad_ids_and_chunks_at_50() {
+    let page = |ids: std::ops::RangeInclusive<i64>| {
+        let row = |id| format!(r#"{{"userPresenceType":2,"placeId":5,"gameId":"g","universeId":9,"userId":{id}}}"#);
+        let rows: Vec<String> = ids.map(row).collect();
+        ok(&format!(r#"{{"userPresences":[{}]}}"#, rows.join(",")))
+    };
+    let (base, reqs) = serve(vec![page(1..=50), page(51..=60)]);
+    let (c, _) = client(&base);
+    let cookie = Secret::new("OLD");
+
+    let mut ids: Vec<i64> = (1..=60).rev().collect();
+    ids.extend([0, -5, 7, 60]);
+    let rows = c.presence(4, &cookie, &ids).await.unwrap();
+    assert_eq!(rows.iter().map(|p| p.user_id).collect::<Vec<_>>(), (1..=60).collect::<Vec<_>>());
+    assert_eq!((rows[59].universe_id, rows[59].root_place_id), (Some(9), None));
+
+    for want in [1..=50, 51..=60] {
+        let req = reqs.recv().unwrap();
+        assert_eq!(first_line(&req), "POST /v1/presence/users HTTP/1.1");
+        assert!(has(&req, "\r\ncookie: .ROBLOSECURITY=OLD\r\n"));
+        assert_eq!(body_of(&req), serde_json::json!({ "userIds": want.collect::<Vec<i64>>() }));
+    }
+    // Nothing valid to ask about: no call at all (a third would fail as Network).
+    assert!(c.presence(4, &cookie, &[0, -1]).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn premium_is_a_bare_boolean() {
+    let (base, reqs) = serve(vec![ok("true"), ok("false"), ok(r#"{"isPremium":true}"#)]);
+    let (c, _) = client(&base);
+    let cookie = Secret::new("OLD");
+    assert!(c.premium(2, &cookie, 77).await.unwrap());
+    assert!(!c.premium(2, &cookie, 77).await.unwrap());
+    assert!(matches!(c.premium(2, &cookie, 77).await, Err(AppError::Roblox(m)) if m == "unreadable response"));
+
+    let req = reqs.recv().unwrap();
+    assert_eq!(first_line(&req), "GET /v1/users/77/validate-membership HTTP/1.1");
+    assert!(has(&req, "\r\ncookie: .ROBLOSECURITY=OLD\r\n"));
+}
+
+#[tokio::test]
+async fn public_calls_send_no_cookie() {
+    // A Set-Cookie on an anonymous answer is no rotation either.
+    let count = reply("200 OK", &["set-cookie: .ROBLOSECURITY=NEW; path=/"], r#"{"count":7}"#);
+    let (base, reqs) = serve(vec![count.clone(), count.clone(), count, ok(USER)]);
+    let (c, rotations) = client(&base);
+
+    let counts = c.social_counts(1).await.unwrap();
+    assert_eq!(counts, SocialCounts { friends: 7, followers: 7, following: 7 });
+    let mut lines: Vec<String> = (0..3)
+        .map(|_| {
+            let req = reqs.recv().unwrap();
+            assert!(!has(&req, "\r\ncookie:"), "{req}");
+            first_line(&req).to_owned()
+        })
+        .collect();
+    lines.sort();
+    let want = ["followers", "followings", "friends"].map(|k| format!("GET /v1/users/1/{k}/count HTTP/1.1"));
+    assert_eq!(lines, want);
+
+    assert_eq!(c.user_details(9, None, 1).await.unwrap().display_name, "Roblox");
+    let req = reqs.recv().unwrap();
+    assert_eq!(first_line(&req), "GET /v1/users/1 HTTP/1.1");
+    assert!(!has(&req, "\r\ncookie:"));
+    assert!(rotations.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn robux_email_and_details_use_the_cookie() {
+    let email = r#"{"emailAddress":"r***@example.com","verified":true,"canBypassPasswordForEmailUpdate":false}"#;
+    let (base, reqs) = serve(vec![ok(r#"{"robux":1234}"#), ok(email), ok(USER)]);
+    let (c, _) = client(&base);
+    let cookie = Secret::new("OLD");
+    assert_eq!(c.robux(2, &cookie).await.unwrap(), 1234);
+    assert!(c.email_verified(2, &cookie).await.unwrap());
+    assert_eq!(c.user_details(2, Some(&cookie), 1).await.unwrap().id, 1);
+
+    for path in ["/v1/user/currency", "/v1/email", "/v1/users/1"] {
+        let req = reqs.recv().unwrap();
+        assert_eq!(first_line(&req), format!("GET {path} HTTP/1.1"));
+        assert!(has(&req, "\r\ncookie: .ROBLOSECURITY=OLD\r\n"));
+    }
+}
+
+#[tokio::test]
+async fn two_step_maps_int_and_string_media_types() {
+    let body = r#"{"primaryMediaType":2,"methods":[
+        {"mediaType":0,"enabled":true},{"mediaType":"Authenticator","enabled":true},
+        {"mediaType":1,"enabled":false},{"mediaType":3,"enabled":true},{"mediaType":"Password","enabled":true},
+        {"mediaType":"securitykey","enabled":true},{"mediaType":7,"enabled":true},
+        {"mediaType":99,"enabled":true},{"mediaType":-1,"enabled":true},{"mediaType":"Pigeon","enabled":true}]}"#;
+    let (base, reqs) = serve(vec![ok(body)]);
+    let (c, _) = client(&base);
+    let methods = c.two_step_methods(3, &Secret::new("OLD"), 42).await.unwrap();
+    assert_eq!(methods, ["Email", "Authenticator", "SecurityKey", "Passkey"]);
+
+    let req = reqs.recv().unwrap();
+    assert_eq!(first_line(&req), "GET /v1/users/42/configuration HTTP/1.1");
+    assert!(has(&req, "\r\ncookie: .ROBLOSECURITY=OLD\r\n"));
 }

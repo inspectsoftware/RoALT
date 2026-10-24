@@ -1,17 +1,65 @@
 //! Windows DPAPI (current user) with an app-specific entropy.
 
-use zeroize::Zeroizing;
+use windows::Win32::Foundation::{HLOCAL, LocalFree};
+use windows::Win32::Security::Cryptography::{
+    CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
+};
+use windows::core::PCWSTR;
+use zeroize::{Zeroize, Zeroizing};
 
-use crate::error::Result;
+use crate::error::{AppError, Result};
 
 pub const ENTROPY: &[u8] = b"RoALT/vault/v1";
 
 pub fn protect(data: &[u8]) -> Result<Vec<u8>> {
-    let _ = data;
-    todo!("dpapi: protect")
+    let (input, entropy) = (blob(data)?, blob(ENTROPY)?);
+    let mut out = CRYPT_INTEGER_BLOB::default();
+    // SAFETY: the input blobs point at live slices DPAPI only reads; DPAPI fills `out`.
+    unsafe {
+        CryptProtectData(&input, PCWSTR::null(), Some(&entropy), None, None, CRYPTPROTECT_UI_FORBIDDEN, &mut out)
+    }
+    .map_err(|_| AppError::Crypto)?;
+    Ok(take(out).to_vec())
 }
 
-pub fn unprotect(blob: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
-    let _ = blob;
-    todo!("dpapi: unprotect")
+pub fn unprotect(blob_in: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
+    let (input, entropy) = (blob(blob_in)?, blob(ENTROPY)?);
+    let mut out = CRYPT_INTEGER_BLOB::default();
+    // SAFETY: as in `protect`.
+    unsafe { CryptUnprotectData(&input, None, Some(&entropy), None, None, CRYPTPROTECT_UI_FORBIDDEN, &mut out) }
+        .map_err(|_| AppError::Crypto)?;
+    Ok(take(out))
+}
+
+fn blob(data: &[u8]) -> Result<CRYPT_INTEGER_BLOB> {
+    let len = u32::try_from(data.len()).map_err(|_| AppError::Crypto)?;
+    Ok(CRYPT_INTEGER_BLOB { cbData: len, pbData: data.as_ptr().cast_mut() })
+}
+
+/// Copies DPAPI's output, wipes the original and frees it.
+fn take(out: CRYPT_INTEGER_BLOB) -> Zeroizing<Vec<u8>> {
+    if out.pbData.is_null() {
+        return Zeroizing::new(Vec::new());
+    }
+    // SAFETY: on success DPAPI returns `cbData` bytes at `pbData`, allocated with LocalAlloc.
+    unsafe {
+        let bytes = std::slice::from_raw_parts_mut(out.pbData, out.cbData as usize);
+        let copy = Zeroizing::new(bytes.to_vec());
+        bytes.zeroize();
+        LocalFree(Some(HLOCAL(out.pbData.cast())));
+        copy
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dpapi_round_trip() {
+        let wrapped = protect(b"data key").unwrap();
+        assert_ne!(wrapped.as_slice(), b"data key");
+        assert_eq!(unprotect(&wrapped).unwrap().as_slice(), b"data key");
+        assert!(matches!(unprotect(b"not a dpapi blob"), Err(AppError::Crypto)));
+    }
 }

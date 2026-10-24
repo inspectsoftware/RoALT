@@ -220,13 +220,15 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
         title="Export backup"
         text="The file holds every cookie, encrypted with this password. You need it to import the file."
         submitLabel="Choose file…"
+        current={master}
+        currentLabel="Master password"
         next
         nextLabel="Backup password"
-        onSubmit={async ({ next }) => {
+        onSubmit={async ({ current, next }) => {
           const date = new Date().toISOString().slice(0, 10);
           const path = await saveFile({ defaultPath: `RoALT-backup-${date}.roalt`, filters: BACKUP_FILTER });
           if (!path) throw cancelled();
-          const n = await api.backupExport(path, next);
+          const n = await api.backupExport(path, next, master ? current : undefined);
           toast(`Exported ${plural(n, "account")}.`);
         }}
       />
@@ -243,8 +245,10 @@ function ImportDialog({ open, path, onClose }: { open: boolean; path: string; on
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!open) return;
-    setPw("");
+    if (!open) {
+      setPw("");
+      return;
+    }
     setReport(null);
     setError(null);
   }, [open]);

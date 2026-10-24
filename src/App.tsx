@@ -136,6 +136,16 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  const failed = accounts.error ?? groups.error;
+  if (failed)
+    return (
+      <div className="flex-1 grid place-items-center p-8">
+        <div className="flex flex-col items-start gap-3 max-w-sm">
+          <p className="text-dim">{friendly(asError(failed))}</p>
+          <button className="btn" onClick={() => { accounts.refetch(); groups.refetch(); }}>Try again</button>
+        </div>
+      </div>
+    );
   if (!accounts.data || !groups.data) return <div className="flex-1" />;
 
   const showAll = () => {

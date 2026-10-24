@@ -51,8 +51,9 @@ export const api = {
   groupSave: (input: GroupInput) => invoke<Group>("group_save", { input }),
   groupRemove: (id: number) => invoke<void>("group_remove", { id }),
 
-  backupExport: (path: string, password: string, accountIds?: number[]) =>
-    invoke<number>("backup_export", { path, password, accountIds }),
+  /** Master mode needs the master password (currentPassword); DPAPI mode shows Windows Hello. */
+  backupExport: (path: string, password: string, currentPassword?: string, accountIds?: number[]) =>
+    invoke<number>("backup_export", { path, password, currentPassword, accountIds }),
   backupImport: (path: string, password: string, onConflict: ConflictPolicy) =>
     invoke<ImportReport>("backup_import", { path, password, onConflict }),
 

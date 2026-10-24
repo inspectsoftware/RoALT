@@ -20,7 +20,11 @@ const FILTERS: { key: Filter; label: string }[] = [
 ];
 
 const inFilter = (a: AccountSummary, f: Filter) => f === "all" || (f === "fav" ? a.favourite : a.status === f);
-const isTyping = (t: EventTarget | null) => t instanceof HTMLElement && (t.matches("input, textarea, select") || t.isContentEditable);
+const isTyping = (t: EventTarget | null) =>
+  t instanceof HTMLElement &&
+  (t.matches("textarea, select, input:not([type=checkbox]):not([type=radio])") || t.isContentEditable);
+// Cookies are checked once per app session, when the list first shows (after unlock in master mode).
+let validatedThisSession = false;
 const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 export function AccountsView({ accounts, groups, density, vaultMode, clipboardSeconds, group, setGroup, selected, setSelected, onAdd }: {
@@ -62,7 +66,8 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
   const byId = useMemo(() => new Map(accounts.map((a) => [a.id, a])), [accounts]);
   const groupById = useMemo(() => new Map(groups.map((g) => [g.id, g])), [groups]);
   const ordered = order ? order.flatMap((id) => byId.get(id) ?? []) : accounts;
-  const inGroup = group === null ? ordered : ordered.filter((a) => a.groupIds.includes(group));
+  // A group deleted while it was the filter means no filter.
+  const inGroup = group === null || !groupById.has(group) ? ordered : ordered.filter((a) => a.groupIds.includes(group));
   const needle = q.trim().toLowerCase();
   const shown = inGroup.filter(
     (a) =>
@@ -76,19 +81,32 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
   const activeGroup = group === null ? null : groupById.get(group) ?? null;
 
   const validate = useMutation({
-    mutationFn: (ids?: number[]) => api.accountsValidate(ids),
-    onSuccess: (list, ids) => {
+    mutationFn: async (ids?: number[]) => ({ started: Date.now(), list: await api.accountsValidate(ids) }),
+    onSuccess: ({ started, list }, ids) => {
       qc.setQueryData(qk.accounts, list);
-      const done = ids ? list.filter((a) => ids.includes(a.id)) : list;
+      const asked = ids ? list.filter((a) => ids.includes(a.id)) : list;
+      // Accounts Roblox couldn't be asked about (network, rate limit) keep their old stamp.
+      const done = asked.filter((a) => (a.statusCheckedAt ?? 0) >= started - 1000);
+      const missed = asked.length - done.length;
       const bad = done.filter((a) => a.status === "invalid").length;
       const ch = done.filter((a) => a.status === "challenged").length;
       toast(
-        [`Checked ${plural(done.length, "account")}`, bad && `${bad} need${bad === 1 ? "s" : ""} sign-in`, ch && `${ch} challenged`]
+        [
+          `Checked ${plural(done.length, "account")}`,
+          missed && `${missed} couldn't be checked`,
+          bad && `${bad} need${bad === 1 ? "s" : ""} sign-in`,
+          ch && `${ch} challenged`,
+        ]
           .filter(Boolean)
           .join(" · "),
       );
     },
   });
+  useEffect(() => {
+    if (validatedThisSession || !accounts.length) return;
+    validatedThisSession = true;
+    validate.mutate(undefined);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const checking = validate.isPending ? (validate.variables ?? null) : undefined;
   const isChecking = (id: number) => checking === null || (checking !== undefined && checking.includes(id));
 
@@ -520,7 +538,13 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
       </main>
 
       {current && (
-        <aside key={current.id} aria-label="Account details" className="scroll w-[clamp(280px,30vw,360px)] flex-none bg-panel border-l border-line">
+        <aside
+          key={current.id}
+          // Pin the panel to this account once it is used, so an edit that drops it from the
+          // filtered list can't swap the panel to another account under the next click.
+          onFocusCapture={() => setSelected(current.id)}
+          aria-label="Account details"
+          className="scroll w-[clamp(280px,30vw,360px)] flex-none bg-panel border-l border-line">
           <DetailPanel
             account={current}
             groups={groups}

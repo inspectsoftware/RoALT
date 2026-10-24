@@ -41,6 +41,11 @@ export function PasswordDialog({
     setShakes(0);
   }, [open]);
 
+  // Closing mid-request would not cancel it, so wait for it.
+  const close = () => {
+    if (!busy) onClose();
+  };
+
   const fail = (msg: string) => {
     setError(msg);
     setShakes((n) => n + 1);
@@ -67,7 +72,7 @@ export function PasswordDialog({
   }
 
   return (
-    <Dialog open={open} onClose={onClose} title={title}>
+    <Dialog open={open} onClose={close} title={title}>
       <form onSubmit={submit} className={`flex flex-col gap-4 p-5 ${shakes ? (shakes % 2 ? "shake" : "shake2") : ""}`}>
         <div className="text-dim">{text}</div>
         {current && (
@@ -81,7 +86,7 @@ export function PasswordDialog({
         )}
         {error && <div role="alert" className="alert">{error}</div>}
         <div className="flex justify-end gap-2 pt-1">
-          <button type="button" className="btn" onClick={onClose}>Cancel</button>
+          <button type="button" className="btn" onClick={close} disabled={busy}>Cancel</button>
           <button type="submit" className="btn btn-primary" disabled={busy}>{busy ? "Working…" : submitLabel}</button>
         </div>
       </form>

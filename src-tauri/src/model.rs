@@ -294,3 +294,107 @@ pub struct ImportReport {
     pub updated: u32,
     pub skipped: u32,
 }
+
+/// Where to launch. Ids are numbers; codes stay strings (link codes can be 25-32 digits).
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[ts(export)]
+pub enum LaunchTarget {
+    /// A game (its start place); `launch_data` ≤ 200 bytes goes to the game.
+    Place { place_id: i64, launch_data: Option<String> },
+    /// One server (job) of a place.
+    Server { place_id: i64, job_id: String },
+    /// Private server via its link code (classic `?privateServerLinkCode=` links).
+    PrivateLink { place_id: i64, link_code: String },
+    /// Private server via its access code (a GUID).
+    PrivateAccess { place_id: i64, access_code: String },
+    /// `roblox.com/share?code=..&type=..`: resolved with the launching account's cookie.
+    ShareLink { code: String, link_type: String },
+    /// `roblox.com/share?code=..&v=v2`.
+    ShareLinkV2 { code: String },
+    /// A game named by universe; launched at its root place.
+    Universe { universe_id: i64 },
+    /// Join whatever server this user is in.
+    FollowUser { user_id: i64 },
+}
+
+/// What `target_parse` made of pasted text.
+#[derive(Serialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[ts(export)]
+pub enum ParsedInput {
+    Target { target: LaunchTarget },
+    /// A bare job id: the UI must ask for the place.
+    JobIdOnly { job_id: String },
+    /// `@name` or a bare username: look it up, then follow.
+    Username { name: String },
+    Invalid { reason: String },
+    Unsupported { reason: String },
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Favourite {
+    pub id: i64,
+    pub name: String,
+    pub target: LaunchTarget,
+    /// Accounts a one-click (or tray) launch uses.
+    pub account_ids: Vec<i64>,
+    pub in_tray: bool,
+    pub sort_order: i64,
+    /// Unix ms.
+    pub last_used_at: Option<i64>,
+}
+
+#[derive(Deserialize, TS, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FavouriteInput {
+    #[ts(optional)]
+    pub id: Option<i64>,
+    pub name: String,
+    pub target: LaunchTarget,
+    pub account_ids: Vec<i64>,
+    pub in_tray: bool,
+}
+
+/// Someone an account can join: a friend online on Roblox, or another stored account.
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct JoinCandidate {
+    pub user_id: i64,
+    pub username: String,
+    pub display_name: String,
+    /// Set when this is one of the stored accounts.
+    pub account_id: Option<i64>,
+    pub presence: Presence,
+}
+
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UserRef {
+    pub user_id: i64,
+    pub username: String,
+    pub display_name: String,
+}
+
+/// A client RoALT started.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LaunchInfo {
+    pub account_id: i64,
+    /// Process id of what was started (the Roblox client, or a bootstrapper such as Bloxstrap).
+    pub pid: u32,
+    /// The `browsertrackerid` this launch used; the client's log names it.
+    pub browser_tracker_id: i64,
+    /// The place it was sent to, when known before the client starts.
+    pub place_id: Option<i64>,
+    /// Unix ms.
+    pub started_at: i64,
+    /// True when a bootstrapper (not RobloxPlayerBeta.exe) handled the launch.
+    pub via_bootstrapper: bool,
+}

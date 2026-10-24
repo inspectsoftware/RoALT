@@ -2,6 +2,7 @@
 
 mod commands;
 mod error;
+mod launcher;
 mod model;
 mod roblox_api;
 mod storage;
@@ -193,6 +194,14 @@ fn main() {
             commands::accounts_headshots,
             commands::accounts_presence,
             commands::account_open_session,
+            commands::target_parse,
+            commands::user_lookup,
+            commands::launch,
+            commands::favourites_list,
+            commands::favourite_save,
+            commands::favourite_remove,
+            commands::favourites_reorder,
+            commands::join_candidates,
             commands::groups_list,
             commands::group_save,
             commands::group_remove,

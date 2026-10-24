@@ -100,3 +100,74 @@ pub struct TwoStepMethod {
     #[serde(default)]
     pub enabled: bool,
 }
+
+/// `sharelinks/v1/resolve-link`: one `*Data` object is filled, by link type. Unknown fields
+/// are ignored; every field is optional because Roblox omits them freely.
+#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ShareLinkResolution {
+    pub private_server_invite_data: Option<ShareTarget>,
+    pub experience_invite_data: Option<ShareTarget>,
+    pub notification_experience_invite_data: Option<ShareTarget>,
+    pub screenshot_invite_data: Option<ShareTarget>,
+    pub experience_details_invite_data: Option<ShareTarget>,
+    pub experience_affiliate_data: Option<ShareTarget>,
+    pub experience_event_data: Option<ShareTarget>,
+    pub profile_link_resolution_response_data: Option<ShareTarget>,
+}
+
+/// The union of the fields the website reads from any share-link payload.
+#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ShareTarget {
+    /// Valid | Expired | Invalid | InviterNotInExperience | ...
+    pub status: Option<String>,
+    pub place_id: Option<i64>,
+    pub universe_id: Option<i64>,
+    pub link_code: Option<String>,
+    pub instance_id: Option<String>,
+    pub launch_data: Option<String>,
+    pub user_id: Option<i64>,
+    /// ExperienceAffiliate / ExperienceEvent keep launch data here.
+    pub join_data: Option<serde_json::Value>,
+}
+
+/// `deeplinks/v2/resolve`.
+#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ShareLinkV2 {
+    /// Experience | StudioEdit | ...
+    pub link_type: Option<String>,
+    pub status: Option<String>,
+    pub target_id: Option<i64>,
+    pub custom_data: Option<serde_json::Value>,
+}
+
+/// A row of `friends/v1/users/{id}/friends/online`.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub struct FriendOnline {
+    pub id: i64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default, rename = "displayName")]
+    pub display_name: String,
+    #[serde(rename = "userPresence")]
+    pub presence: Option<FriendPresence>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+#[serde(rename_all = "PascalCase")]
+pub struct FriendPresence {
+    /// "Online" | "InGame" | "InStudio" | ...
+    pub user_presence_type: Option<String>,
+    #[serde(rename = "lastLocation")]
+    pub last_location: Option<String>,
+    #[serde(rename = "placeId")]
+    pub place_id: Option<i64>,
+    #[serde(rename = "rootPlaceId")]
+    pub root_place_id: Option<i64>,
+    #[serde(rename = "gameInstanceId")]
+    pub game_instance_id: Option<String>,
+    #[serde(rename = "universeId")]
+    pub universe_id: Option<i64>,
+}

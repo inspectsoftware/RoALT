@@ -35,6 +35,17 @@ pub struct Db {
     conn: Mutex<Connection>,
 }
 
+/// A `favourites` row; `target` is the encrypted `LaunchTarget` JSON (link codes are bearer secrets).
+pub struct FavouriteRow {
+    pub id: i64,
+    pub name: String,
+    pub target: Vec<u8>,
+    pub account_ids: Vec<i64>,
+    pub in_tray: bool,
+    pub sort_order: i64,
+    pub last_used_at: Option<i64>,
+}
+
 const MAX_ALIAS: usize = 64;
 const MAX_NOTES: usize = 2000;
 const MAX_GROUP_NAME: usize = 40;
@@ -294,6 +305,81 @@ impl Db {
     pub fn save_settings(&self, s: &Settings) -> Result<()> {
         let json = serde_json::to_string(s).map_err(|e| AppError::Internal(e.to_string()))?;
         self.conn().execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('settings', ?1)", [json])?;
+        Ok(())
+    }
+
+    /// Favourites in order: `(id, name, encrypted target, account ids, in tray, sort order, last used)`.
+    pub fn favourites(&self) -> Result<Vec<FavouriteRow>> {
+        let c = self.conn();
+        let mut st = c.prepare(
+            "SELECT id, name, target, account_ids, in_tray, sort_order, last_used_at FROM favourites ORDER BY sort_order, id",
+        )?;
+        let rows = st.query_map([], |r| {
+            let ids: String = r.get(3)?;
+            Ok(FavouriteRow {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                target: r.get(2)?,
+                account_ids: serde_json::from_str(&ids).unwrap_or_default(),
+                in_tray: r.get(4)?,
+                sort_order: r.get(5)?,
+                last_used_at: r.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Insert (`id: None`, goes last) or update; the name is trimmed, 1..=60 chars.
+    pub fn save_favourite(&self, id: Option<i64>, name: &str, target: &[u8], account_ids: &[i64], in_tray: bool) -> Result<i64> {
+        let name = name.trim();
+        if name.is_empty() || name.chars().count() > 60 {
+            return Err(AppError::Invalid("Favourite names need 1 to 60 characters.".into()));
+        }
+        let ids = serde_json::to_string(account_ids).map_err(|e| AppError::Internal(e.to_string()))?;
+        let c = self.conn();
+        match id {
+            Some(id) => {
+                let n = c.execute(
+                    "UPDATE favourites SET name = ?2, target = ?3, account_ids = ?4, in_tray = ?5 WHERE id = ?1",
+                    params![id, name, target, ids, in_tray],
+                )?;
+                if n == 0 {
+                    return Err(AppError::NotFound);
+                }
+                Ok(id)
+            }
+            None => Ok(c.query_row(
+                "INSERT INTO favourites (name, target, account_ids, in_tray, sort_order) \
+                 VALUES (?1, ?2, ?3, ?4, (SELECT COALESCE(MAX(sort_order) + 1, 0) FROM favourites)) RETURNING id",
+                params![name, target, ids, in_tray],
+                |r| r.get(0),
+            )?),
+        }
+    }
+
+    pub fn remove_favourite(&self, id: i64) -> Result<()> {
+        self.conn().execute("DELETE FROM favourites WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// `ids` get sort_order 0..n; others keep their order after them.
+    pub fn reorder_favourites(&self, ids: &[i64]) -> Result<()> {
+        let mut c = self.conn();
+        let tx = c.transaction()?;
+        let rest: Vec<i64> = {
+            let mut st = tx.prepare("SELECT id FROM favourites ORDER BY sort_order, id")?;
+            let all = st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<Vec<i64>>>()?;
+            all.into_iter().filter(|id| !ids.contains(id)).collect()
+        };
+        for (i, id) in ids.iter().chain(rest.iter()).enumerate() {
+            tx.execute("UPDATE favourites SET sort_order = ?2 WHERE id = ?1", params![id, i as i64])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn touch_favourite(&self, id: i64, at: i64) -> Result<()> {
+        self.conn().execute("UPDATE favourites SET last_used_at = ?2 WHERE id = ?1", params![id, at])?;
         Ok(())
     }
 
@@ -644,6 +730,26 @@ mod tests {
         assert_eq!(db.settings().unwrap(), s);
         db.conn().execute("UPDATE settings SET value = 'nope' WHERE key = 'settings'", []).unwrap();
         assert_eq!(db.settings().unwrap(), Settings::default());
+    }
+
+    #[test]
+    fn favourites_crud_and_order() {
+        let db = Db::open_in_memory().unwrap();
+        let a = db.save_favourite(None, " Sky ", b"t1", &[1, 2], true).unwrap();
+        let b = db.save_favourite(None, "VIP", b"t2", &[], false).unwrap();
+        assert!(matches!(db.save_favourite(None, "  ", b"x", &[], true), Err(AppError::Invalid(_))));
+        assert!(matches!(db.save_favourite(Some(999), "x", b"x", &[], true), Err(AppError::NotFound)));
+        let list = db.favourites().unwrap();
+        assert_eq!(list.iter().map(|f| (f.id, f.name.as_str())).collect::<Vec<_>>(), vec![(a, "Sky"), (b, "VIP")]);
+        assert_eq!((list[0].account_ids.clone(), list[0].in_tray, list[0].target.clone()), (vec![1, 2], true, b"t1".to_vec()));
+        db.save_favourite(Some(a), "Sky 2", b"t3", &[3], false).unwrap();
+        db.reorder_favourites(&[b]).unwrap();
+        db.touch_favourite(a, 42).unwrap();
+        let list = db.favourites().unwrap();
+        assert_eq!(list.iter().map(|f| f.id).collect::<Vec<_>>(), vec![b, a]);
+        assert_eq!((list[1].name.as_str(), list[1].last_used_at), ("Sky 2", Some(42)));
+        db.remove_favourite(b).unwrap();
+        assert_eq!(db.favourites().unwrap().len(), 1);
     }
 
     #[test]

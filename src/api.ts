@@ -7,17 +7,25 @@ import type { AccountPresence } from "./bindings/AccountPresence";
 import type { AccountSummary } from "./bindings/AccountSummary";
 import type { ConflictPolicy } from "./bindings/ConflictPolicy";
 import type { ErrorPayload } from "./bindings/ErrorPayload";
+import type { Favourite } from "./bindings/Favourite";
+import type { FavouriteInput } from "./bindings/FavouriteInput";
 import type { Group } from "./bindings/Group";
 import type { GroupInput } from "./bindings/GroupInput";
 import type { Headshot } from "./bindings/Headshot";
 import type { ImportReport } from "./bindings/ImportReport";
+import type { JoinCandidate } from "./bindings/JoinCandidate";
+import type { LaunchInfo } from "./bindings/LaunchInfo";
+import type { LaunchTarget } from "./bindings/LaunchTarget";
+import type { ParsedInput } from "./bindings/ParsedInput";
 import type { Settings } from "./bindings/Settings";
 import type { SettingsPatch } from "./bindings/SettingsPatch";
+import type { UserRef } from "./bindings/UserRef";
 import type { VaultMode } from "./bindings/VaultMode";
 import type { VaultStatus } from "./bindings/VaultStatus";
 
 export type {
   AccountInfo, AccountPresence, Headshot,
+  Favourite, FavouriteInput, JoinCandidate, LaunchInfo, LaunchTarget, ParsedInput, UserRef,
   AccountPatch, AccountSummary, ConflictPolicy, ErrorPayload, Group, GroupInput,
   ImportReport, Settings, SettingsPatch, VaultMode, VaultStatus,
 };
@@ -62,6 +70,20 @@ export const api = {
   accountsPresence: (ids: number[]) => invoke<AccountPresence[]>("accounts_presence", { ids }),
   /** Opens roblox.com signed in as the account in its own window. */
   accountOpenSession: (id: number) => invoke<void>("account_open_session", { id }),
+
+  /** Local, instant: what pasted text points at. */
+  targetParse: (input: string) => invoke<ParsedInput>("target_parse", { input }),
+  /** A Roblox username (current or previous) to its user. */
+  userLookup: (name: string) => invoke<UserRef>("user_lookup", { name }),
+  /** Starts the Roblox client as this account. */
+  launch: (accountId: number, target: LaunchTarget, favouriteId?: number) =>
+    invoke<LaunchInfo>("launch", { accountId, target, favouriteId }),
+  favouritesList: () => invoke<Favourite[]>("favourites_list"),
+  favouriteSave: (input: FavouriteInput) => invoke<Favourite>("favourite_save", { input }),
+  favouriteRemove: (id: number) => invoke<void>("favourite_remove", { id }),
+  favouritesReorder: (ids: number[]) => invoke<void>("favourites_reorder", { ids }),
+  /** Friends online plus the other stored accounts, for "Join user". */
+  joinCandidates: (accountId: number) => invoke<JoinCandidate[]>("join_candidates", { accountId }),
 
   groupsList: () => invoke<Group[]>("groups_list"),
   groupSave: (input: GroupInput) => invoke<Group>("group_save", { input }),

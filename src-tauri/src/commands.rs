@@ -451,6 +451,131 @@ pub async fn account_open_session(app: AppHandle, s: State<'_, App>, id: i64) ->
     .await
 }
 
+// ---------- launching ----------
+
+/// Local only: what pasted text points at.
+#[tauri::command]
+pub fn target_parse(input: String) -> ParsedInput {
+    crate::launcher::target::parse(&input)
+}
+
+/// A Roblox username (current or previous) → the user.
+#[tauri::command]
+pub async fn user_lookup(s: State<'_, App>, name: String) -> Result<UserRef> {
+    let name = name.trim().trim_start_matches('@').to_owned();
+    if name.is_empty() {
+        return Err(AppError::Invalid("Type a Roblox username.".into()));
+    }
+    let found = s.api.users_by_name(std::slice::from_ref(&name)).await?;
+    let u = found.into_iter().next().ok_or(AppError::Invalid(format!("No Roblox user is called \"{name}\".")))?;
+    Ok(UserRef { user_id: u.id, username: u.name, display_name: u.display_name })
+}
+
+/// Launches one account. `favourite_id` marks that favourite as used.
+#[tauri::command]
+pub async fn launch(s: State<'_, App>, account_id: i64, target: LaunchTarget, favourite_id: Option<i64>) -> Result<LaunchInfo> {
+    let info = crate::launcher::launch(&s, account_id, &target).await?;
+    if let Some(f) = favourite_id {
+        let _ = s.db.touch_favourite(f, now_ms());
+    }
+    Ok(info)
+}
+
+const FAVOURITE_AAD: &[u8] = b"roalt.favourite";
+
+fn favourite_of(s: &App, row: crate::storage::FavouriteRow) -> Result<Favourite> {
+    let json = s.vault.decrypt(FAVOURITE_AAD, &row.target)?;
+    let target = serde_json::from_slice(&json).map_err(|_| AppError::Crypto)?;
+    Ok(Favourite {
+        id: row.id,
+        name: row.name,
+        target,
+        account_ids: row.account_ids,
+        in_tray: row.in_tray,
+        sort_order: row.sort_order,
+        last_used_at: row.last_used_at,
+    })
+}
+
+#[tauri::command]
+pub fn favourites_list(s: State<'_, App>) -> Result<Vec<Favourite>> {
+    s.db.favourites()?.into_iter().map(|r| favourite_of(&s, r)).collect()
+}
+
+#[tauri::command]
+pub fn favourite_save(s: State<'_, App>, input: FavouriteInput) -> Result<Favourite> {
+    let json = zeroize::Zeroizing::new(serde_json::to_vec(&input.target).map_err(|e| AppError::Internal(e.to_string()))?);
+    let blob = s.vault.encrypt(FAVOURITE_AAD, &json)?;
+    let id = s.db.save_favourite(input.id, &input.name, &blob, &input.account_ids, input.in_tray)?;
+    let row = s.db.favourites()?.into_iter().find(|f| f.id == id).ok_or(AppError::NotFound)?;
+    favourite_of(&s, row)
+}
+
+#[tauri::command]
+pub fn favourite_remove(s: State<'_, App>, id: i64) -> Result<()> {
+    s.db.remove_favourite(id)
+}
+
+#[tauri::command]
+pub fn favourites_reorder(s: State<'_, App>, ids: Vec<i64>) -> Result<()> {
+    s.db.reorder_favourites(&ids)
+}
+
+fn presence_kind(s: Option<&str>) -> PresenceKind {
+    match s {
+        Some("InGame") => PresenceKind::InGame,
+        Some("Online") => PresenceKind::Online,
+        Some("InStudio") => PresenceKind::Studio,
+        Some("Offline") => PresenceKind::Offline,
+        _ => PresenceKind::Unknown,
+    }
+}
+
+/// Who `account_id` can join: its friends online on Roblox, then the other stored accounts
+/// with a valid cookie (each asked about itself). Asked when the picker opens, not polled.
+#[tauri::command]
+pub async fn join_candidates(s: State<'_, App>, account_id: i64) -> Result<Vec<JoinCandidate>> {
+    let me = s.db.account(account_id)?;
+    let cookie = stored_cookie(&s, account_id)?;
+    let mut out: Vec<JoinCandidate> = s
+        .api
+        .friends_online(account_id, &cookie, me.user_id)
+        .await?
+        .into_iter()
+        .map(|f| {
+            let p = f.presence.unwrap_or_default();
+            JoinCandidate {
+                user_id: f.id,
+                username: f.name,
+                display_name: f.display_name,
+                account_id: None,
+                presence: Presence {
+                    kind: presence_kind(p.user_presence_type.as_deref()),
+                    last_location: p.last_location,
+                    place_id: p.place_id,
+                    root_place_id: p.root_place_id,
+                    universe_id: p.universe_id,
+                    game_id: p.game_instance_id,
+                },
+            }
+        })
+        .collect();
+    for a in s.db.accounts()?.into_iter().filter(|a| a.id != account_id && a.status == AccountStatus::Valid) {
+        let Ok(c) = stored_cookie(&s, a.id) else { continue };
+        let Ok(rows) = s.api.presence(a.id, &c, &[a.user_id]).await else { continue };
+        let Some(p) = rows.into_iter().find(|p| p.user_id == a.user_id) else { continue };
+        out.retain(|f| f.user_id != a.user_id);
+        out.push(JoinCandidate {
+            user_id: a.user_id,
+            username: a.username,
+            display_name: a.display_name,
+            account_id: Some(a.id),
+            presence: presence_of(p),
+        });
+    }
+    Ok(out)
+}
+
 /// Locks the vault; open session windows close first (they hold a live roblox.com session).
 pub fn lock_vault(app: &AppHandle) {
     for (label, w) in app.webview_windows() {

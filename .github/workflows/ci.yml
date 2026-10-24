@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # tsc and the Vite build, which also gives tauri::generate_context! its ../dist.
+      - run: npm run build
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: cargo test --locked
+        working-directory: src-tauri
+      - if: ${{ !cancelled() }}
+        run: cargo clippy --all-targets --locked -- -D warnings
+        working-directory: src-tauri

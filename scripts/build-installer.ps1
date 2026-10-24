@@ -1,0 +1,71 @@
+<#
+.SYNOPSIS
+  Builds the Windows installer: dist-installer\RoALT-Setup-<version>.exe.
+
+.DESCRIPTION
+  Release-builds the app (npm run tauri build -- --no-bundle), then compiles installer\RoALT.iss
+  with Inno Setup 6. Prints the installer's path and SHA-256. Needs Rust (with the Build Tools'
+  C++ workload), Node.js and Inno Setup 6 (https://jrsoftware.org/isdl.php).
+
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1
+#>
+
+$ErrorActionPreference = 'Stop'
+$root = Split-Path -Parent $PSScriptRoot
+
+function Stop-Build([string]$What, [string]$Fix) {
+    Write-Host "build-installer: $What" -ForegroundColor Red
+    Write-Host "fix: $Fix"
+    exit 1
+}
+
+# Runs a native command; its exit code, not its stderr, says whether it worked.
+function Invoke-Native([string]$Exe, [string[]]$Arguments, [string]$Fix) {
+    $ErrorActionPreference = 'Continue'
+    & $Exe @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        Stop-Build "$Exe $($Arguments -join ' ') failed (exit $LASTEXITCODE)" $Fix
+    }
+}
+
+# tauri.conf.json carries the version; package.json and Cargo.toml must agree.
+$version = (Get-Content -Raw "$root\src-tauri\tauri.conf.json" | ConvertFrom-Json).version
+$npmVersion = (Get-Content -Raw "$root\package.json" | ConvertFrom-Json).version
+$cargoVersion = [regex]::Match((Get-Content -Raw "$root\src-tauri\Cargo.toml"), '(?ms)^\[package\].*?^version\s*=\s*"([^"]+)"').Groups[1].Value
+if (-not $version) { Stop-Build 'src-tauri\tauri.conf.json has no version' 'add "version": "x.y.z" to it' }
+if ($npmVersion -ne $version -or $cargoVersion -ne $version) {
+    Stop-Build "versions differ: src-tauri\tauri.conf.json $version, package.json $npmVersion, src-tauri\Cargo.toml $cargoVersion" 'set all three to the same version'
+}
+
+# Inno Setup first, so a missing compiler fails before the long build.
+$iscc = @(
+    "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
+    "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+    "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+) | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $iscc) { Stop-Build 'Inno Setup 6 (ISCC.exe) was not found' 'install it from https://jrsoftware.org/isdl.php (or: winget install JRSoftware.InnoSetup), then run this again' }
+
+Write-Host "Building RoALT $version (release)"
+Push-Location $root
+try {
+    if (-not (Test-Path node_modules)) {
+        Invoke-Native npm.cmd @('ci') 'check your network connection; if npm says package-lock.json is out of sync, run npm install. Then run this again'
+    }
+    Invoke-Native npm.cmd @('run', 'tauri', 'build', '--', '--no-bundle', '--', '--locked') 'fix the build error above, then run this again'
+} finally {
+    Pop-Location
+}
+
+# Where cargo put the build (CARGO_TARGET_DIR may move it).
+$meta = & cargo metadata --no-deps --format-version 1 --manifest-path "$root\src-tauri\Cargo.toml" | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) { Stop-Build 'cargo metadata failed' 'run it yourself to see why' }
+$exe = Join-Path $meta.target_directory 'release\roalt.exe'
+
+Write-Host 'Compiling the installer'
+Invoke-Native $iscc @('/Q', "/DAppVersion=$version", "/DAppExe=$exe", "$root\installer\RoALT.iss") 'fix the error ISCC names above, then run this again'
+
+$setup = Get-Item "$root\dist-installer\RoALT-Setup-$version.exe"
+Write-Host ''
+Write-Host "Installer: $($setup.FullName)" -ForegroundColor Green
+Write-Host "SHA-256:   $((Get-FileHash -Algorithm SHA256 $setup.FullName).Hash.ToLower())"

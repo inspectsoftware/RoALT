@@ -232,6 +232,13 @@ impl Db {
         let mut c = self.conn();
         let tx = c.transaction()?;
         for id in ids {
+            // Cached Roblox data (Robux, 2-step, presence) goes with the account.
+            tx.execute(
+                "DELETE FROM cache WHERE key IN \
+                 (SELECT 'info:' || user_id FROM accounts WHERE id = ?1 \
+                  UNION ALL SELECT 'headshot:' || user_id FROM accounts WHERE id = ?1)",
+                [id],
+            )?;
             tx.execute("DELETE FROM accounts WHERE id = ?1", [id])?;
         }
         tx.commit()?;
@@ -551,7 +558,14 @@ mod tests {
         let g = group(&db, "G");
         db.set_account_groups(a, &[g]).unwrap();
         db.set_account_groups(b, &[g]).unwrap();
+        let (ua, ub) = (db.account(a).unwrap().user_id, db.account(b).unwrap().user_id);
+        for k in [format!("info:{ua}"), format!("headshot:{ua}"), format!("info:{ub}")] {
+            db.cache_put(&k, "{}", 1).unwrap();
+        }
         db.remove_accounts(&[a, 404]).unwrap();
+        assert_eq!(db.cache_get(&format!("info:{ua}"), i64::MAX / 2, 1).unwrap(), None);
+        assert_eq!(db.cache_get(&format!("headshot:{ua}"), i64::MAX / 2, 1).unwrap(), None);
+        assert!(db.cache_get(&format!("info:{ub}"), i64::MAX / 2, 1).unwrap().is_some());
         assert_eq!(order(&db), vec![b]);
         let links: i64 = db.conn().query_row("SELECT COUNT(*) FROM account_groups", [], |r| r.get(0)).unwrap();
         assert_eq!(links, 1);

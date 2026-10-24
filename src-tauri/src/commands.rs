@@ -43,8 +43,7 @@ pub async fn vault_unlock(s: State<'_, App>, password: String) -> Result<()> {
 #[tauri::command]
 pub fn vault_lock(app: AppHandle, s: State<'_, App>) {
     if s.vault.mode() == VaultMode::Master {
-        s.vault.lock();
-        let _ = app.emit("vault://locked", ());
+        lock_vault(&app);
     }
 }
 
@@ -263,14 +262,20 @@ fn presence_of(p: UserPresence) -> Presence {
 /// The info panel. Served from the cache unless `refresh` or older than `cache_minutes`.
 /// Each part is fetched on its own; parts Roblox doesn't answer are listed in `unavailable`.
 #[tauri::command]
-pub async fn account_info(s: State<'_, App>, id: i64, refresh: bool) -> Result<AccountInfo> {
+pub async fn account_info(app: AppHandle, s: State<'_, App>, id: i64, refresh: bool) -> Result<AccountInfo> {
     let a = s.db.account(id)?;
     let key = format!("info:{}", a.user_id);
     let ttl = s.db.settings()?.cache_minutes as i64 * 60_000;
     if !refresh
         && let Some((json, _)) = s.db.cache_get(&key, ttl, now_ms())?
-        && let Ok(info) = serde_json::from_str::<AccountInfo>(&json)
+        && let Ok(mut info) = serde_json::from_str::<AccountInfo>(&json)
     {
+        // Presence goes stale long before the rest: re-ask (self-view) once a minute at most.
+        if now_ms() - info.fetched_at > 60_000
+            && let Ok(rows) = s.api.presence(id, &stored_cookie(&s, id)?, &[a.user_id]).await
+        {
+            info.presence = rows.into_iter().find(|p| p.user_id == a.user_id).map(presence_of);
+        }
         return Ok(info);
     }
     let cookie = stored_cookie(&s, id)?;
@@ -308,12 +313,27 @@ pub async fn account_info(s: State<'_, App>, id: i64, refresh: bool) -> Result<A
     };
     part("subscription", subscription.is_some());
 
-    // Everything failed the same way (offline, cookie dead): say why instead of an empty panel.
-    if unavailable.len() == 8
-        && let Err(e) = robux
-    {
-        return Err(e);
-    }
+    // Robux needs the cookie, so it is the probe: a dead or challenged cookie is reported (and
+    // recorded) instead of showing a half-empty panel; so is being entirely offline. Neither
+    // is cached. Public parts still answer anonymously when the cookie is dead.
+    let robux = match robux {
+        Ok(r) => Some(r),
+        Err(e) => {
+            let status = match e {
+                AppError::CookieInvalid | AppError::BoundSessionRequired => Some(AccountStatus::Invalid),
+                AppError::Challenge => Some(AccountStatus::Challenged),
+                _ => None,
+            };
+            if let Some(st) = status {
+                s.db.set_status(id, st, now_ms(), None, None)?;
+                accounts_changed(&app);
+            }
+            if status.is_some() || unavailable.len() == 8 {
+                return Err(e);
+            }
+            None
+        }
+    };
     let details = details.ok();
     let counts = counts.ok();
     let info = AccountInfo {
@@ -326,7 +346,7 @@ pub async fn account_info(s: State<'_, App>, id: i64, refresh: bool) -> Result<A
         is_banned: details.as_ref().is_some_and(|d| d.is_banned),
         verified_badge: details.as_ref().is_some_and(|d| d.has_verified_badge),
         headshot_url: heads.ok().and_then(|mut h| h.remove(&uid)),
-        robux: robux.ok(),
+        robux,
         subscription,
         friends: counts.map(|c| c.friends),
         followers: counts.map(|c| c.followers),
@@ -359,42 +379,47 @@ pub async fn accounts_headshots(s: State<'_, App>, refresh: bool) -> Result<Vec<
         }
     }
     if !missing.is_empty() {
-        let urls = s.api.headshots(&missing).await?;
-        for a in accounts.iter().filter(|a| missing.contains(&a.user_id)) {
-            if let Some(url) = urls.get(&a.user_id) {
-                s.db.cache_put(&format!("headshot:{}", a.user_id), url, now)?;
-                out.push(Headshot { account_id: a.id, url: url.clone() });
+        // Offline or rate limited: still show the avatars we have.
+        match s.api.headshots(&missing).await {
+            Ok(urls) => {
+                for a in accounts.iter().filter(|a| missing.contains(&a.user_id)) {
+                    if let Some(url) = urls.get(&a.user_id) {
+                        s.db.cache_put(&format!("headshot:{}", a.user_id), url, now)?;
+                        out.push(Headshot { account_id: a.id, url: url.clone() });
+                    }
+                }
             }
+            Err(e) => log::warn!("could not fetch avatars: {e}"),
         }
     }
     Ok(out)
 }
 
-/// Presence of every account in one batched call, seen by the first valid account.
-/// Game details are only filled in where Roblox lets that viewer see them; the info panel
-/// asks each account about itself. No valid account → empty.
-// ponytail: one viewer for the whole list; query per account if hidden game details matter.
+/// Presence of the given accounts (the rows on screen), each asked with its own cookie:
+/// Roblox hides friends-only presence and game details from other viewers. Accounts whose
+/// cookie isn't valid, or whose call fails, are left out.
 #[tauri::command]
-pub async fn accounts_presence(s: State<'_, App>) -> Result<Vec<AccountPresence>> {
-    let accounts = s.db.accounts()?;
-    let Some(viewer) = accounts.iter().find(|a| a.status == AccountStatus::Valid) else {
-        return Ok(Vec::new());
-    };
-    let cookie = stored_cookie(&s, viewer.id)?;
-    let ids: Vec<i64> = accounts.iter().map(|a| a.user_id).collect();
-    let rows = s.api.presence(viewer.id, &cookie, &ids).await?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|p| {
-            let account_id = accounts.iter().find(|a| a.user_id == p.user_id)?.id;
-            Some(AccountPresence { account_id, presence: presence_of(p) })
-        })
-        .collect())
+pub async fn accounts_presence(s: State<'_, App>, ids: Vec<i64>) -> Result<Vec<AccountPresence>> {
+    let mut out = Vec::new();
+    for a in s.db.accounts()?.into_iter().filter(|a| ids.contains(&a.id) && a.status == AccountStatus::Valid) {
+        let Ok(cookie) = stored_cookie(&s, a.id) else { continue };
+        match s.api.presence(a.id, &cookie, &[a.user_id]).await {
+            Ok(rows) => out.extend(
+                rows.into_iter()
+                    .find(|p| p.user_id == a.user_id)
+                    .map(|p| AccountPresence { account_id: a.id, presence: presence_of(p) }),
+            ),
+            Err(e) => log::info!("presence of account {} unavailable: {e}", a.id),
+        }
+    }
+    Ok(out)
 }
 
 /// Opens roblox.com signed in as the account, in its own throw-away browser profile.
-/// When the window closes, a rotated cookie is kept if it still signs in as the same user;
-/// a sign-out or account switch there is logged and the stored cookie left as it was.
+/// When the window closes, the cookie it ended with is checked: if it still signs in as the
+/// same user it is kept (Roblox may have rotated it, or the user signed in again or solved a
+/// challenge there) and the account is marked valid; a sign-out or account switch there is
+/// logged and the stored cookie left as it was.
 #[tauri::command]
 pub async fn account_open_session(app: AppHandle, s: State<'_, App>, id: i64) -> Result<()> {
     let a = s.db.account(id)?;
@@ -402,13 +427,21 @@ pub async fn account_open_session(app: AppHandle, s: State<'_, App>, id: i64) ->
     let name = if a.alias.is_empty() { a.display_name.clone() } else { a.alias.clone() };
     let title = format!("{name} (@{}) — Roblox — RoALT", a.username);
     let (user_id, handle) = (a.user_id, app.clone());
-    let original = cookie.clone();
     webview::open_session(&app, &s.data_dir, &title, cookie, move |last| {
-        let Some(last) = last.filter(|c| c.expose() != original.expose()) else { return };
-        tauri::async_runtime::spawn(async move {
+        let Some(last) = last else { return };
+        // Runs on a blocking thread before the window is destroyed: finish before the app
+        // can exit (closing the last window ends it).
+        tauri::async_runtime::block_on(async move {
             let s = handle.state::<App>();
+            // The row may have been removed (and its id reused) while the window was open.
+            if !s.db.account(id).is_ok_and(|a| a.user_id == user_id) {
+                return;
+            }
             match s.api.authenticated_user(0, &last).await {
-                Ok((u, _)) if u.id == user_id => s.store_rotated(id, last),
+                Ok((u, rotated)) if u.id == user_id => {
+                    s.store_rotated(id, rotated.unwrap_or(last));
+                    let _ = s.db.set_status(id, AccountStatus::Valid, now_ms(), Some(&u.name), Some(&u.display_name));
+                }
                 Ok(_) => log::warn!("session window for account {id} ended signed in as another user; cookie not changed"),
                 Err(e) => log::warn!("session window for account {id} ended with an unusable cookie ({e}); cookie not changed"),
             }
@@ -416,6 +449,18 @@ pub async fn account_open_session(app: AppHandle, s: State<'_, App>, id: i64) ->
         });
     })
     .await
+}
+
+/// Locks the vault; open session windows close first (they hold a live roblox.com session).
+pub fn lock_vault(app: &AppHandle) {
+    for (label, w) in app.webview_windows() {
+        if label.starts_with("session-") {
+            let _ = w.close();
+        }
+    }
+    let s = app.state::<App>();
+    s.vault.lock();
+    let _ = app.emit("vault://locked", ());
 }
 
 // ---------- groups ----------

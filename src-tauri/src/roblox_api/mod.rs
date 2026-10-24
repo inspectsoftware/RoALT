@@ -109,7 +109,12 @@ impl Client {
                     tokio::time::sleep(HEADSHOT_STEP * retry).await;
                 }
                 let url = endpoints::fill(endpoints::HEADSHOTS, csv(&pending));
-                let page: Thumbnails = self.get(endpoints::HEADSHOTS, &url, 0, None).await?;
+                // A failed retry keeps what earlier answers already resolved.
+                let page: Thumbnails = match self.get(endpoints::HEADSHOTS, &url, 0, None).await {
+                    Ok(p) => p,
+                    Err(_) if retry > 0 => break,
+                    Err(e) => return Err(e),
+                };
                 pending = sort_headshots(page, &mut out);
                 if pending.is_empty() {
                     break;

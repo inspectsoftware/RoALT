@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::window::Color;
-use tauri::{App as TauriApp, AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{App as TauriApp, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_log::{Target, TargetKind};
 
 use crate::model::{Theme, VaultMode};
@@ -86,10 +86,15 @@ fn spawn_auto_lock(handle: AppHandle) {
             if s.vault.mode() != VaultMode::Master || s.vault.is_locked() {
                 continue;
             }
+            // Using a Roblox window (signing in, a session) is activity too: its cookie is
+            // encrypted when it closes, which needs the vault open.
+            if handle.webview_windows().keys().any(|l| l.starts_with("session-") || l.starts_with("login-")) {
+                s.vault.touch();
+                continue;
+            }
             let minutes = s.db.settings().map(|v| v.auto_lock_minutes).unwrap_or(15);
             if minutes > 0 && s.vault.idle() >= Duration::from_secs(minutes as u64 * 60) {
-                s.vault.lock();
-                let _ = handle.emit("vault://locked", ());
+                commands::lock_vault(&handle);
             }
         }
     });

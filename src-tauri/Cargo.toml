@@ -25,8 +25,8 @@ tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "charset", "json"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 rusqlite_migration = "2.6"
-aes-gcm = "0.11"
-argon2 = "0.6"
+aes-gcm = { version = "0.11", features = ["zeroize"] }
+argon2 = { version = "0.6", features = ["zeroize"] }
 getrandom = "0.4"
 zeroize = { version = "1.9", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }

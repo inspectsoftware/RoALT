@@ -34,7 +34,7 @@ pub fn vault_status(s: State<'_, App>) -> Result<VaultStatus> {
 }
 
 #[tauri::command]
-pub fn vault_unlock(s: State<'_, App>, password: String) -> Result<()> {
+pub async fn vault_unlock(s: State<'_, App>, password: String) -> Result<()> {
     let rec = s.db.vault_record()?.ok_or(AppError::Internal("vault record missing".into()))?;
     s.vault.unlock(&rec, &password)
 }
@@ -46,7 +46,7 @@ pub fn vault_lock(app: AppHandle, s: State<'_, App>) {
 }
 
 #[tauri::command]
-pub fn vault_set_mode(
+pub async fn vault_set_mode(
     s: State<'_, App>,
     mode: VaultMode,
     current_password: Option<String>,
@@ -241,7 +241,7 @@ pub fn group_remove(app: AppHandle, s: State<'_, App>, id: i64) -> Result<()> {
 const MIN_BACKUP_PASSWORD: usize = 8;
 
 #[tauri::command]
-pub fn backup_export(s: State<'_, App>, path: String, password: String, account_ids: Option<Vec<i64>>) -> Result<u32> {
+pub async fn backup_export(s: State<'_, App>, path: String, password: String, account_ids: Option<Vec<i64>>) -> Result<u32> {
     if password.chars().count() < MIN_BACKUP_PASSWORD {
         return Err(AppError::Invalid(format!("Use at least {MIN_BACKUP_PASSWORD} characters for the backup password.")));
     }
@@ -278,7 +278,7 @@ pub fn backup_export(s: State<'_, App>, path: String, password: String, account_
 }
 
 #[tauri::command]
-pub fn backup_import(app: AppHandle, s: State<'_, App>, path: String, password: String, on_conflict: ConflictPolicy) -> Result<ImportReport> {
+pub async fn backup_import(app: AppHandle, s: State<'_, App>, path: String, password: String, on_conflict: ConflictPolicy) -> Result<ImportReport> {
     if s.vault.is_locked() {
         return Err(AppError::Locked);
     }

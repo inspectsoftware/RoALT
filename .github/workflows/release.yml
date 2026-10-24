@@ -39,11 +39,9 @@ jobs:
         with:
           node-version: 24
       - uses: dtolnay/rust-toolchain@stable
-      - name: Inno Setup 6
-        run: |
-          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe") -and -not (Test-Path "$env:ProgramFiles\Inno Setup 6\ISCC.exe")) {
-            choco install innosetup --no-progress -y
-          }
+      - name: Inno Setup 6.6+
+        # Installs it, or upgrades a preinstalled older 6.x (the .iss needs 6.6).
+        run: choco upgrade innosetup --no-progress -y
       - run: powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1
       - uses: actions/upload-artifact@v7
         with:
@@ -81,13 +79,18 @@ jobs:
           $(cat SHA256SUMS.txt)
           ~~~
           EOF
+          # A manual run must not attach a build of one commit to a tag on another.
+          if tag_sha=$(gh api "repos/$GH_REPO/commits/refs/tags/$TAG" --jq .sha 2>/dev/null) && [ "$tag_sha" != "$GITHUB_SHA" ]; then
+            echo "::error::tag $TAG is at $tag_sha, not $GITHUB_SHA: raise the version, or run the workflow from the tag"
+            exit 1
+          fi
           if draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
             if [ "$draft" != true ]; then
               echo "::error::release $TAG is already published: raise the version for a new release"
               exit 1
             fi
             gh release upload "$TAG" ./* --clobber
-            gh release edit "$TAG" --notes-file ../notes.md
+            gh release edit "$TAG" --target "$GITHUB_SHA" --notes-file ../notes.md
           else
             gh release create "$TAG" ./* --draft --target "$GITHUB_SHA" --title "RoALT $VERSION" --notes-file ../notes.md
           fi

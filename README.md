@@ -19,7 +19,7 @@ to delete them.
 ## Build from source
 
 Needs Node.js 24, Rust (stable, with the Visual Studio Build Tools' C++ workload) and, for the
-installer, [Inno Setup 6](https://jrsoftware.org/isdl.php).
+installer, [Inno Setup 6.6 or newer](https://jrsoftware.org/isdl.php).
 
 ```powershell
 npm ci
@@ -29,8 +29,9 @@ powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1  # dist-ins
 
 ## Cut a release
 
-1. Set the same version in `src-tauri/tauri.conf.json`, `package.json` and `src-tauri/Cargo.toml`.
-2. Commit, then tag and push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+1. Set the same version in `src-tauri/tauri.conf.json`, `package.json` and `src-tauri/Cargo.toml`,
+   then run `cargo update -p roalt --offline` in `src-tauri` so `Cargo.lock` matches (CI builds `--locked`).
+2. Commit all four files, then tag and push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 3. The Release workflow builds the installer and puts it with `SHA256SUMS.txt` on a draft release.
    Check it, then publish the draft.
 

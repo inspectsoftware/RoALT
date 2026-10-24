@@ -44,7 +44,7 @@ $iscc = @(
     "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
     "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-if (-not $iscc) { Stop-Build 'Inno Setup 6 (ISCC.exe) was not found' 'install it from https://jrsoftware.org/isdl.php (or: winget install JRSoftware.InnoSetup), then run this again' }
+if (-not $iscc) { Stop-Build 'Inno Setup 6.6 or newer (ISCC.exe) was not found' 'install it from https://jrsoftware.org/isdl.php (or: winget install JRSoftware.InnoSetup), then run this again' }
 
 Write-Host "Building RoALT $version (release)"
 Push-Location $root
@@ -63,7 +63,7 @@ if ($LASTEXITCODE -ne 0) { Stop-Build 'cargo metadata failed' 'run it yourself t
 $exe = Join-Path $meta.target_directory 'release\roalt.exe'
 
 Write-Host 'Compiling the installer'
-Invoke-Native $iscc @('/Q', "/DAppVersion=$version", "/DAppExe=$exe", "$root\installer\RoALT.iss") 'fix the error ISCC names above, then run this again'
+Invoke-Native $iscc @('/Q', "/DAppVersion=$version", "/DAppNumVersion=$($version -replace '[-+].*$','')", "/DAppExe=$exe", "$root\installer\RoALT.iss") 'fix the error ISCC names above, then run this again'
 
 $setup = Get-Item "$root\dist-installer\RoALT-Setup-$version.exe"
 Write-Host ''

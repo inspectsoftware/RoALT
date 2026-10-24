@@ -2,8 +2,15 @@
 ; ("Releases"). Build it with scripts\build-installer.ps1, which passes the version from
 ; src-tauri\tauri.conf.json and where cargo put the release build.
 
+#if Ver < EncodeVer(6,6,0)
+  #error Inno Setup 6.6 or newer is needed (WizardStyle dynamic windows11)
+#endif
 #ifndef AppVersion
   #error Pass /DAppVersion=x.y.z, or build with scripts\build-installer.ps1
+#endif
+; VersionInfoVersion must be numeric; a prerelease such as 0.2.0-beta.1 passes 0.2.0 here.
+#ifndef AppNumVersion
+  #define AppNumVersion AppVersion
 #endif
 #ifndef AppExe
   #define AppExe "..\src-tauri\target\release\roalt.exe"
@@ -15,7 +22,7 @@ AppName=RoALT
 AppVersion={#AppVersion}
 AppPublisher=inspectsoftware
 AppPublisherURL=https://github.com/inspectsoftware/RoALT
-VersionInfoVersion={#AppVersion}
+VersionInfoVersion={#AppNumVersion}
 ; Per-user: {autopf} is %LOCALAPPDATA%\Programs.
 DefaultDirName={autopf}\RoALT
 DisableProgramGroupPage=yes

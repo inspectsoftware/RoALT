@@ -290,7 +290,7 @@ are GUIDs, private-server link codes are digits (25–32 seen), share codes are 
 ## 7. Releases
 
 - `installer/RoALT.iss`: per-user install (no admin), `{localappdata}\Programs\RoALT`, Windows 11 wizard
-  style in dark and light, desktop/start-menu icons, installs the WebView2 runtime only if missing.
+  style in dark and light, desktop/start-menu icons, offers Microsoft's WebView2 download if the runtime is missing (the app explains it on start too).
   Uninstall keeps your accounts unless you tick "also delete my data".
 - `scripts/build-installer.ps1`: builds the app (`tauri build --no-bundle`, static CRT) and runs ISCC with
   the version from `tauri.conf.json`, output `dist\RoALT-Setup-<version>.exe`.

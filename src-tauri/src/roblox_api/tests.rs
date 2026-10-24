@@ -612,3 +612,21 @@ async fn two_step_maps_int_and_string_media_types() {
     assert_eq!(first_line(&req), "GET /v1/users/42/configuration HTTP/1.1");
     assert!(has(&req, "\r\ncookie: .ROBLOSECURITY=OLD\r\n"));
 }
+
+/// Live check of the public (cookie-less) endpoints against roblox.com, user 1 ("Roblox").
+/// Not run by default: `cargo test live_public -- --ignored --nocapture`.
+#[tokio::test]
+#[ignore = "talks to roblox.com"]
+async fn live_public_endpoints() {
+    let c = Client::new(Arc::new(|_, _| panic!("no cookie was sent, nothing can rotate")));
+    let user = c.user_details(0, None, 1).await.unwrap();
+    assert_eq!((user.id, user.name.as_str()), (1, "Roblox"));
+    assert!(user.created.is_some());
+    let heads = c.headshots(&[1, 156]).await.unwrap();
+    assert!(heads.get(&1).is_some_and(|u| u.starts_with("https://") && u.contains(".rbxcdn.com/")), "{heads:?}");
+    let plus = c.plus(&[1, 156]).await.unwrap();
+    assert!(plus.contains_key(&1), "{plus:?}");
+    let counts = c.social_counts(1).await.unwrap();
+    assert!(counts.followers > 1_000_000, "{counts:?}");
+    println!("user={user:?}\nheads={heads:?}\nplus={plus:?}\ncounts={counts:?}");
+}

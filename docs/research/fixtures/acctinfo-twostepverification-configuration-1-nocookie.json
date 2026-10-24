@@ -1,0 +1,17 @@
+{
+  "_request": {
+    "method": "GET",
+    "url": "https://twostepverification.roblox.com/v1/users/1/configuration",
+    "body": null,
+    "auth": "none"
+  },
+  "_status": "HTTP/1.1 400 Bad Request",
+  "body": {
+    "errors": [
+      {
+        "code": 1,
+        "message": "Invalid challenge ID."
+      }
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "_request": {
+    "method": "GET",
+    "url": "https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=1&size=999x999&format=Png",
+    "body": null,
+    "auth": "none"
+  },
+  "_status": "HTTP/1.1 400 Bad Request",
+  "body": {
+    "errors": [
+      {
+        "code": 3,
+        "message": "The requested size is invalid. Please see documentation for valid thumbnail size parameter name and format.",
+        "field": "size"
+      }
+    ]
+  }
+}

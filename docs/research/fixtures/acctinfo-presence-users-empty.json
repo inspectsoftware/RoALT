@@ -1,0 +1,14 @@
+{
+  "_request": {
+    "method": "POST",
+    "url": "https://presence.roblox.com/v1/presence/users",
+    "body": {
+      "userIds": []
+    },
+    "auth": "none"
+  },
+  "_status": "HTTP/1.1 200 OK",
+  "body": {
+    "userPresences": []
+  }
+}

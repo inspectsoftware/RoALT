@@ -1,0 +1,17 @@
+{
+  "_request": {
+    "method": "GET",
+    "url": "https://users.roblox.com/v1/users/0",
+    "body": null,
+    "auth": "none"
+  },
+  "_status": "HTTP/1.1 404 Not Found",
+  "body": {
+    "errors": [
+      {
+        "code": 3,
+        "message": "The user id is invalid."
+      }
+    ]
+  }
+}

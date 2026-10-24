@@ -1,0 +1,49 @@
+{
+  "_request": {
+    "method": "GET",
+    "url": "https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=4123400..4123499&size=720x720&format=Jpeg&isCircular=false&includeBackground=true",
+    "auth": "none"
+  },
+  "_status": "HTTP/1.1 200 OK",
+  "_note": "First request for an uncached size/format/background combo: 97 Pending (imageUrl empty string), 3 Blocked. Trimmed to 3 Pending + Blocked rows.",
+  "body": {
+    "data": [
+      {
+        "targetId": 4123400,
+        "state": "Pending",
+        "imageUrl": "",
+        "version": "TN3"
+      },
+      {
+        "targetId": 4123401,
+        "state": "Pending",
+        "imageUrl": "",
+        "version": "TN3"
+      },
+      {
+        "targetId": 4123402,
+        "state": "Pending",
+        "imageUrl": "",
+        "version": "TN3"
+      },
+      {
+        "targetId": 4123457,
+        "state": "Blocked",
+        "imageUrl": "https://tr.rbxcdn.com/180DAY-bf1881b149316a631dd88707c64bd21f/720/720/UnapprovedImage/Jpeg/noFilter",
+        "version": "TN3"
+      },
+      {
+        "targetId": 4123463,
+        "state": "Blocked",
+        "imageUrl": "https://tr.rbxcdn.com/180DAY-bf1881b149316a631dd88707c64bd21f/720/720/UnapprovedImage/Jpeg/noFilter",
+        "version": "TN3"
+      },
+      {
+        "targetId": 4123480,
+        "state": "Blocked",
+        "imageUrl": "https://tr.rbxcdn.com/180DAY-bf1881b149316a631dd88707c64bd21f/720/720/UnapprovedImage/Jpeg/noFilter",
+        "version": "TN3"
+      }
+    ]
+  }
+}

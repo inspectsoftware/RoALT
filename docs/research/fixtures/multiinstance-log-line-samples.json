@@ -1,0 +1,99 @@
+{
+ "_note": "Real lines from local %LOCALAPPDATA%\\Roblox\\logs (client 0.730-0.743, Jul-Oct 2026); user ids, BTIDs, session ids and tickets redacted. Line format: <ISO8601 UTC>,<seconds since start>,<thread id hex>,<level digit>[,<Severity>] [<FLog channel>] message",
+ "log_filename_examples": [
+  "0.743.330.7430006_20261019T090803Z_Player_E38A2_last.log",
+  "0.743.330.7430006_20261019T085220Z_Player_41F68_last.log",
+  "0.743.0.7431134_20261023T220008Z_Player_0A5C5_CrashHandler_last.log"
+ ],
+ "markers": {
+  "update_required": {
+   "line": "2026-10-19T09:08:03.354Z,0.354927,0b48,6,Info [FLog::UpdateController] Update check thread: updateRequired TRUE",
+   "file": "0.743.330.7430006_20261019T090803Z_Player_E38A2_last.log"
+  },
+  "tray_treatment": {
+   "line": "2026-10-19T09:08:03.433Z,0.433169,0a50,6,Warning [FLog::Systray] Tray treatment is ON)",
+   "file": "0.743.330.7430006_20261019T090803Z_Player_E38A2_last.log"
+  },
+  "singleton_mutex_wait": {
+   "line": "2026-10-19T09:08:03.434Z,0.434172,324c,6,Info [FLog::WndProcessCheck] waitForNewPlayerProcess new waiting for mutex result is 0X000000, ERROR The operation completed successfully.",
+   "file": "0.743.330.7430006_20261019T090803Z_Player_E38A2_last.log"
+  },
+  "singleton_mutex_loop": {
+   "line": "2026-10-19T09:08:03.434Z,0.434172,324c,6,Info [FLog::WndProcessCheck] WindowsAppReloadTelemetry MutexWaitResultLoopUpdate",
+   "file": "0.743.330.7430006_20261019T090803Z_Player_E38A2_last.log"
+  },
+  "update_mode": {
+   "line": "2026-10-19T09:08:03.435Z,0.435175,0a50,6,Info [FLog::UpdateController] Update mode is chosen as BACKGROUND. Telemetry sent",
+   "file": "0.743.330.7430006_20261019T090803Z_Player_E38A2_last.log"
+  },
+  "web_launch_btid": {
+   "line": "2026-10-19T09:08:03.437Z,0.437181,0a50,6,Warning [FLog::LogWin32BTId] LogWin32BTId, App, web launch, websiteBTId is <BTID>",
+   "file": "0.743.330.7430006_20261019T090803Z_Player_E38A2_last.log"
+  },
+  "joining_game": {
+   "line": "2026-10-19T09:08:04.514Z,1.514491,1434,6 [FLog::Output] ! Joining game '<JOBID>' place <PLACEID> at 10.9.2.90",
+   "file": "0.743.330.7430006_20261019T090803Z_Player_E38A2_last.log"
+  },
+  "join_loadtime": {
+   "line": "2026-10-19T09:08:04.514Z,1.514491,1434,6 [FLog::GameJoinLoadTime] Report game_join_loadtime: placeid:<PLACEID>, join_time:0.68749428899998976661, universeid:<UNIVERSEID>, referral_page:RequestPrivateGame, sid:<SID>, clienttime:<T>, userid:<USERID>,",
+   "file": "0.743.330.7430006_20261019T090803Z_Player_E38A2_last.log"
+  },
+  "udmux": {
+   "line": "2026-10-19T09:08:04.519Z,1.519505,1434,7 [FLog::Network] UDMUX Address = 128.116.44.33, Port = 51492 | RCC Server Address = 10.9.2.90, Port = 51492",
+   "file": "0.743.330.7430006_20261019T090803Z_Player_E38A2_last.log"
+  },
+  "replicator_created": {
+   "line": "2026-10-19T09:08:04.687Z,1.687078,3078,7 [FLog::Network] Replicator created: 000000007A26CF00",
+   "file": "0.743.330.7430006_20261019T090803Z_Player_E38A2_last.log"
+  },
+  "singleton_event_signalled": {
+   "line": "2026-10-18T22:25:33.020Z,1.020385,51f4,6,Info [FLog::WndProcessCheck] WindowsAppReloadTelemetry EventWaitResultUpdate",
+   "file": "0.743.0.7431134_20261018T222532Z_Player_F4FCA_last.log"
+  },
+  "client_disconnect": {
+   "line": "2026-10-17T18:16:31.256Z,36.256653,2370,6,Info [DFLog::NetworkClient] Client:Disconnect",
+   "file": "0.743.0.7431134_20261017T181555Z_Player_3D457_last.log"
+  },
+  "time_to_disconnect": {
+   "line": "2026-10-17T18:16:31.257Z,36.257656,2370,7 [FLog::Network] Time to disconnect replication data: 0.147100",
+   "file": "0.743.0.7431134_20261017T181555Z_Player_3D457_last.log"
+  },
+  "client_disconnect_reason": {
+   "line": "2026-10-17T18:16:31.267Z,36.267670,1e5c,6,Info [DFLog::RbxTransportDummyClient] Disconnected from server for reason: Player: 285 (DisconnectClientInitiated)",
+   "file": "0.743.0.7431134_20261017T181555Z_Player_3D457_last.log"
+  },
+  "lost_connection": {
+   "line": "2026-10-17T18:15:41.292Z,212.292236,2b88,7,Warning [FLog::Network] Lost connection with reason : You have been kicked from the game",
+   "file": "0.743.0.7431134_20261017T181209Z_Player_60DEA_last.log"
+  },
+  "server_closed_reason": {
+   "line": "2026-10-17T18:15:42.748Z,213.748199,2b88,6,Info [DFLog::RbxTransportDummyClient] Connection closed by server for reason: RCC: 288 (DisconnectServerShutdown)",
+   "file": "0.743.0.7431134_20261017T181209Z_Player_60DEA_last.log"
+  },
+  "disconnection_notification": {
+   "line": "2026-10-16T13:46:34.850Z,513.850525,5034,7 [FLog::Network] Disconnection Notification. Reason: 267",
+   "file": "0.743.0.7431134_20261016T133801Z_Player_15E9A_last.log"
+  },
+  "close_main_window_request": {
+   "line": "2026-10-15T18:47:36.695Z,3273.695068,3df0,6,Info [FLog::Systray] Main thread: Received close main window request",
+   "file": "0.743.0.7431129_20261015T175303Z_Player_10630_last.log"
+  },
+  "shutdown": {
+   "line": "2026-10-15T18:47:36.732Z,3273.732178,3df0,6 [FLog::SingleSurfaceApp] shutDown: (stage:UGCGame).",
+   "file": "0.743.0.7431129_20261015T175303Z_Player_10630_last.log"
+  },
+  "leave_ugc": {
+   "line": "2026-10-15T18:47:36.866Z,3273.866699,3df0,6 [FLog::SingleSurfaceApp] leaveUGCGameInternal",
+   "file": "0.743.0.7431129_20261015T175303Z_Player_10630_last.log"
+  },
+  "tray_user_exit": {
+   "line": "2026-09-20T09:01:28.829Z,1120.829346,3dc4,6,Info [FLog::Systray] User exit app and stay in tray mode for 1120.261 seconds",
+   "file": "0.739.0.7390687_20260920T084248Z_Player_30D25_last.log"
+  },
+  "tray_spawned": {
+   "line": "2026-09-20T08:42:45.116Z,256.116425,1690,6,Info [FLog::Systray] Successfully launched new process in systray mode",
+   "file": "0.739.0.7390687_20260920T083829Z_Player_45B1A_last.log"
+  }
+ },
+ "missing": []
+}

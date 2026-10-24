@@ -1,0 +1,55 @@
+{
+  "_request": {
+    "method": "GET",
+    "url": "https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=3000000..3000099&size=352x352&format=Webp&isCircular=true",
+    "auth": "none"
+  },
+  "_status": "HTTP/1.1 200 OK",
+  "_note": "100 ids requested; 94 Completed, 6 Blocked. Only Blocked rows kept plus one Completed.",
+  "body": {
+    "data": [
+      {
+        "targetId": 3000050,
+        "state": "Blocked",
+        "imageUrl": "",
+        "version": "TN3"
+      },
+      {
+        "targetId": 3000064,
+        "state": "Blocked",
+        "imageUrl": "",
+        "version": "TN3"
+      },
+      {
+        "targetId": 3000001,
+        "state": "Blocked",
+        "imageUrl": "https://tr.rbxcdn.com/180DAY-87249609dae614261c1058785f217b72/352/352/UnapprovedImage/Webp/noFilter",
+        "version": "TN3"
+      },
+      {
+        "targetId": 3000006,
+        "state": "Blocked",
+        "imageUrl": "https://tr.rbxcdn.com/180DAY-87249609dae614261c1058785f217b72/352/352/UnapprovedImage/Webp/noFilter",
+        "version": "TN3"
+      },
+      {
+        "targetId": 3000017,
+        "state": "Blocked",
+        "imageUrl": "https://tr.rbxcdn.com/180DAY-87249609dae614261c1058785f217b72/352/352/UnapprovedImage/Webp/noFilter",
+        "version": "TN3"
+      },
+      {
+        "targetId": 3000036,
+        "state": "Blocked",
+        "imageUrl": "https://tr.rbxcdn.com/180DAY-87249609dae614261c1058785f217b72/352/352/UnapprovedImage/Webp/noFilter",
+        "version": "TN3"
+      },
+      {
+        "targetId": 3000000,
+        "state": "Completed",
+        "imageUrl": "https://tr.rbxcdn.com/30DAY-AvatarHeadshot-8FB21B144A04847611C18BAA7A54E399-Png/352/352/AvatarHeadshot/Webp/isCircular",
+        "version": "TN3"
+      }
+    ]
+  }
+}

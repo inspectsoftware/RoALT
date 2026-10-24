@@ -1,0 +1,49 @@
+{
+  "_request": {
+    "method": "GET",
+    "url": "(same as thumbnails-headshot-pending-first-request) retried ~2s later",
+    "auth": "none"
+  },
+  "_status": "HTTP/1.1 200 OK",
+  "_note": "After ~2s all Pending became Completed (94) or Blocked (6). imageUrl hosts seen: {'t6.rbxcdn.com': 6, 't0.rbxcdn.com': 17, 't1.rbxcdn.com': 20, 't2.rbxcdn.com': 7, 't4.rbxcdn.com': 4, 't3.rbxcdn.com': 23, 't7.rbxcdn.com': 4, 't5.rbxcdn.com': 13, 'tr.rbxcdn.com': 3}",
+  "body": {
+    "data": [
+      {
+        "targetId": 4123400,
+        "state": "Completed",
+        "imageUrl": "https://t6.rbxcdn.com/30DAY-AvatarHeadshot-CC7F3A498559A1C7BB30EC26E196EFD4-Jpeg",
+        "version": "TN3"
+      },
+      {
+        "targetId": 4123401,
+        "state": "Completed",
+        "imageUrl": "https://t0.rbxcdn.com/30DAY-AvatarHeadshot-E68D794796863ED9BEDBCEF1E23E54FB-Jpeg",
+        "version": "TN3"
+      },
+      {
+        "targetId": 4123402,
+        "state": "Completed",
+        "imageUrl": "https://t6.rbxcdn.com/30DAY-AvatarHeadshot-0BB602AF1B615C0155C669987B6BB929-Jpeg",
+        "version": "TN3"
+      },
+      {
+        "targetId": 4123445,
+        "state": "Blocked",
+        "imageUrl": "",
+        "version": "TN3"
+      },
+      {
+        "targetId": 4123492,
+        "state": "Blocked",
+        "imageUrl": "",
+        "version": "TN3"
+      },
+      {
+        "targetId": 4123493,
+        "state": "Blocked",
+        "imageUrl": "",
+        "version": "TN3"
+      }
+    ]
+  }
+}

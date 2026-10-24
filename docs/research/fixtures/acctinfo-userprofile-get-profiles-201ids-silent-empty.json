@@ -1,0 +1,19 @@
+{
+  "_request": {
+    "method": "POST",
+    "url": "https://apis.roblox.com/user-profile-api/v1/user/profiles/get-profiles",
+    "body": {
+      "userIds": "[1..201] (201 ids)",
+      "fields": [
+        "names.username"
+      ]
+    },
+    "auth": "none"
+  },
+  "_status": "HTTP/1.1 200 OK",
+  "_note": "201+ ids (and also an unknown field name such as isPremium) return 200 with EMPTY profileDetails and empty errors: silent failure. 200 ids returns data.",
+  "body": {
+    "profileDetails": [],
+    "errors": []
+  }
+}

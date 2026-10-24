@@ -1,0 +1,46 @@
+{
+  "_request": {
+    "method": "POST",
+    "url": "https://presence.roblox.com/v1/presence/users",
+    "body": {
+      "userIds": [
+        1,
+        156,
+        261
+      ]
+    },
+    "auth": "none"
+  },
+  "_status": "HTTP/1.1 200 OK",
+  "body": {
+    "userPresences": [
+      {
+        "userPresenceType": 0,
+        "lastLocation": "Website",
+        "placeId": null,
+        "rootPlaceId": null,
+        "gameId": null,
+        "universeId": null,
+        "userId": 1
+      },
+      {
+        "userPresenceType": 0,
+        "lastLocation": "Website",
+        "placeId": null,
+        "rootPlaceId": null,
+        "gameId": null,
+        "universeId": null,
+        "userId": 156
+      },
+      {
+        "userPresenceType": 0,
+        "lastLocation": "Website",
+        "placeId": null,
+        "rootPlaceId": null,
+        "gameId": null,
+        "universeId": null,
+        "userId": 261
+      }
+    ]
+  }
+}

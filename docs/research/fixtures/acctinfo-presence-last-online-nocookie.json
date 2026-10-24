@@ -1,0 +1,21 @@
+{
+  "_request": {
+    "method": "POST",
+    "url": "https://presence.roblox.com/v1/presence/last-online",
+    "body": {
+      "userIds": [
+        1
+      ]
+    },
+    "auth": "none"
+  },
+  "_status": "HTTP/1.1 404 Not Found",
+  "body": {
+    "errors": [
+      {
+        "code": 0,
+        "message": ""
+      }
+    ]
+  }
+}

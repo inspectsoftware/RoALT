@@ -1,0 +1,4 @@
+[env]
+# ts-rs writes the shared IPC types here when `npm run bindings` (cargo test) runs.
+TS_RS_EXPORT_DIR = { value = "src/bindings", relative = true }
+TS_RS_LARGE_INT = "number"

@@ -1,0 +1,73 @@
+{
+  "source": "Derived by reading https://js.rbxcdn.com/813c4bdd4d89a033c33e45564ccfc9ef7a7013fba5db9cf6de4270dce4e72100-GameLaunch.js (served 2026-10-24) + PlaceLauncherStatusPanel flags on www.roblox.com/games/1818 (Windows UA). Values like ticket/ids are placeholders.",
+  "uri_builder": {
+    "scheme": "roblox-player (roblox-studio for edit/plugin/asset)",
+    "first_token": "1",
+    "separator": "+",
+    "pair": "key:encodeURIComponent(value); a param whose key===value is emitted bare (e.g. 'avatar' for studio)",
+    "order": [
+      "1",
+      "launchmode:<play>",
+      "gameinfo:<encodeURIComponent(authTicket)> (only when signed in)",
+      "launchtime:<Date.now() ms>",
+      "[studio only: distributorType:Global, userId:<id>, browser:<chrome|edge|...>]",
+      "placelauncherurl:<encodeURIComponent(fullPlaceLauncherUrl)>",
+      "browsertrackerid:<RBXEventTrackerV2 browserid>",
+      "robloxLocale:<data-protocol-roblox-locale>",
+      "gameLocale:<data-protocol-game-locale>",
+      "channel:<player channel> (OMITTED on Windows/Mac when data-is-omit-player-channel-for-win-and-mac-enabled=true, which it is today)",
+      "LaunchExp:InApp (data-is-duar-auto-opt-in-enabled=true and data-is-duar-opt-out-disabled=true; else PreferInApp)"
+    ],
+    "placelauncher_base": "https://www.roblox.com/Game/PlaceLauncher.ashx (Roblox.Endpoints has no override; falls back to location.protocol//hostname + '/Game/PlaceLauncher.ashx')",
+    "placelauncher_query": "request=<type>&browserTrackerId=<id>&<caller params...>; keys/values encodeURIComponent'd, '%20' -> '+'. Shared launcher drops undefined params; legacy jQuery.param path emits them as empty (launchData=&eventId=&referredByPlayerId=).",
+    "request_types": {
+      "RequestGame": [
+        "placeId",
+        "launchData?",
+        "eventId?",
+        "isPlayTogetherGame=false",
+        "referredByPlayerId?",
+        "joinAttemptId (uuid)",
+        "joinAttemptOrigin (e.g. PlayButton)"
+      ],
+      "RequestGameJob": [
+        "placeId",
+        "gameId=<jobId uuid>",
+        "isPlayTogetherGame",
+        "referredByPlayerId?",
+        "joinAttemptId",
+        "joinAttemptOrigin"
+      ],
+      "RequestPrivateGame": [
+        "placeId",
+        "accessCode (server-list join; empty for share links)",
+        "linkCode (share-link join; '' from server list)",
+        "joinAttemptId",
+        "joinAttemptOrigin"
+      ],
+      "RequestFollowUser": [
+        "userId",
+        "joinAttemptId",
+        "joinAttemptOrigin"
+      ],
+      "RequestPlayTogetherGame": [
+        "placeId",
+        "conversationId",
+        "joinAttemptId?",
+        "joinAttemptOrigin?"
+      ]
+    },
+    "pre_launch_calls": [
+      "POST https://apis.roblox.com/matchmaking-api/v1/client-status body {\"status\":\"Unknown\"} (credentials include; beacon, result ignored)",
+      "GET https://auth.roblox.com/v1/client-assertion/ (credentials include) -> {\"clientAssertion\":\"...\"}",
+      "POST https://auth.roblox.com/v1/authentication-ticket/ content-type application/json, body = client-assertion response or {} if that GET failed; read response header rbx-authentication-ticket"
+    ],
+    "delivery": "hidden <iframe id='gamelaunch' src=URI> (navigates to the protocol URI)"
+  },
+  "examples": {
+    "RequestGame": "roblox-player:1+launchmode:play+gameinfo:%3CTICKET%3E+launchtime:1792839000000+placelauncherurl:https%3A%2F%2Fwww.roblox.com%2FGame%2FPlaceLauncher.ashx%3Frequest%3DRequestGame%26browserTrackerId%3D1234567890%26placeId%3D1818%26isPlayTogetherGame%3Dfalse%26joinAttemptId%3D11111111-2222-4333-8444-555555555555%26joinAttemptOrigin%3DPlayButton+browsertrackerid:1234567890+robloxLocale:en_us+gameLocale:en_us+LaunchExp:InApp",
+    "RequestGameJob": "roblox-player:1+launchmode:play+gameinfo:%3CTICKET%3E+launchtime:1792839000000+placelauncherurl:https%3A%2F%2Fwww.roblox.com%2FGame%2FPlaceLauncher.ashx%3Frequest%3DRequestGameJob%26browserTrackerId%3D1234567890%26placeId%3D1818%26gameId%3Daaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee%26isPlayTogetherGame%3Dfalse%26joinAttemptId%3D11111111-2222-4333-8444-555555555555%26joinAttemptOrigin%3DJoinInstance+browsertrackerid:1234567890+robloxLocale:en_us+gameLocale:en_us+LaunchExp:InApp",
+    "RequestPrivateGame_linkCode": "roblox-player:1+launchmode:play+gameinfo:%3CTICKET%3E+launchtime:1792839000000+placelauncherurl:https%3A%2F%2Fwww.roblox.com%2FGame%2FPlaceLauncher.ashx%3Frequest%3DRequestPrivateGame%26browserTrackerId%3D1234567890%26placeId%3D1818%26linkCode%3D12345678901234567890123456789012%26joinAttemptId%3D11111111-2222-4333-8444-555555555555%26joinAttemptOrigin%3DPlayButton+browsertrackerid:1234567890+robloxLocale:en_us+gameLocale:en_us+LaunchExp:InApp",
+    "RequestFollowUser": "roblox-player:1+launchmode:play+gameinfo:%3CTICKET%3E+launchtime:1792839000000+placelauncherurl:https%3A%2F%2Fwww.roblox.com%2FGame%2FPlaceLauncher.ashx%3Frequest%3DRequestFollowUser%26browserTrackerId%3D1234567890%26userId%3D1%26joinAttemptId%3D11111111-2222-4333-8444-555555555555%26joinAttemptOrigin%3DJoinUser+browsertrackerid:1234567890+robloxLocale:en_us+gameLocale:en_us+LaunchExp:InApp"
+  }
+}

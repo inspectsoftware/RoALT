@@ -1,0 +1,48 @@
+{
+  "_request": {
+    "method": "POST",
+    "url": "https://thumbnails.roblox.com/v1/batch",
+    "body": [
+      {
+        "requestId": "1:AvatarHeadShot:150x150:webp",
+        "targetId": 1,
+        "type": "AvatarHeadShot",
+        "size": "150x150",
+        "format": "Webp",
+        "isCircular": false
+      },
+      {
+        "requestId": "156:AvatarHeadShot:150x150:png",
+        "targetId": 156,
+        "type": "AvatarHeadShot",
+        "size": "150x150",
+        "format": "Png",
+        "isCircular": true
+      }
+    ],
+    "auth": "none"
+  },
+  "_status": "HTTP/1.1 200 OK",
+  "body": {
+    "data": [
+      {
+        "requestId": "1:AvatarHeadShot:150x150:webp",
+        "errorCode": 0,
+        "errorMessage": "",
+        "targetId": 1,
+        "state": "Completed",
+        "imageUrl": "https://tr.rbxcdn.com/30DAY-AvatarHeadshot-310966282D3529E36976BF6B07B1DC90-Png/150/150/AvatarHeadshot/Webp/noFilter",
+        "version": "TN3"
+      },
+      {
+        "requestId": "156:AvatarHeadShot:150x150:png",
+        "errorCode": 0,
+        "errorMessage": "",
+        "targetId": 156,
+        "state": "Completed",
+        "imageUrl": "https://tr.rbxcdn.com/30DAY-AvatarHeadshot-635A2AA0A87D473B6136800B5B86F761-Png/150/150/AvatarHeadshot/Png/isCircular",
+        "version": "TN3"
+      }
+    ]
+  }
+}

@@ -1,0 +1,283 @@
+{
+  "note": "expected parse results for RoALT link parser unit tests; see findings for rules",
+  "cases": [
+    {
+      "input": "https://www.roblox.com/games/920587237/Adopt-Me",
+      "expected": {
+        "kind": "Place",
+        "placeId": 920587237
+      }
+    },
+    {
+      "input": "roblox.com/games/920587237",
+      "expected": {
+        "kind": "Place",
+        "placeId": 920587237
+      }
+    },
+    {
+      "input": "  <https://www.roblox.com/de/games/920587237/Adopt-Me#!/game-instances>  ",
+      "expected": {
+        "kind": "Place",
+        "placeId": 920587237
+      }
+    },
+    {
+      "input": "https://web.roblox.com/games/76558904092080?privateServerLinkCode=58201880850229913874098176522742",
+      "expected": {
+        "kind": "PrivateServerLinkCode",
+        "placeId": 76558904092080,
+        "linkCode": "58201880850229913874098176522742"
+      }
+    },
+    {
+      "input": "https://www.roblox.com/games/90906407195271/Racket-Rivals?privateServerLinkCode=1020499390872690887970171",
+      "expected": {
+        "kind": "PrivateServerLinkCode",
+        "placeId": 90906407195271,
+        "linkCode": "1020499390872690887970171"
+      }
+    },
+    {
+      "input": "https://www.roblox.com/share?code=ce65b2c80e8dae48866fe2f919966557&type=Server",
+      "expected": {
+        "kind": "ShareLink",
+        "code": "ce65b2c80e8dae48866fe2f919966557",
+        "linkType": "Server"
+      }
+    },
+    {
+      "input": "https://www.roblox.com/share-links?code=ce65b2c80e8dae48866fe2f919966557&type=server",
+      "expected": {
+        "kind": "ShareLink",
+        "code": "ce65b2c80e8dae48866fe2f919966557",
+        "linkType": "Server"
+      }
+    },
+    {
+      "input": "https://ro.blox.com/Ebh5?pid=Server&is_retargeting=false&af_dp=roblox%3A%2F%2Fnavigation%2Fshare_links%3Fcode%3Dce65b2c80e8dae48866fe2f919966557%26type%3DServer&deep_link_value=roblox%3A%2F%2Fnavigation%2Fshare_links%3Fcode%3Dce65b2c80e8dae48866fe2f919966557%26type%3DServer&af_web_dp=https%3A%2F%2Fwww.roblox.com%2Fshare-links%3Fcode%3Dce65b2c80e8dae48866fe2f919966557%26type%3DServer",
+      "expected": {
+        "kind": "ShareLink",
+        "code": "ce65b2c80e8dae48866fe2f919966557",
+        "linkType": "Server"
+      }
+    },
+    {
+      "input": "roblox://navigation/share_links?code=ce65b2c80e8dae48866fe2f919966557&type=ExperienceInvite",
+      "expected": {
+        "kind": "ShareLink",
+        "code": "ce65b2c80e8dae48866fe2f919966557",
+        "linkType": "ExperienceInvite"
+      }
+    },
+    {
+      "input": "https://www.roblox.com/share?code=abc123&v=v2",
+      "expected": {
+        "kind": "ShareLinkV2",
+        "code": "abc123"
+      }
+    },
+    {
+      "input": "roblox://placeId=920587237&launchData=abc%20def",
+      "expected": {
+        "kind": "Place",
+        "placeId": 920587237,
+        "launchData": "abc def"
+      }
+    },
+    {
+      "input": "roblox://placeId=1818/",
+      "expected": {
+        "kind": "Place",
+        "placeId": 1818
+      }
+    },
+    {
+      "input": "roblox://experiences/start?placeId=920587237&gameInstanceId=C63BF72F-B8D0-4675-8D80-887388C603A3",
+      "expected": {
+        "kind": "Instance",
+        "placeId": 920587237,
+        "jobId": "c63bf72f-b8d0-4675-8d80-887388c603a3"
+      }
+    },
+    {
+      "input": "roblox://experiences/start?id=1818",
+      "expected": {
+        "kind": "Place",
+        "placeId": 1818
+      }
+    },
+    {
+      "input": "roblox://experiences/start?placeId=920587237&accessCode=8d5f1b3e-6a0c-4f7e-9b2d-1c3e5a7f9b0d",
+      "expected": {
+        "kind": "PrivateServerAccessCode",
+        "placeId": 920587237,
+        "accessCode": "8d5f1b3e-6a0c-4f7e-9b2d-1c3e5a7f9b0d"
+      }
+    },
+    {
+      "input": "roblox://placeId=920587237&linkCode=58201880850229913874098176522742",
+      "expected": {
+        "kind": "PrivateServerLinkCode",
+        "placeId": 920587237,
+        "linkCode": "58201880850229913874098176522742"
+      }
+    },
+    {
+      "input": "https://www.roblox.com/games/start?placeId=920587237&launchData=%7B%22a%22%3A1%7D",
+      "expected": {
+        "kind": "Place",
+        "placeId": 920587237,
+        "launchData": "{\"a\":1}"
+      }
+    },
+    {
+      "input": "https://www.roblox.com/games/start?placeId=920587237&gameInstanceId=c63bf72f-b8d0-4675-8d80-887388c603a3",
+      "expected": {
+        "kind": "Instance",
+        "placeId": 920587237,
+        "jobId": "c63bf72f-b8d0-4675-8d80-887388c603a3"
+      }
+    },
+    {
+      "input": "roblox://userId=156",
+      "expected": {
+        "kind": "FollowUser",
+        "userId": 156
+      }
+    },
+    {
+      "input": "https://www.roblox.com/games/start?userId=156",
+      "expected": {
+        "kind": "FollowUser",
+        "userId": 156
+      }
+    },
+    {
+      "input": "https://www.roblox.com/users/156/profile",
+      "expected": {
+        "kind": "User",
+        "userId": 156
+      }
+    },
+    {
+      "input": "roblox://navigation/game_details?gameId=383310974",
+      "expected": {
+        "kind": "Universe",
+        "universeId": 383310974
+      }
+    },
+    {
+      "input": "920587237",
+      "expected": {
+        "kind": "Place",
+        "placeId": 920587237
+      }
+    },
+    {
+      "input": "c63bf72f-b8d0-4675-8d80-887388c603a3",
+      "expected": {
+        "kind": "JobIdOnly",
+        "jobId": "c63bf72f-b8d0-4675-8d80-887388c603a3"
+      }
+    },
+    {
+      "input": "https://www.roblox.com.evil.example/games/1/x",
+      "expected": {
+        "kind": "Invalid",
+        "reason": "host"
+      }
+    },
+    {
+      "input": "https://evilroblox.com/games/1/x",
+      "expected": {
+        "kind": "Invalid",
+        "reason": "host"
+      }
+    },
+    {
+      "input": "https://create.roblox.com/docs",
+      "expected": {
+        "kind": "Invalid",
+        "reason": "host"
+      }
+    },
+    {
+      "input": "https://www.roblox.com/games/abc/x",
+      "expected": {
+        "kind": "Invalid",
+        "reason": "placeId"
+      }
+    },
+    {
+      "input": "https://www.roblox.com/games/0/x",
+      "expected": {
+        "kind": "Invalid",
+        "reason": "placeId"
+      }
+    },
+    {
+      "input": "https://www.roblox.com/games/99999999999999999999/x",
+      "expected": {
+        "kind": "Invalid",
+        "reason": "placeId"
+      }
+    },
+    {
+      "input": "https://www.roblox.com/games/920587237/x?privateServerLinkCode=12ab",
+      "expected": {
+        "kind": "Invalid",
+        "reason": "linkCode"
+      }
+    },
+    {
+      "input": "roblox://experiences/start?placeId=920587237&gameInstanceId=not-a-guid",
+      "expected": {
+        "kind": "Invalid",
+        "reason": "jobId"
+      }
+    },
+    {
+      "input": "https://www.roblox.com/share?code=ce65b2c80e8dae48866fe2f919966557",
+      "expected": {
+        "kind": "Invalid",
+        "reason": "share type missing"
+      }
+    },
+    {
+      "input": "https://www.roblox.com/share?code=ce65b2c80e8dae48866fe2f919966557&type=FriendInvite",
+      "expected": {
+        "kind": "Unsupported",
+        "reason": "not a game link"
+      }
+    },
+    {
+      "input": "https://www.roblox.com/catalog/1365767/Valkyrie-Helm",
+      "expected": {
+        "kind": "Unsupported",
+        "reason": "not a game link"
+      }
+    },
+    {
+      "input": "https://ro.blox.com/Ebh5/a1b2c3",
+      "expected": {
+        "kind": "Unsupported",
+        "reason": "AppsFlyer short link without af_dp/deep_link_value/af_web_dp"
+      }
+    },
+    {
+      "input": "roblox-player:1+launchmode:play+gameinfo:XXXX+launchtime:0+placelauncherurl:https%3A%2F%2F...",
+      "expected": {
+        "kind": "Invalid",
+        "reason": "launch URI (carries auth ticket) not accepted as input"
+      }
+    },
+    {
+      "input": "",
+      "expected": {
+        "kind": "Invalid",
+        "reason": "empty"
+      }
+    }
+  ]
+}

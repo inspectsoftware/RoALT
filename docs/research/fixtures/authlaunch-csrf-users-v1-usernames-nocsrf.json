@@ -1,0 +1,68 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://users.roblox.com/v1/usernames/users"
+  },
+  "status": 200,
+  "headers": {
+    "content-type": [
+      "application/json; charset=utf-8"
+    ],
+    "date": [
+      "Sat, 24 Oct 2026 11:05:31 GMT"
+    ],
+    "server": [
+      "public-gateway"
+    ],
+    "cache-control": [
+      "no-cache"
+    ],
+    "x-frame-options": [
+      "SAMEORIGIN"
+    ],
+    "roblox-machine-id": [
+      "171cb75d-8ade-2806-a205-859f9261152d"
+    ],
+    "x-envoy-upstream-service-time": [
+      "5"
+    ],
+    "x-envoy-attempt-count": [
+      "1"
+    ],
+    "x-terms-message": [
+      "Terms apply https://rblx.co/TOU."
+    ],
+    "strict-transport-security": [
+      "max-age=3600"
+    ],
+    "x-ratelimit-limit": [
+      "500, 500;w=60"
+    ],
+    "x-ratelimit-remaining": [
+      "499"
+    ],
+    "x-ratelimit-reset": [
+      "29"
+    ],
+    "vary": [
+      "Accept-Encoding"
+    ],
+    "x-ingress-proxy": [
+      "true"
+    ],
+    "transfer-encoding": [
+      "chunked"
+    ]
+  },
+  "body": {
+    "data": [
+      {
+        "requestedUsername": "Roblox",
+        "hasVerifiedBadge": true,
+        "id": 1,
+        "name": "Roblox",
+        "displayName": "Roblox"
+      }
+    ]
+  }
+}

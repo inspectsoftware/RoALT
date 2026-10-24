@@ -1,0 +1,23 @@
+{
+  "captured": "2026-10-24T10:45Z",
+  "request": {
+    "method": "POST",
+    "url": "https://apis.roblox.com/sharelinks/v1/resolve-link",
+    "headers": {
+      "Content-Type": "application/json",
+      "x-csrf-token": "<from 403>"
+    },
+    "body": {
+      "linkId": "abc",
+      "linkType": "Server"
+    },
+    "cookie": null
+  },
+  "status": 401,
+  "notable_headers": {
+    "content-type": "application/json; charset=utf-8",
+    "x-ratelimit-limit": "10000, 10000;w=60"
+  },
+  "body_note": "Body is a bare JSON string, NOT the usual {errors:[...]} envelope.",
+  "body": "User must be authenticated to use 'Server' links"
+}

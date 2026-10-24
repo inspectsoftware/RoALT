@@ -1,0 +1,8 @@
+{
+  "errors": [
+    {
+      "code": 7,
+      "message": "Guest users are not allowed."
+    }
+  ]
+}

@@ -1,0 +1,86 @@
+{
+  "data": [
+    {
+      "id": 994732206,
+      "rootPlaceId": 2753915549,
+      "name": "Blox Fruits",
+      "description": "OUT NOW: \ud83e\uddf2 Magnet + \ud83c\udfdd\ufe0f Sea 1 + MORE \nWelcome to Blox Fruits! Become a master swordsman or a powerful blox fruit user as you train to become the strongest player to ever live. You can choose to fight against tough enemies or have powerful boss battles while sailing across the ocean to find hidden secrets. \n\nCurrent level cap: 3000\nCurrent fruits in the game:\nRocket, Spin, Blade, Spring, Bomb, Smoke, Spike, Flame, Ice, Sand, Dark, Eagle, Diamond, Light, Rubber, Ghost, Magma, Quake, Buddha, Love, Creation, Spider, Sound, Phoenix, Portal, Lightning, Pain, Blizzard, Gravity, Mammoth, T-Rex, Dough, Shadow, Venom, Gas, Spirit, Tiger, Yeti, Magnet, Kitsune, Control, and Dragon\n\nFAQ:\n-Fruits spawn in the map every hour / despawn after 20 mins\n-You can buy fruits from the Blox Fruits Dealer. He restocks random fruits every 4 hours\n-More info in the group description\n\nDo not exploit, our auto-detection will catch you and we do not appeal our bans.",
+      "sourceName": null,
+      "sourceDescription": null,
+      "creator": {
+        "id": 4372130,
+        "name": "Gamer Robot Inc",
+        "type": "Group",
+        "isRNVAccount": false,
+        "hasVerifiedBadge": true
+      },
+      "price": null,
+      "allowedGearGenres": [
+        "Adventure"
+      ],
+      "allowedGearCategories": [],
+      "isGenreEnforced": true,
+      "copyingAllowed": false,
+      "playing": 189185,
+      "visits": 65079373437,
+      "maxPlayers": 12,
+      "created": "2019-01-16T03:29:19.433Z",
+      "updated": "2026-10-22T17:28:11.337Z",
+      "studioAccessToApisAllowed": false,
+      "createVipServersAllowed": false,
+      "universeAvatarType": "MorphToR15",
+      "genre": "Adventure",
+      "genre_l1": "RPG",
+      "genre_l2": "Action RPG",
+      "untranslated_genre_l1": "rpg",
+      "isAllGenre": false,
+      "isFavoritedByUser": false,
+      "favoritedCount": 20119351,
+      "canonicalUrlPath": "/games/2753915549/Blox-Fruits",
+      "isContentRestricted": false,
+      "isOfficiallyLicensed": false,
+      "isCommunityLicensed": false
+    },
+    {
+      "id": 383310974,
+      "rootPlaceId": 920587237,
+      "name": "[\ud83c\udf83] Adopt Me!",
+      "description": "Adopt and raise \ud83d\udc36\ud83e\udd84\ud83d\udc76, trade and collect legendary pets, build your dream home, and roleplay with friends!\n\n\ud83d\udc3b Halloween: Where Bear? Returns! \ud83d\udc3b\n\ud83d\udd78 Hunt or be hunted in Where Bear?\n\ud83d\udc08 Stray Cat Dragon finally transforms!\n\ud83c\udf83 New Sticker Pack with Halloween pets!\n\nBe FIRST \ud83c\udfc6 To experience new updates by pressing \ud83d\udd14NOTIFY.\n\nMeet the founders!\nNewFissy - Tech Director\nBethink - Creative Director\n\nFind out more about Uplift Games, our policies and creative attributions:\nhttps://devforum.roblox.com/t/credits/71812",
+      "sourceName": null,
+      "sourceDescription": null,
+      "creator": {
+        "id": 295182,
+        "name": "Uplift Games",
+        "type": "Group",
+        "isRNVAccount": false,
+        "hasVerifiedBadge": true
+      },
+      "price": null,
+      "allowedGearGenres": [
+        "RPG"
+      ],
+      "allowedGearCategories": [],
+      "isGenreEnforced": true,
+      "copyingAllowed": false,
+      "playing": 243070,
+      "visits": 45192178237,
+      "maxPlayers": 35,
+      "created": "2017-07-14T19:26:21.347Z",
+      "updated": "2026-10-23T17:23:29.272Z",
+      "studioAccessToApisAllowed": false,
+      "createVipServersAllowed": false,
+      "universeAvatarType": "MorphToR15",
+      "genre": "RPG",
+      "genre_l1": "Roleplay & Avatar Sim",
+      "genre_l2": "Pet Care",
+      "untranslated_genre_l1": "roleplay_and_avatar_sim",
+      "isAllGenre": false,
+      "isFavoritedByUser": false,
+      "favoritedCount": 29798096,
+      "canonicalUrlPath": "/games/920587237/Adopt-Me",
+      "isContentRestricted": false,
+      "isOfficiallyLicensed": false,
+      "isCommunityLicensed": false
+    }
+  ]
+}

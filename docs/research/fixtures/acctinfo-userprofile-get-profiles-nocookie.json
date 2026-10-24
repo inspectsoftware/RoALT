@@ -1,0 +1,46 @@
+{
+  "_request": {
+    "method": "POST",
+    "url": "https://apis.roblox.com/user-profile-api/v1/user/profiles/get-profiles",
+    "body": {
+      "userIds": [
+        1,
+        156
+      ],
+      "fields": [
+        "names.combinedName",
+        "names.username",
+        "names.displayName",
+        "isVerified",
+        "hasRobloxSubscription"
+      ]
+    },
+    "auth": "none"
+  },
+  "_status": "HTTP/1.1 200 OK",
+  "body": {
+    "profileDetails": [
+      {
+        "userId": 1,
+        "names": {
+          "username": "Roblox",
+          "displayName": "Roblox",
+          "combinedName": "Roblox"
+        },
+        "isVerified": true,
+        "hasRobloxSubscription": true
+      },
+      {
+        "userId": 156,
+        "names": {
+          "username": "builderman",
+          "displayName": "builderman",
+          "combinedName": "builderman"
+        },
+        "isVerified": true,
+        "hasRobloxSubscription": true
+      }
+    ],
+    "errors": []
+  }
+}

@@ -7,9 +7,16 @@
   with Inno Setup 6. Prints the installer's path and SHA-256. Needs Rust (with the Build Tools'
   C++ workload), Node.js and Inno Setup 6 (https://jrsoftware.org/isdl.php).
 
+.PARAMETER Dev
+  Also keeps a copy as installers\RoALT-Setup-<version>-dev-<yyyyMMdd-HHmm>.exe: one installer
+  per change, earlier ones never overwritten.
+
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1 -Dev
 #>
+param([switch]$Dev)
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -75,6 +82,10 @@ foreach ($try in 1..2) {
 if ($LASTEXITCODE -ne 0) { Stop-Build "ISCC failed (exit $LASTEXITCODE)" 'fix the error ISCC names above, then run this again' }
 
 $setup = Get-Item "$root\dist-installer\RoALT-Setup-$version.exe"
+if ($Dev) {
+    New-Item -ItemType Directory -Force "$root\installers" | Out-Null
+    $setup = Copy-Item $setup.FullName "$root\installers\RoALT-Setup-$version-dev-$(Get-Date -Format 'yyyyMMdd-HHmm').exe" -PassThru
+}
 Write-Host ''
 Write-Host "Installer: $($setup.FullName)" -ForegroundColor Green
 Write-Host "SHA-256:   $((Get-FileHash -Algorithm SHA256 $setup.FullName).Hash.ToLower())"

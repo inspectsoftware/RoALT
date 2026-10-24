@@ -25,6 +25,7 @@ installer, [Inno Setup 6.6 or newer](https://jrsoftware.org/isdl.php).
 npm ci
 npm run tauri dev                                                   # run it
 powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1  # dist-installer\RoALT-Setup-<version>.exe
+powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1 -Dev  # also keeps installers\RoALT-Setup-<version>-dev-<stamp>.exe
 ```
 
 ## Cut a release

@@ -158,6 +158,9 @@ fn poll_cookie(app: &AppHandle, label: &str) -> Result<Secret> {
         let Some(window) = app.get_webview_window(label) else {
             return Err(AppError::Cancelled);
         };
+        // Signing in (2-step codes, captchas) is activity: don't auto-lock under it, or the
+        // captured cookie could not be encrypted.
+        app.state::<crate::App>().vault.touch();
         // Not `cookies_for_url`: it panics if the window goes away mid-call.
         match window.cookies() {
             Ok(all) => {
@@ -175,7 +178,7 @@ fn poll_cookie(app: &AppHandle, label: &str) -> Result<Secret> {
         }
         std::thread::sleep(POLL);
     }
-    Err(AppError::Cancelled)
+    Err(AppError::Invalid("The Roblox sign-in window timed out after 15 minutes. Try again.".into()))
 }
 
 /// The first non-empty `.ROBLOSECURITY` from roblox.com (Tauri strips the leading dot).

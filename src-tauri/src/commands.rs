@@ -41,20 +41,29 @@ pub async fn vault_unlock(s: State<'_, App>, password: String) -> Result<()> {
 
 #[tauri::command]
 pub fn vault_lock(app: AppHandle, s: State<'_, App>) {
-    s.vault.lock();
-    let _ = app.emit("vault://locked", ());
+    if s.vault.mode() == VaultMode::Master {
+        s.vault.lock();
+        let _ = app.emit("vault://locked", ());
+    }
 }
 
 #[tauri::command]
 pub async fn vault_set_mode(
+    app: AppHandle,
     s: State<'_, App>,
     mode: VaultMode,
     current_password: Option<String>,
     new_password: Option<String>,
 ) -> Result<()> {
     let rec = s.db.vault_record()?.ok_or(AppError::Internal("vault record missing".into()))?;
-    let rec = s.vault.rewrap(&rec, mode, current_password.as_deref(), new_password.as_deref())?;
-    s.db.save_vault_record(&rec)
+    // Otherwise setting a master password would be a way round the Hello check on reveal.
+    if rec.mode == VaultMode::Dpapi && mode == VaultMode::Master && crate::vault::hello_available().await {
+        reauth(&app, &s, None, "Confirm it's you to set a master password.").await?;
+    }
+    let new_rec = s.vault.rewrap(&rec, mode, current_password.as_deref(), new_password.as_deref())?;
+    s.db.save_vault_record(&new_rec)?;
+    s.vault.set_mode(mode);
+    Ok(())
 }
 
 /// Called by the UI (throttled) on user input; drives auto-lock.
@@ -145,23 +154,32 @@ pub async fn accounts_validate(app: AppHandle, s: State<'_, App>, ids: Option<Ve
     };
     let (mut answered, mut last_err) = (0, None);
     for id in ids {
-        let (user_id, blob) = s.db.account_cookie(id)?;
+        // Removed while a long run was going: skip it.
+        let (user_id, blob) = match s.db.account_cookie(id) {
+            Err(AppError::NotFound) => continue,
+            r => r?,
+        };
         let cookie = s.vault.decrypt_secret(&cookie_aad(user_id), &blob)?;
         let now = now_ms();
-        match s.api.authenticated_user(id, &cookie).await {
+        let stored = match s.api.authenticated_user(id, &cookie).await {
             Ok((u, _)) if u.id == user_id => {
-                s.db.set_status(id, AccountStatus::Valid, now, Some(&u.name), Some(&u.display_name))?
+                s.db.set_status(id, AccountStatus::Valid, now, Some(&u.name), Some(&u.display_name))
             }
             // The cookie signs in as someone else (e.g. an account switch in a browser).
-            Ok(_) => s.db.set_status(id, AccountStatus::Invalid, now, None, None)?,
+            Ok(_) => s.db.set_status(id, AccountStatus::Invalid, now, None, None),
             Err(AppError::CookieInvalid | AppError::BoundSessionRequired) => {
-                s.db.set_status(id, AccountStatus::Invalid, now, None, None)?
+                s.db.set_status(id, AccountStatus::Invalid, now, None, None)
             }
-            Err(AppError::Challenge) => s.db.set_status(id, AccountStatus::Challenged, now, None, None)?,
+            Err(AppError::Challenge) => s.db.set_status(id, AccountStatus::Challenged, now, None, None),
             Err(e) => {
+                log::warn!("could not validate account {id}: {e}");
                 last_err = Some(e);
                 continue;
             }
+        };
+        match stored {
+            Err(AppError::NotFound) => continue,
+            r => r?,
         }
         answered += 1;
     }
@@ -173,7 +191,7 @@ pub async fn accounts_validate(app: AppHandle, s: State<'_, App>, ids: Option<Ve
 }
 
 /// Master mode asks for the password again; DPAPI mode asks Windows Hello.
-async fn reauth(app: &AppHandle, s: &App, password: Option<String>) -> Result<()> {
+async fn reauth(app: &AppHandle, s: &App, password: Option<String>, prompt: &str) -> Result<()> {
     match s.vault.mode() {
         VaultMode::Master => {
             let rec = s.db.vault_record()?.ok_or(AppError::Internal("vault record missing".into()))?;
@@ -181,10 +199,12 @@ async fn reauth(app: &AppHandle, s: &App, password: Option<String>) -> Result<()
         }
         VaultMode::Dpapi => {
             let window = app.get_webview_window("main").ok_or(AppError::Internal("no main window".into()))?;
-            crate::vault::windows_hello(&window, "Confirm it's you to reveal a Roblox cookie.").await
+            crate::vault::windows_hello(&window, prompt).await
         }
     }
 }
+
+const REVEAL_PROMPT: &str = "Confirm it's you to reveal a Roblox cookie.";
 
 fn stored_cookie(s: &App, id: i64) -> Result<Secret> {
     let (user_id, blob) = s.db.account_cookie(id)?;
@@ -193,26 +213,35 @@ fn stored_cookie(s: &App, id: i64) -> Result<Secret> {
 
 #[tauri::command]
 pub async fn account_reveal_cookie(app: AppHandle, s: State<'_, App>, id: i64, password: Option<String>) -> Result<String> {
-    reauth(&app, &s, password).await?;
+    reauth(&app, &s, password, REVEAL_PROMPT).await?;
     Ok(stored_cookie(&s, id)?.expose().to_owned())
 }
 
-/// Copies from Rust so the cookie never passes through the UI; clears the clipboard later
-/// if it still holds the cookie.
+/// Copies from Rust so the cookie never passes through the UI. `write_secret` keeps it out of
+/// Windows clipboard history and cloud sync; the clipboard is cleared after the configured
+/// delay, or at exit (`clear_copied_cookie`) if that comes first.
 #[tauri::command]
 pub async fn account_copy_cookie(app: AppHandle, s: State<'_, App>, id: i64, password: Option<String>) -> Result<()> {
-    reauth(&app, &s, password).await?;
-    let cookie = stored_cookie(&s, id)?;
-    app.clipboard().write_text(cookie.expose().to_owned()).map_err(|e| AppError::Internal(e.to_string()))?;
+    reauth(&app, &s, password, REVEAL_PROMPT).await?;
     let secs = s.db.settings()?.clipboard_clear_seconds.max(5);
+    let cookie = stored_cookie(&s, id)?;
+    app.clipboard().write_secret(cookie.expose().to_owned()).map_err(|e| AppError::Internal(e.to_string()))?;
+    *s.copied.lock().unwrap_or_else(|e| e.into_inner()) = Some(cookie);
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(secs as u64)).await;
-        if app.clipboard().read_text().is_ok_and(|t| t == cookie.expose()) {
-            let _ = app.clipboard().clear();
-        }
+        clear_copied_cookie(&app);
     });
     Ok(())
+}
+
+/// Clears the clipboard if it still holds the last copied cookie.
+pub fn clear_copied_cookie(app: &AppHandle) {
+    let s = app.state::<App>();
+    let Some(cookie) = s.copied.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
+    if app.clipboard().read_text().is_ok_and(|t| t == cookie.expose()) {
+        let _ = app.clipboard().clear();
+    }
 }
 
 // ---------- groups ----------
@@ -241,10 +270,19 @@ pub fn group_remove(app: AppHandle, s: State<'_, App>, id: i64) -> Result<()> {
 const MIN_BACKUP_PASSWORD: usize = 8;
 
 #[tauri::command]
-pub async fn backup_export(s: State<'_, App>, path: String, password: String, account_ids: Option<Vec<i64>>) -> Result<u32> {
+pub async fn backup_export(
+    app: AppHandle,
+    s: State<'_, App>,
+    path: String,
+    password: String,
+    current_password: Option<String>,
+    account_ids: Option<Vec<i64>>,
+) -> Result<u32> {
     if password.chars().count() < MIN_BACKUP_PASSWORD {
         return Err(AppError::Invalid(format!("Use at least {MIN_BACKUP_PASSWORD} characters for the backup password.")));
     }
+    // Exporting hands out every cookie, so it needs the same check as reveal.
+    reauth(&app, &s, current_password, "Confirm it's you to export your Roblox accounts.").await?;
     let groups = s.db.groups()?;
     let name_of = |gid: i64| groups.iter().find(|g| g.id == gid).map(|g| g.name.clone());
     let mut accounts = Vec::new();

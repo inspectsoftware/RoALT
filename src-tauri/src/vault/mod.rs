@@ -21,7 +21,7 @@ use zeroize::Zeroizing;
 use crate::error::{AppError, Result};
 use crate::model::VaultMode;
 
-pub use hello::windows_hello;
+pub use hello::{hello_available, windows_hello};
 
 /// A secret string (cookie, password). Zeroed on drop, never printed.
 #[derive(Clone)]
@@ -169,12 +169,15 @@ impl Vault {
         if rec.mode == VaultMode::Master {
             self.check_password(rec, current_password.ok_or(AppError::WrongPassword)?)?;
         }
-        let new_rec = match new_password {
-            Some(pw) => wrap_master(&key, pw)?,
-            None => wrap_dpapi(&key)?,
-        };
+        match new_password {
+            Some(pw) => wrap_master(&key, pw),
+            None => wrap_dpapi(&key),
+        }
+    }
+
+    /// Switches the in-memory mode; call only after the record from `rewrap` is saved.
+    pub fn set_mode(&self, mode: VaultMode) {
         self.guard().mode = mode;
-        Ok(new_rec)
     }
 
     /// `Locked` when locked.
@@ -262,6 +265,7 @@ mod tests {
 
         assert!(matches!(v.rewrap(&rec, VaultMode::Master, None, Some("short")), Err(AppError::Invalid(_))));
         let rec = v.rewrap(&rec, VaultMode::Master, None, Some("correct horse")).unwrap();
+        v.set_mode(rec.mode);
         assert_eq!((v.mode(), rec.mode, rec.kdf.is_some()), (VaultMode::Master, VaultMode::Master, true));
 
         v.lock();
@@ -282,6 +286,7 @@ mod tests {
         assert!(matches!(back, Err(AppError::WrongPassword)));
 
         let back = reopened.rewrap(&changed, VaultMode::Dpapi, Some("battery staple"), None).unwrap();
+        reopened.set_mode(back.mode);
         assert_eq!((reopened.mode(), back.mode, back.kdf.is_none()), (VaultMode::Dpapi, VaultMode::Dpapi, true));
         assert_eq!(Vault::open(&back).unwrap().decrypt(AAD, &blob).unwrap().as_slice(), b"cookie");
     }

@@ -22,6 +22,17 @@ pub async fn windows_hello(window: &tauri::WebviewWindow, message: &str) -> Resu
         .map_err(|e| AppError::Internal(e.to_string()))?
 }
 
+/// Whether Windows Hello is set up on this PC.
+pub async fn hello_available() -> bool {
+    tauri::async_runtime::spawn_blocking(|| {
+        UserConsentVerifier::CheckAvailabilityAsync()
+            .and_then(|op| op.join())
+            .is_ok_and(|a| a == UserConsentVerifierAvailability::Available)
+    })
+    .await
+    .unwrap_or(false)
+}
+
 fn verify(hwnd: HWND, message: &HSTRING) -> Result<()> {
     let available = UserConsentVerifier::CheckAvailabilityAsync().and_then(|op| op.join()).map_err(failed)?;
     if available != UserConsentVerifierAvailability::Available {

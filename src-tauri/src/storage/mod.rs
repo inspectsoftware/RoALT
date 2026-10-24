@@ -65,7 +65,8 @@ impl Db {
 
     fn init(mut conn: Connection) -> Result<Db> {
         conn.busy_timeout(Duration::from_secs(5))?;
-        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        // secure_delete: freed pages (removed cookies, old key wraps) are zeroed, not left behind.
+        conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON;")?;
         Migrations::new(vec![M::up(include_str!("migrations/001_init.sql"))])
             .to_latest(&mut conn)
             .map_err(|e| AppError::Storage(e.to_string()))?;
@@ -97,11 +98,18 @@ impl Db {
             VaultMode::Dpapi => ("dpapi", None),
             VaultMode::Master => ("master", rec.kdf.as_ref()),
         };
-        self.conn().execute(
+        let c = self.conn();
+        c.execute(
             "INSERT OR REPLACE INTO vault (id, mode, wrapped_key, kdf_salt, kdf_m_kib, kdf_t, kdf_p) \
              VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)",
             params![mode, rec.wrapped_key, kdf.map(|k| &k.salt), kdf.map(|k| k.m_kib), kdf.map(|k| k.t), kdf.map(|k| k.p)],
         )?;
+        // The previous wrap of the data key must not survive in the WAL: it would open the
+        // vault without the new (or any) master password.
+        let busy: i64 = c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))?;
+        if busy != 0 {
+            return Err(AppError::Storage("could not flush the database journal".into()));
+        }
         Ok(())
     }
 
@@ -431,6 +439,29 @@ mod tests {
             assert_eq!(mode, "wal");
         }
         assert_eq!(Db::open(&path).unwrap().accounts().unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn replaced_key_wrap_leaves_no_trace_on_disk() {
+        let dir = std::env::temp_dir().join(format!("roalt-test-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("roalt.db");
+        let old = b"OLD-DPAPI-WRAP-MARKER-0123456789".to_vec();
+        let db = Db::open(&path).unwrap();
+        db.save_vault_record(&VaultRecord { mode: VaultMode::Dpapi, wrapped_key: old.clone(), kdf: None }).unwrap();
+        add(&db, 1);
+        let master = VaultRecord {
+            mode: VaultMode::Master,
+            wrapped_key: vec![9; 64],
+            kdf: Some(Kdf { salt: vec![7; 16], m_kib: 65536, t: 3, p: 4 }),
+        };
+        db.save_vault_record(&master).unwrap();
+        // The process may exit without closing the connection: check the files as they are.
+        for f in ["roalt.db", "roalt.db-wal"] {
+            let bytes = std::fs::read(dir.join(f)).unwrap_or_default();
+            assert!(!bytes.windows(old.len()).any(|w| w == old.as_slice()), "old wrap left in {f}");
+        }
+        drop(db);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

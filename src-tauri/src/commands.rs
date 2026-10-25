@@ -484,6 +484,10 @@ pub async fn launch(
     target: LaunchTarget,
     favourite_id: Option<i64>,
 ) -> Result<LaunchInfo> {
+    // Launches go strictly one at a time (DESIGN §6).
+    if s.bulk.current().is_some_and(|p| !p.done) {
+        return Err(AppError::Invalid("A batch is still running.".into()));
+    }
     Ok(launch_tracked(&app, &s, account_id, target, favourite_id).await?.0)
 }
 

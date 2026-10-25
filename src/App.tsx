@@ -271,7 +271,7 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
             step={launchStep}
             setStep={setLaunchStep}
           />
-          <RunningPanel accounts={accounts.data} />
+          <RunningPanel accounts={accounts.data} onPick={setPicked} />
         </>
       ) : (
         <SettingsView vault={vault} settings={settings} />

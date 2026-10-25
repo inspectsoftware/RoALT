@@ -49,7 +49,14 @@ export const useMultiStatus = () =>
   });
 
 /** The running or last batch; bulk://progress replaces it, null once dismissed. */
-export const useBulk = () => useQuery({ queryKey: qk.bulk, queryFn: api.bulkCurrent });
+// A dismissed batch stays hidden when the query is fetched again (bulk_current keeps the last).
+let dismissedBulk: string | null = null;
+export function dismissBulk(qc: QueryClient, batchId: string) {
+  dismissedBulk = batchId;
+  qc.setQueryData(qk.bulk, null);
+}
+export const useBulk = () =>
+  useQuery({ queryKey: qk.bulk, queryFn: () => api.bulkCurrent().then((p) => (p && p.batchId === dismissedBulk ? null : p)) });
 
 const headshots = queryOptions({ queryKey: qk.headshots, queryFn: () => api.accountsHeadshots(), staleTime: 6 * 3_600_000 });
 /** One shared query; each avatar picks its own URL out of it. */

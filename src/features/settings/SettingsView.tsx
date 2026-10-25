@@ -109,7 +109,7 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
         </Row>
         <Row title="Launch delay" hint="Wait between two launches when several accounts launch at once. About a second either way is added.">
           <NumberField
-            unit="seconds"
+            unit="seconds between launches"
             short="s"
             min={2}
             max={60}

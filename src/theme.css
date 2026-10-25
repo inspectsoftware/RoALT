@@ -411,13 +411,17 @@
   .swatch[aria-pressed="true"] {
     outline: 2px solid var(--text);
   }
-  /* One of a batch row's four steps (ticket, run, join, in game); .pulse marks the live one. */
+  /* One of a batch row's four steps (ticket, run, join, in game); .step-live marks the one in
+     progress (half filled, so it stays distinct without motion). */
   .step {
     height: 4px;
     background: var(--line);
   }
   .step-done {
     background: var(--accent-text);
+  }
+  .step-live {
+    background: linear-gradient(90deg, var(--accent-text) 50%, var(--line) 50%);
   }
   .step-fail {
     background: var(--orange);

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { api, type AccountSummary, type BulkItem, type BulkStage } from "../../api";
-import { qk, useBulk, useInstances } from "../../data";
+import { api, type AccountSummary, type BulkStage, type Instance } from "../../api";
+import { dismissBulk, useBulk, useInstances } from "../../data";
 import { Icon } from "../../ui/Icon";
 import { toastError } from "../../ui/Toast";
 import { accountName, Avatar } from "../accounts/shared";
@@ -20,15 +20,30 @@ const NOTE: Record<Kind, string> = {
   cancelled: "cancelled",
 };
 
-function steps({ stage, instanceId }: BulkItem) {
+function steps(stage: BulkStage, started: boolean, done: boolean) {
   // A started client that failed got past the ticket.
-  const at = stage.kind === "failed" ? (instanceId ? 1 : 0) : AT[stage.kind];
-  const live = stage.kind === "failed" ? "step step-fail" : "step step-done pulse";
+  const at = stage.kind === "failed" ? (started ? 1 : 0) : AT[stage.kind];
+  const live = stage.kind === "failed" ? "step step-fail" : done ? "step step-live" : "step step-live pulse";
   return STEPS.map((_, i) => (i < at ? "step step-done" : i === at ? live : "step"));
 }
 
-/** The running or last bulk launch, above Running clients. */
-export function BatchSection({ accounts }: { accounts: AccountSummary[] }) {
+/** A started client's stage from its tracked instance (as the backend mirrors it), so rows keep
+ * moving after the batch itself stopped. */
+function stageOf(i: Instance): BulkStage {
+  switch (i.state) {
+    case "starting":
+    case "joining":
+    case "inGame":
+      return { kind: i.state };
+    case "disconnected":
+      return { kind: "failed", message: i.note ?? "Disconnected" };
+    case "exited":
+      return { kind: "failed", message: i.note ?? "Closed" };
+  }
+}
+
+/** The running or last bulk launch, above Running clients. `onPick` picks accounts in Launch. */
+export function BatchSection({ accounts, onPick }: { accounts: AccountSummary[]; onPick: (ids: number[]) => void }) {
   const qc = useQueryClient();
   const p = useBulk().data;
   const instances = useInstances().data;
@@ -36,9 +51,16 @@ export function BatchSection({ accounts }: { accounts: AccountSummary[] }) {
   if (!p) return null;
 
   const byId = new Map(accounts.map((a) => [a.id, a]));
-  const jobs = new Map(instances?.map((i) => [i.id, i.jobId]));
-  const n = p.items.length;
-  const inGame = p.items.filter((i) => i.stage.kind === "inGame").length;
+  const live = new Map(instances?.map((i) => [i.id, i]));
+  const items = p.items.map((item) => {
+    const inst = item.instanceId ? live.get(item.instanceId) : undefined;
+    const running = item.stage.kind === "starting" || item.stage.kind === "joining" || item.stage.kind === "inGame";
+    return { ...item, stage: inst && running ? stageOf(inst) : item.stage, job: inst?.jobId ?? null };
+  });
+  const n = items.length;
+  const inGame = items.filter((i) => i.stage.kind === "inGame").length;
+  const failed = items.filter((i) => i.stage.kind === "failed").length;
+  const rest = items.filter((i) => i.stage.kind === "cancelled" || (i.stage.kind === "failed" && !i.instanceId)).map((i) => i.accountId);
   const target = describeTarget(p.target);
   const summary = [target.kind, p.sameServer === "pickFirst" ? "same server" : p.sameServer === "followFirst" ? "following the first" : null, `${p.delayMs / 1000} s`]
     .filter(Boolean)
@@ -58,7 +80,7 @@ export function BatchSection({ accounts }: { accounts: AccountSummary[] }) {
           <span id="batch-label" className="label">Batch</span>
           <span className="mono text-xs text-dim truncate" title={target.detail}>{summary}</span>
           {p.done ? (
-            <button className="wc w-7 h-7 ml-auto" aria-label="Dismiss batch" title="Dismiss" onClick={() => qc.setQueryData(qk.bulk, null)}>
+            <button className="wc w-7 h-7 ml-auto" aria-label="Dismiss batch" title="Dismiss" onClick={() => dismissBulk(qc, p.batchId)}>
               <Icon name="x" size={10} />
             </button>
           ) : (
@@ -69,12 +91,24 @@ export function BatchSection({ accounts }: { accounts: AccountSummary[] }) {
         </div>
         <div className="flex items-baseline gap-2" role="status">
           <span className="mono text-[26px] font-medium">{inGame}/{n}</span>
-          <span className="text-dim">in game{p.done ? " · finished" : ""}</span>
+          <span className="text-dim">
+            in game{failed ? ` · ${failed} failed` : ""}
+            {p.done ? " · finished" : ""}
+          </span>
         </div>
         <div className="h-0.5 bg-line">
           <div className="h-0.5 bg-accent-text transition-[width] duration-500" style={{ width: `${(inGame / (n || 1)) * 100}%` }} />
         </div>
-        {p.stopped && <p className="alert">{p.stopped}</p>}
+        {p.stopped && (
+          <div className="flex flex-col items-start gap-2">
+            <p role="alert" className="alert">{p.stopped}</p>
+            {rest.length > 0 && (
+              <button className="btn btn-sm" onClick={() => onPick(rest)}>
+                Pick the {rest.length === 1 ? "account" : `${rest.length} accounts`} that didn't launch
+              </button>
+            )}
+          </div>
+        )}
         {p.note && <p className="text-xs text-dim">{p.note}</p>}
       </div>
       <div aria-hidden="true" className="mono grid grid-cols-[minmax(0,1fr)_132px] gap-x-4 px-5 pt-2 text-[9px] text-dim">
@@ -84,10 +118,10 @@ export function BatchSection({ accounts }: { accounts: AccountSummary[] }) {
         </span>
       </div>
       <ol className="scroll max-h-[40vh]">
-        {p.items.map((item) => {
+        {items.map((item) => {
           const a = byId.get(item.accountId);
           const st = item.stage;
-          const job = item.instanceId ? jobs.get(item.instanceId) : null;
+          const job = item.job;
           const note = st.kind === "failed" ? `failed · ${st.message}` : `${NOTE[st.kind]}${st.kind === "inGame" && job ? ` · job ${job.slice(0, 8)}` : ""}`;
           return (
             <li
@@ -99,7 +133,7 @@ export function BatchSection({ accounts }: { accounts: AccountSummary[] }) {
                 <span className="truncate font-medium">{a ? accountName(a) : `Account ${item.accountId}`}</span>
               </span>
               <span aria-hidden="true" className="grid grid-cols-4 gap-[3px]">
-                {steps(item).map((c, i) => <span key={i} className={c} />)}
+                {steps(st, !!item.instanceId, p.done).map((c, i) => <span key={i} className={c} />)}
               </span>
               <span className={`mono col-span-2 pl-[30px] text-xs ${st.kind === "failed" ? "text-orange" : st.kind === "inGame" ? "text-text" : "text-dim"}`}>
                 {note}

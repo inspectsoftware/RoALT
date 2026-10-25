@@ -93,12 +93,12 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
   const fav = draft.favId === null ? undefined : favourites.data?.find((f) => f.id === draft.favId);
   // A parse that hasn't caught up yet is launchable: resolveTarget parses again.
   const pending = !!text.trim() && draft.parsed?.text !== text;
-  const blocked = !bulk
-    ? null
-    : !multi?.active
-      ? (multi?.enabled && multi.message) || "Turn on multi-instance to launch several accounts."
-      : batch && !batch.done
-        ? "A batch is still running."
+  // Launches go one at a time: a running batch blocks single launches too.
+  const blocked =
+    batch && !batch.done
+      ? "A batch is still running."
+      : bulk && !multi?.active
+        ? (multi?.enabled && multi.message) || "Turn on multi-instance to launch several accounts."
         : null;
   const canLaunch = !!account && (usableTarget || pending) && !step && !blocked;
 

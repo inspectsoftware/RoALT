@@ -19,6 +19,7 @@ const MAX_ENDED: usize = 30;
 const LOG_SKEW_SECS: u64 = 3;
 /// The note of a client whose log signed in as a different user than its account.
 pub const WRONG_ACCOUNT: &str = "Signed in as another account";
+pub const CHALLENGED: &str = "Roblox wants a human check";
 
 pub struct Tracker {
     inner: Mutex<Vec<Entry>>,
@@ -333,7 +334,7 @@ fn state_of(facts: &LogFacts, bound: bool, ended: bool, closing: bool, expected_
     } else if matches!((facts.user_id, expected_user), (Some(got), Some(want)) if got != want) {
         Some(WRONG_ACCOUNT)
     } else if facts.challenged {
-        Some("Roblox wants a human check")
+        Some(CHALLENGED)
     } else {
         None
     };

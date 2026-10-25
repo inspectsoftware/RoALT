@@ -375,13 +375,13 @@ async function runBatch(b: BulkProgress, favouriteId: number | null) {
     }
     prev = i;
   }
-  if (batchCancel) {
-    for (const item of b.items) if (item.stage.kind === "queued") item.stage = { kind: "cancelled" };
-    b.stopped = "Cancelled";
-    bulkChanged();
-  }
+  // As the backend: a stopped batch is done at once; otherwise it waits for its clients to settle.
   const settling = (s: BulkStage) => s.kind === "ticket" || s.kind === "starting" || s.kind === "joining";
-  await until(() => !b.items.some((x) => settling(x.stage)), 120_000);
+  if (!batchCancel) await until(() => batchCancel || !b.items.some((x) => settling(x.stage)), 120_000);
+  if (batchCancel) {
+    for (const item of b.items) if (item.stage.kind === "queued" || item.stage.kind === "ticket") item.stage = { kind: "cancelled" };
+    b.stopped = "Cancelled";
+  }
   b.done = true;
   bulkChanged();
 }
@@ -394,6 +394,8 @@ function startBatch(r: BulkRequest) {
     const a = find(id);
     if (!a) return fail("notFound", "Not found.");
     if (a.status !== "valid") return fail("invalid", `${a.alias || a.displayName} can't launch: sign in to it again.`);
+    const live = instances.some((i) => i.accountId === id && (i.state === "starting" || i.state === "joining" || i.state === "inGame"));
+    if (live) return fail("invalid", `${a.alias || a.displayName} is already running. Untick it or close its client first.`);
   }
   if (batch && !batch.done) return fail("invalid", "A batch is already running.");
   retakeLock();
@@ -517,6 +519,7 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
         : { userId: 7000000000 + name.length * 7919, username: name, displayName: name.replace(/_/g, " ") };
     }
     case "launch": {
+      if (batch && !batch.done) return fail("invalid", "A batch is still running.");
       await sleep(1200);
       const a = find(args.accountId);
       if (!a) return fail("notFound", "Not found.");

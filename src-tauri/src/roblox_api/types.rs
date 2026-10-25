@@ -54,14 +54,40 @@ pub struct Data<T> {
     pub data: Vec<T>,
 }
 
-/// A row of `games.roblox.com/v1/games?universeIds=`.
+/// A row of `games.roblox.com/v1/games?universeIds=` as sent. Anything may be null or missing
+/// (`universeAvatarType` is a string against the spec's int: never read). Rows without id or
+/// rootPlaceId are dropped by the caller.
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Game {
-    pub id: i64,
+    pub id: Option<i64>,
+    pub root_place_id: Option<i64>,
+    pub name: Option<String>,
+    pub creator: Option<Party>,
+    pub playing: Option<i64>,
+    pub visits: Option<i64>,
+    pub max_players: Option<i32>,
+    pub create_vip_servers_allowed: Option<bool>,
+}
+
+/// A game's `creator` or a private server's `owner`.
+#[derive(Deserialize, Debug)]
+pub struct Party {
+    pub id: Option<i64>,
+    pub name: Option<String>,
+}
+
+/// A row of `games.roblox.com/v1/games?universeIds=` with what the server browser shows.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct GameDetails {
+    pub universe_id: i64,
     pub root_place_id: i64,
-    #[serde(default)]
     pub name: String,
+    pub creator: String,
+    pub playing: i64,
+    pub visits: i64,
+    pub max_players: i32,
+    pub private_servers: bool,
 }
 
 /// `thumbnails.roblox.com/v1/users/avatar-headshot` (and `/v1/batch`).
@@ -207,4 +233,29 @@ pub struct ServerRow {
     pub fps: Option<f64>,
     pub ping: Option<i64>,
     pub friend_count: Option<i32>,
+}
+
+/// `games.roblox.com/v1/games/{placeId}/private-servers` (EXPERIMENTAL; no signed-in recording
+/// exists, so this follows the documented shape and accepts anything missing). No `Debug`:
+/// rows carry access codes.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivateServerList {
+    pub data: Option<Vec<PrivateServerRow>>,
+    pub next_page_cursor: Option<String>,
+    pub game_join_restricted: Option<bool>,
+}
+
+/// Rows without `vipServerId` are dropped by the caller. `accessCode` is a join secret.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivateServerRow {
+    pub vip_server_id: Option<i64>,
+    pub name: Option<String>,
+    pub owner: Option<Party>,
+    pub playing: Option<i32>,
+    pub max_players: Option<i32>,
+    /// The job id while it runs.
+    pub id: Option<String>,
+    pub access_code: Option<String>,
 }

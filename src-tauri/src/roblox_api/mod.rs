@@ -28,8 +28,8 @@ use zeroize::Zeroizing;
 use crate::error::{AppError, Result};
 use crate::vault::Secret;
 use types::{
-    AuthenticatedUser, Data, FriendOnline, Game, Presences, Profiles, ServerList, ShareLinkResolution, ShareLinkV2,
-    SocialCounts, Thumbnails, TwoStepConfig, UserDetails, UserPresence,
+    AuthenticatedUser, Data, FriendOnline, Game, GameDetails, Presences, PrivateServerList, Profiles, ServerList,
+    ShareLinkResolution, ShareLinkV2, SocialCounts, Thumbnails, TwoStepConfig, UserDetails, UserPresence,
 };
 
 /// Called with `(account_id, new cookie)` when Roblox rotates a stored account's cookie.
@@ -122,7 +122,7 @@ impl Client {
                     Err(_) if retry > 0 => break,
                     Err(e) => return Err(e),
                 };
-                pending = sort_headshots(page, &mut out);
+                pending = sort_thumbnails(page, &mut out);
                 if pending.is_empty() {
                     break;
                 }
@@ -245,13 +245,7 @@ impl Client {
     /// `GET games.roblox.com/v1/games?universeIds=<csv ≤50>` (no cookie) → universe id →
     /// (root place id, game name). Unknown universes are absent.
     pub async fn universe_root_places(&self, universe_ids: &[i64]) -> Result<HashMap<i64, (i64, String)>> {
-        let mut out = HashMap::new();
-        for chunk in valid_ids(universe_ids).chunks(50) {
-            let url = endpoints::fill(endpoints::GAMES, csv(chunk));
-            let page: Data<Game> = self.get(endpoints::GAMES, &url, 0, None).await?;
-            out.extend(page.data.into_iter().map(|g| (g.id, (g.root_place_id, g.name))));
-        }
-        Ok(out)
+        Ok(self.games(universe_ids).await?.into_iter().map(|g| (g.universe_id, (g.root_place_id, g.name))).collect())
     }
 
     /// `POST users.roblox.com/v1/usernames/users {usernames ≤200, excludeBannedUsers:true}`
@@ -313,7 +307,8 @@ impl Client {
         let list: ServerList = self.get(route, &url, account_id, cookie).await?;
         let servers = list.data.unwrap_or_default().into_iter().filter_map(|r| {
             Some(GameServer {
-                id: r.id.filter(|id| !id.is_empty())?,
+                // A job id goes into a launch URI: GUIDs only (DESIGN §6).
+                id: r.id.filter(|id| crate::launcher::target::is_uuid(id))?,
                 playing: r.playing?,
                 max_players: r.max_players?,
                 fps: r.fps,
@@ -322,6 +317,94 @@ impl Client {
             })
         });
         Ok(ServerPage { servers: servers.collect(), next_cursor: list.next_page_cursor.filter(|c| !c.is_empty()) })
+    }
+
+    /// `GET apis.roblox.com/universes/v1/places/{placeId}/universe` (no cookie): the place's
+    /// universe; `{"universeId": null}` (unknown place) → None, as is an id ≤ 0 (no call).
+    pub async fn place_universe(&self, place_id: i64) -> Result<Option<i64>> {
+        if place_id <= 0 {
+            return Ok(None);
+        }
+        let route = endpoints::PLACE_UNIVERSE;
+        field(self.get(route, &endpoints::fill(route, place_id), 0, None).await?, "universeId")
+    }
+
+    /// `GET games.roblox.com/v1/games?universeIds=` (no cookie, ≤50 per call, the existing
+    /// `GAMES` endpoint) with everything `GameInfo` needs: id, rootPlaceId, name, creator.name,
+    /// playing, visits, maxPlayers, createVipServersAllowed. Lenient: missing or null fields
+    /// default; unknown universes, and rows without id or rootPlaceId, are absent.
+    pub async fn games(&self, universe_ids: &[i64]) -> Result<Vec<GameDetails>> {
+        let mut out = Vec::new();
+        for chunk in valid_ids(universe_ids).chunks(50) {
+            let url = endpoints::fill(endpoints::GAMES, csv(chunk));
+            let page: Data<Game> = self.get(endpoints::GAMES, &url, 0, None).await?;
+            out.extend(page.data.into_iter().filter_map(|g| {
+                Some(GameDetails {
+                    universe_id: g.id?,
+                    root_place_id: g.root_place_id?,
+                    name: g.name.unwrap_or_default(),
+                    creator: g.creator.and_then(|c| c.name).unwrap_or_default(),
+                    playing: g.playing.unwrap_or_default(),
+                    visits: g.visits.unwrap_or_default(),
+                    max_players: g.max_players.unwrap_or_default(),
+                    private_servers: g.create_vip_servers_allowed.unwrap_or_default(),
+                })
+            }));
+        }
+        Ok(out)
+    }
+
+    /// `GET thumbnails.roblox.com/v1/places/gameicons?placeIds=..` (no cookie, `PLACE_ICONS`):
+    /// place id → image URL for `Completed` icons (matched by `targetId`, not by order).
+    pub async fn place_icons(&self, place_ids: &[i64]) -> Result<HashMap<i64, String>> {
+        let mut out = HashMap::new();
+        for chunk in valid_ids(place_ids).chunks(100) {
+            let url = endpoints::fill(endpoints::PLACE_ICONS, csv(chunk));
+            sort_thumbnails(self.get(endpoints::PLACE_ICONS, &url, 0, None).await?, &mut out);
+        }
+        Ok(out)
+    }
+
+    /// `GET games.roblox.com/v1/games/{placeId}/private-servers?cursor=..` with the account's
+    /// cookie (Roblox only answers signed in). Lenient parsing: `data[]` rows with `vipServerId`,
+    /// `name`, `owner{id,name}`, `playing`, `maxPlayers`, `id` (job id, may be absent),
+    /// `accessCode` (only present when this account can join), `nextPageCursor`,
+    /// `gameJoinRestricted`. Job ids and access codes that aren't GUIDs are dropped.
+    pub async fn private_servers(
+        &self,
+        account_id: i64,
+        cookie: &Secret,
+        place_id: i64,
+        cursor: Option<&str>,
+    ) -> Result<crate::model::PrivateServerPage> {
+        use crate::launcher::target::is_uuid;
+        use crate::model::{PrivateServer, PrivateServerPage};
+        let route = endpoints::SERVERS_PRIVATE;
+        // The query the website sends.
+        let mut url = endpoints::fill(route, place_id) + "?sortOrder=Desc&excludeFullGames=false";
+        if let Some(c) = cursor.filter(|c| !c.is_empty()) {
+            url.push_str("&cursor=");
+            url.push_str(&crate::launcher::uri::encode(c));
+        }
+        let list: PrivateServerList = self.get(route, &url, account_id, Some(cookie)).await?;
+        let servers = list.data.unwrap_or_default().into_iter().filter_map(|r| {
+            let (owner_id, owner_name) = r.owner.map_or((None, None), |o| (o.id, o.name));
+            Some(PrivateServer {
+                vip_server_id: r.vip_server_id?,
+                name: r.name.unwrap_or_default(),
+                owner_id,
+                owner_name,
+                playing: r.playing.unwrap_or_default(),
+                max_players: r.max_players.unwrap_or_default(),
+                job_id: r.id.filter(|id| is_uuid(id)),
+                access_code: r.access_code.filter(|code| is_uuid(code)),
+            })
+        });
+        Ok(PrivateServerPage {
+            servers: servers.collect(),
+            next_cursor: list.next_page_cursor.filter(|c| !c.is_empty()),
+            join_restricted: list.game_join_restricted.unwrap_or_default(),
+        })
     }
 
     /// One API call with throttle, CSRF retry, 429 backoff and cookie rotation.
@@ -560,12 +643,13 @@ fn csv(ids: &[i64]) -> String {
     ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
 }
 
-/// Keeps Completed rows with a URL in `out`; returns the ids still Pending.
-fn sort_headshots(page: Thumbnails, out: &mut HashMap<i64, String>) -> Vec<i64> {
+/// Keeps Completed rows with a URL in `out` (by `targetId`); returns the ids still Pending.
+fn sort_thumbnails(page: Thumbnails, out: &mut HashMap<i64, String>) -> Vec<i64> {
     let mut pending = Vec::new();
     for t in page.data {
         match (t.state.as_str(), t.image_url) {
-            ("Completed", Some(url)) if !url.is_empty() => {
+            // The UI loads these as images: Roblox's CDN only.
+            ("Completed", Some(url)) if is_rbxcdn(&url) => {
                 out.insert(t.target_id, url);
             }
             ("Pending", _) => pending.push(t.target_id),
@@ -573,6 +657,11 @@ fn sort_headshots(page: Thumbnails, out: &mut HashMap<i64, String>) -> Vec<i64> 
         }
     }
     pending
+}
+
+/// An https URL on *.rbxcdn.com.
+fn is_rbxcdn(url: &str) -> bool {
+    Url::parse(url).is_ok_and(|u| u.scheme() == "https" && u.host_str().is_some_and(|h| h.ends_with(".rbxcdn.com")))
 }
 
 /// Names of the enabled 2-step methods; recovery codes and the password don't count.

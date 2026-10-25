@@ -206,9 +206,12 @@
     color: var(--dim);
     white-space: nowrap;
   }
-  .seg:hover {
+  .seg:hover:not(:disabled) {
     color: var(--text);
     background: var(--hover);
+  }
+  .seg:disabled {
+    opacity: 0.45;
   }
   .seg[aria-pressed="true"] {
     background: var(--text);
@@ -251,7 +254,8 @@
     white-space: nowrap;
   }
 
-  .cb {
+  .cb,
+  .radio {
     appearance: none;
     margin: 0;
     width: 14px;
@@ -262,8 +266,21 @@
     display: grid;
     place-content: center;
   }
-  .cb:hover {
+  .cb:hover,
+  .radio:hover:not(:disabled) {
     border-color: var(--dim);
+  }
+  .radio:checked {
+    border-color: var(--text);
+  }
+  .radio:disabled {
+    opacity: 0.45;
+  }
+  .radio:checked::after {
+    content: "";
+    width: 6px;
+    height: 6px;
+    background: var(--text);
   }
   .cb:checked {
     background: var(--on);

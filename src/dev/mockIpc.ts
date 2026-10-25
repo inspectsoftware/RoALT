@@ -6,11 +6,14 @@
 // Launched clients start, join and play on timers; one fake Roblox client is already running,
 // so turning multi-instance on first asks to close it.
 // A bulk launch runs on timers too; "AFK 1" fails in it the same way and the batch goes on.
+// Servers: place 1 doesn't exist; Mega Obby (7719004215) sells no private servers; "Builder" may
+// not join private servers. Without an account the public list allows 3 requests a minute, as Roblox does.
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type {
-  AccountInfo, AccountStatus, AccountSummary, BulkProgress, BulkRequest, BulkStage, Favourite, GameServer, Group, Instance, JoinCandidate,
-  LaunchTarget, MultiInstanceStatus, ParsedInput, Presence, ServerOrder, ServerPage, Settings, VaultMode,
+  AccountInfo, AccountStatus, AccountSummary, BulkProgress, BulkRequest, BulkStage, Favourite, GameInfo, GameServer, Group, Instance,
+  JoinCandidate, LaunchTarget, MultiInstanceStatus, ParsedInput, Presence, PrivateServer, PrivateServerPage, ServerOrder, ServerPage,
+  Settings, VaultMode,
 } from "../api";
 
 const MIN = 60_000;
@@ -316,7 +319,47 @@ function serverPage(placeId: number, order: ServerOrder, excludeFull: boolean, l
   };
   const list = fakeServers(placeId).filter((s) => !excludeFull || s.playing < s.maxPlayers).sort(by[order]);
   const from = Number(cursor) || 0;
-  return { servers: list.slice(from, from + limit), nextCursor: from + limit < list.length ? String(from + limit) : null };
+  // Pages overlap by 3, as Roblox's repeat servers.
+  return { servers: list.slice(from, from + limit), nextCursor: from + limit < list.length ? String(from + limit - 3) : null };
+}
+
+// ---------- M6: server browser ----------
+
+const SIGNED_IN_ONLY = "Pick an account to sort by Recommended or Best latency: Roblox only does that for a signed-in account.";
+const ISLAND = `data:image/svg+xml,${encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#7AB0FF"/><rect x="10" y="34" width="44" height="10" fill="#2E7D5B"/><rect x="18" y="44" width="28" height="8" fill="#8D5524"/><rect x="40" y="12" width="10" height="10" fill="#FFDBAC"/></svg>`,
+)}`;
+const GAMES: Record<number, [name: string, creator: string, universeId: number]> = {
+  4410028153: ["Sky Islands", "Sky Islands Team", 1559201384],
+  7719004215: ["Mega Obby", "ObbyWorks", 2650339475],
+};
+function fakeGame(placeId: number): GameInfo {
+  const [name, creator, universeId] = GAMES[placeId] ?? [`Test Place ${placeId}`, "RoALT Dev", 1_000_000 + (placeId % 9_000_000)];
+  return {
+    placeId, universeId, rootPlaceId: placeId, name, creator, maxPlayers: 12,
+    playing: fakeServers(placeId).reduce((n, s) => n + s.playing, 0), visits: (placeId % 997) * 1_000_003,
+    iconUrl: placeId === SKY.placeId ? ISLAND : null, privateServers: placeId !== OBBY.placeId,
+  };
+}
+let guest = { minute: 0, calls: 0 };
+/** Roblox's guest limit on the server list: 3 a minute, on a window aligned to the clock minute. */
+function guestLimited() {
+  const minute = Math.floor(Date.now() / MIN);
+  guest = guest.minute === minute ? { minute, calls: guest.calls + 1 } : { minute, calls: 1 };
+  return guest.calls > 3 ? Math.ceil(((minute + 1) * MIN - Date.now()) / 1000) : 0;
+}
+function privatePage(placeId: number, a: AccountSummary): PrivateServerPage {
+  const s = (vipServerId: number, name: string, ownerName: string | null, playing: number, maxPlayers: number, joinable: boolean): PrivateServer => ({
+    vipServerId, name, ownerId: ownerName ? 1_000_000 + vipServerId : null, ownerName, playing, maxPlayers,
+    jobId: playing ? crypto.randomUUID() : null, accessCode: joinable ? crypto.randomUUID() : null,
+  });
+  const servers = placeId === OBBY.placeId ? [] : [
+    s(70011, "Nova's VIP", "nova_builds", 3, 12, true),
+    s(70012, "Trade hub", "lunatrades", 0, 12, true),
+    s(70013, "Kai's friends only", "skyrunner_k", 11, 12, false),
+    s(70014, "", null, 2, 8, false),
+  ];
+  return { servers, nextCursor: null, joinRestricted: a.username === "studio_nova" };
 }
 
 async function runBatch(b: BulkProgress, favouriteId: number | null) {
@@ -578,9 +621,37 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       return null;
     case "bulk_current":
       return batch && structuredClone(batch);
-    case "servers_list":
+    case "servers_list": {
       await sleep(500);
+      if (![10, 25, 50, 100].includes(args.limit)) return fail("invalid", "A server page holds 10, 25, 50 or 100 servers.");
+      if (args.accountId == null) {
+        const wait = guestLimited();
+        if (wait) return fail("rateLimited", `Roblox is limiting requests. Try again in ${wait} s.`);
+        if (args.order === "recommended" || args.order === "bestLatency") return fail("invalid", SIGNED_IN_ONLY);
+      }
+      if (args.placeId === 1) return fail("notFound", "Not found.");
       return serverPage(args.placeId, args.order, args.excludeFull, args.limit, args.cursor);
+    }
+    case "game_info":
+      await sleep(400);
+      return args.placeId === 1 ? fail("notFound", "Not found.") : fakeGame(args.placeId);
+    case "target_place": {
+      await sleep(300);
+      const t: LaunchTarget = args.target;
+      if ("placeId" in t) return t.placeId;
+      if (t.kind === "universe") return 4410028153;
+      if (t.kind === "followUser") return fail("invalid", "That link doesn't lead to a game.");
+      if (!args.accountId) return fail("invalid", "Pick an account first: share links open as an account.");
+      return 4410028153;
+    }
+    case "private_servers_list": {
+      await sleep(500);
+      const a = find(args.accountId);
+      if (!a) return fail("notFound", "Not found.");
+      if (a.status !== "valid") return fail("cookieInvalid", EXPIRED);
+      if (args.placeId === 1) return fail("notFound", "Not found.");
+      return privatePage(args.placeId, a);
+    }
 
     case "groups_list":
       return structuredClone(groups);

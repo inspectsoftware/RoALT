@@ -25,7 +25,7 @@ function uptime(from: number, to: number) {
 }
 
 /** Re-renders every `ms` so uptimes move. */
-function useNow(ms: number) {
+export function useNow(ms: number) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), ms);

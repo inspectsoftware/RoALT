@@ -23,6 +23,7 @@ const paths = {
   key: <><rect x="1.5" y="5.5" width="5" height="5" /><path d="M6.5 8h8M11.5 8v3M14 8v2" /></>,
   chevron: <path d="M4 6l4 4 4-4" />,
   play: <path d="M4 2.5l9 5.5-9 5.5z" strokeLinejoin="round" />,
+  servers: <><rect x="2" y="2" width="12" height="5" /><rect x="2" y="9" width="12" height="5" /><path d="M5 4.5h1M5 11.5h1" /></>,
   grip: (
     <g fill="currentColor" stroke="none">
       <rect x="5" y="3" width="2" height="2" /><rect x="9" y="3" width="2" height="2" />

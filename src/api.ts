@@ -11,6 +11,7 @@ import type { ConflictPolicy } from "./bindings/ConflictPolicy";
 import type { ErrorPayload } from "./bindings/ErrorPayload";
 import type { Favourite } from "./bindings/Favourite";
 import type { FavouriteInput } from "./bindings/FavouriteInput";
+import type { GameInfo } from "./bindings/GameInfo";
 import type { Group } from "./bindings/Group";
 import type { GroupInput } from "./bindings/GroupInput";
 import type { Headshot } from "./bindings/Headshot";
@@ -21,6 +22,7 @@ import type { LaunchInfo } from "./bindings/LaunchInfo";
 import type { LaunchTarget } from "./bindings/LaunchTarget";
 import type { MultiInstanceStatus } from "./bindings/MultiInstanceStatus";
 import type { ParsedInput } from "./bindings/ParsedInput";
+import type { PrivateServerPage } from "./bindings/PrivateServerPage";
 import type { ServerOrder } from "./bindings/ServerOrder";
 import type { ServerPage } from "./bindings/ServerPage";
 import type { Settings } from "./bindings/Settings";
@@ -32,7 +34,7 @@ import type { VaultStatus } from "./bindings/VaultStatus";
 export type {
   AccountInfo, AccountPresence, Headshot,
   Favourite, FavouriteInput, JoinCandidate, LaunchInfo, LaunchTarget, ParsedInput, UserRef,
-  Instance, MultiInstanceStatus, BulkProgress, BulkRequest, ServerOrder, ServerPage,
+  Instance, MultiInstanceStatus, BulkProgress, BulkRequest, ServerOrder, ServerPage, GameInfo, PrivateServerPage,
   AccountPatch, AccountSummary, ConflictPolicy, ErrorPayload, Group, GroupInput,
   ImportReport, Settings, SettingsPatch, VaultMode, VaultStatus,
 };
@@ -41,6 +43,7 @@ export type { BulkItem } from "./bindings/BulkItem";
 export type { BulkStage } from "./bindings/BulkStage";
 export type { Density } from "./bindings/Density";
 export type { GameServer } from "./bindings/GameServer";
+export type { PrivateServer } from "./bindings/PrivateServer";
 export type { SameServer } from "./bindings/SameServer";
 export type { InstanceState } from "./bindings/InstanceState";
 export type { Presence } from "./bindings/Presence";
@@ -113,6 +116,11 @@ export const api = {
   bulkCurrent: () => invoke<BulkProgress | null>("bulk_current"),
   serversList: (placeId: number, order: ServerOrder, excludeFull: boolean, limit: 10 | 25 | 50 | 100, cursor?: string, accountId?: number) =>
     invoke<ServerPage>("servers_list", { placeId, order, excludeFull, limit, cursor, accountId }),
+  gameInfo: (placeId: number) => invoke<GameInfo>("game_info", { placeId }),
+  /** The place a target leads to (universes, share links with the account's cookie). */
+  targetPlace: (target: LaunchTarget, accountId?: number) => invoke<number>("target_place", { target, accountId }),
+  privateServersList: (placeId: number, accountId: number, cursor?: string) =>
+    invoke<PrivateServerPage>("private_servers_list", { placeId, accountId, cursor }),
 
   groupsList: () => invoke<Group[]>("groups_list"),
   groupSave: (input: GroupInput) => invoke<Group>("group_save", { input }),

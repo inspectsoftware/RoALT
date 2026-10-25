@@ -31,6 +31,10 @@ pub const FRIENDS_ONLINE: &str = "https://friends.roblox.com/v1/users/{}/friends
 
 // Servers (query string appended by the caller).
 pub const SERVERS_PUBLIC: &str = "https://games.roblox.com/v2/games/{}/servers/Public";
+pub const SERVERS_PRIVATE: &str = "https://games.roblox.com/v1/games/{}/private-servers";
+pub const PLACE_UNIVERSE: &str = "https://apis.roblox.com/universes/v1/places/{}/universe";
+pub const PLACE_ICONS: &str =
+    "https://thumbnails.roblox.com/v1/places/gameicons?placeIds={}&returnPolicy=PlaceHolder&size=150x150&format=Png&isCircular=false";
 
 /// `template` with its `{}` replaced by `value`.
 pub fn fill(template: &str, value: impl std::fmt::Display) -> String {

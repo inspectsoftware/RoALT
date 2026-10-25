@@ -20,6 +20,8 @@ const LOG_SKEW_SECS: u64 = 3;
 /// The note of a client whose log signed in as a different user than its account.
 pub const WRONG_ACCOUNT: &str = "Signed in as another account";
 pub const CHALLENGED: &str = "Roblox wants a human check";
+/// The note of a client that ended without RoALT closing it and with nothing else to blame.
+const UNEXPECTED: &str = "Closed unexpectedly";
 
 pub struct Tracker {
     inner: Mutex<Vec<Entry>>,
@@ -46,6 +48,8 @@ struct Entry {
     in_game_at: Option<i64>,
     /// Unix ms the bootstrapper of a not yet adopted entry was first seen gone.
     gone_at: Option<i64>,
+    /// Ended and already looked at by `take_rejoins`.
+    rejoin_seen: bool,
 }
 
 impl Tracker {
@@ -87,6 +91,7 @@ impl Tracker {
             closing: false,
             in_game_at: None,
             gone_at: None,
+            rejoin_seen: false,
         });
         inst
     }
@@ -131,15 +136,24 @@ impl Tracker {
 
     /// How many auto-rejoins led to the client `id` (shown in the UI, capped by `take_rejoins`).
     pub fn set_rejoins(&self, id: &str, rejoins: u32) {
-        let _ = (id, rejoins);
-        todo!()
+        if let Some(e) = self.entries().iter_mut().find(|e| e.inst.id == id) {
+            e.inst.rejoins = rejoins;
+        }
     }
 
     /// Clients that ended unexpectedly since the last call and may be rejoined (`wants_rejoin`),
     /// each returned once. Drained whether or not auto-rejoin is on, so turning it on later
     /// doesn't relaunch old exits.
     pub fn take_rejoins(&self) -> Vec<Rejoin> {
-        todo!()
+        let mut out = Vec::new();
+        for e in self.entries().iter_mut().filter(|e| e.inst.state == InstanceState::Exited && !e.rejoin_seen) {
+            e.rejoin_seen = true;
+            if wants_rejoin(&e.inst) {
+                let i = &e.inst;
+                out.push(Rejoin { from: i.id.clone(), account_id: i.account_id, target: i.target.clone(), rejoins: i.rejoins + 1 });
+            }
+        }
+        out
     }
 
     /// Forgets ended entries.
@@ -162,19 +176,20 @@ impl Tracker {
             loop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 let handle = app.clone();
-                let changed = tauri::async_runtime::spawn_blocking(move || {
+                let (changed, rejoins) = tauri::async_runtime::spawn_blocking(move || {
                     let s = handle.state::<crate::App>();
                     let user_of = |account_id| s.db.account(account_id).ok().map(|a| a.user_id);
                     let changed = s.tracker.poll(logwatch::logs_dir().as_deref(), &Live, &user_of, crate::commands::now_ms());
                     // The shared login files are held only while RoALT's clients run (or launch).
                     s.multi.release_if(|| !s.tracker.any_running());
-                    changed
+                    (changed, s.tracker.take_rejoins())
                 })
                 .await
-                .unwrap_or(false);
+                .unwrap_or_default();
                 if changed {
                     crate::commands::instances_changed(&app);
                 }
+                super::rejoin::handle(&app, rejoins);
             }
         });
     }
@@ -230,8 +245,7 @@ pub struct Rejoin {
 /// not closed by the user, not replaced, not a wrong account or a human check) and has had
 /// fewer than `MAX_REJOINS` rejoins.
 pub fn wants_rejoin(inst: &Instance) -> bool {
-    let _ = inst;
-    todo!()
+    inst.state == InstanceState::Exited && inst.note.as_deref() == Some(UNEXPECTED) && inst.rejoins < MAX_REJOINS
 }
 
 impl Default for Tracker {
@@ -375,7 +389,7 @@ fn state_of(facts: &LogFacts, bound: bool, ended: bool, closing: bool, expected_
         None
     };
     if ended {
-        let note = if closing { "Closed" } else { problem.unwrap_or("Closed unexpectedly") };
+        let note = if closing { "Closed" } else { problem.unwrap_or(UNEXPECTED) };
         return (InstanceState::Exited, Some(note.into()));
     }
     let state = if facts.disconnected {
@@ -772,6 +786,53 @@ mod tests {
         assert_eq!(t.mark_closing(&id), None);
         std::fs::remove_dir_all(&dir).unwrap();
         std::fs::remove_dir_all(&empty).unwrap();
+    }
+
+    #[test]
+    fn rejoins_only_unexpected_exits_up_to_three_times() {
+        let base = Tracker::new().register(&info(100, 0, false), target());
+        let ended = |note: &str, rejoins| Instance { state: Exited, note: Some(note.into()), rejoins, ..base.clone() };
+        assert!(wants_rejoin(&ended("Closed unexpectedly", 0)));
+        assert!(wants_rejoin(&ended("Closed unexpectedly", 2)));
+        assert!(!wants_rejoin(&ended("Closed unexpectedly", 3)));
+        assert!(!wants_rejoin(&ended("Closed unexpectedly", 9)));
+        for n in ["Closed", "Replaced by another Roblox client", WRONG_ACCOUNT, CHALLENGED] {
+            assert!(!wants_rejoin(&ended(n, 0)), "{n}");
+        }
+        for state in [Starting, Joining, InGame, Disconnected] {
+            assert!(!wants_rejoin(&Instance { state, ..base.clone() }), "{state:?}");
+        }
+    }
+
+    #[test]
+    fn hands_out_each_unexpected_exit_once() {
+        let t = Tracker::new();
+        let start = now_ms();
+        let secs = (start / 1000) as u64;
+        let launch = |pid: u32, account_id: i64| LaunchInfo { account_id, browser_tracker_id: BTID + i64::from(pid), ..info(pid, start, false) };
+        let follow = LaunchTarget::FollowUser { user_id: 42 };
+        let crashed = t.register(&launch(100, 7), follow.clone()).id;
+        let closed = t.register(&launch(200, 1), target()).id;
+        let capped = t.register(&launch(300, 1), target()).id;
+        let running = t.register(&launch(400, 1), target()).id;
+        t.set_rejoins(&crashed, 2);
+        t.set_rejoins(&capped, MAX_REJOINS);
+        let procs = Fake::new(&[(100, secs), (200, secs), (300, secs), (400, secs)]);
+        t.poll(None, &procs, &user_of, start + 1_000);
+        assert!(t.take_rejoins().is_empty());
+
+        t.mark_closing(&closed);
+        procs.set(&[(400, secs)]);
+        // Never reached a game: gone for good after 120 s.
+        t.poll(None, &procs, &user_of, start + 121_000);
+        assert_eq!(state(&t, &closed).1, note("Closed"));
+        assert_eq!(state(&t, &capped).1, note("Closed unexpectedly"));
+        assert_eq!(t.take_rejoins(), vec![Rejoin { from: crashed.clone(), account_id: 7, target: follow, rejoins: 3 }]);
+        assert!(t.take_rejoins().is_empty());
+        t.poll(None, &procs, &user_of, start + 122_000);
+        assert!(t.take_rejoins().is_empty());
+        assert_eq!(t.get(&crashed).unwrap().rejoins, 2);
+        assert_eq!(state(&t, &running).0, Starting);
     }
 
     #[test]

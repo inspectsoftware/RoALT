@@ -107,7 +107,7 @@ pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget) -> Result<L
     let ticket = s.api.authentication_ticket(account_id, &cookie, assertion.as_ref()).await?;
     let (browser_tracker_id, started_at) = (uri::new_browser_tracker_id(), crate::commands::now_ms());
     let place = uri::PlaceLaunch { join: &join, browser_tracker_id, join_attempt_id: Uuid::new_v4() };
-    let pid = client::start(&exe, &uri::player_uri(&ticket, started_at, &place))?;
+    let (pid, pid_start) = client::start(&exe, &uri::player_uri(&ticket, started_at, &place))?;
     log::info!("launched account {account_id} (pid {pid}, bootstrapper: {})", exe.bootstrapper);
     Ok(LaunchInfo {
         account_id,
@@ -117,6 +117,7 @@ pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget) -> Result<L
         started_at,
         via_bootstrapper: exe.bootstrapper,
         warning: warning.map(str::to_owned),
+        pid_start: Some(pid_start),
     })
 }
 

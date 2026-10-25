@@ -68,8 +68,12 @@ const multiStatus = (): MultiInstanceStatus => {
     : "Multi-instance isn't active yet. Turn it off and on again to retry.";
   return { enabled: settings.multiInstance, active: lockHeld, protectSharedLogin: settings.protectSharedLogin, blockedBy, message };
 };
+// A client launched without the lock owns Roblox's singleton event; clients started under the
+// lock don't block taking it again.
+let eventHolder: string | null = null;
 const retakeLock = () => {
-  if (settings.multiInstance && !lockHeld && multiStatus().blockedBy.length === 0) lockHeld = true;
+  const holder = instances.some((i) => i.id === eventHolder && i.state !== "exited");
+  if (settings.multiInstance && !lockHeld && !strangerRunning && !holder) lockHeld = true;
 };
 function endInstance(id: string, note: string) {
   const i = instances.find((x) => x.id === id);
@@ -87,6 +91,7 @@ function track(accountId: number, pid: number, target: LaunchTarget, placeId: nu
     startedAt: Date.now(), endedAt: null, viaBootstrapper, note: null,
   };
   instances.push(i);
+  if (!lockHeld) eventHolder = i.id;
   instancesChanged();
   const step = (ms: number, f: () => void) => setTimeout(() => { if (i.state !== "exited") { f(); instancesChanged(); } }, ms);
   step(1500, () => { i.state = "joining"; });

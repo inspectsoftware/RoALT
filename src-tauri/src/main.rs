@@ -137,7 +137,12 @@ fn init(app: &TauriApp, data_dir: &Path) -> std::result::Result<(), String> {
     let theme = settings.theme;
     let multi = instances::multi::Multi::new();
     if settings.multi_instance
-        && let Err(e) = multi.enable()
+        && let Err(e) = multi.enable().inspect(|()| {
+            // Clients from before a restart keep their protection.
+            if settings.protect_shared_login && multi.has_survivors() {
+                multi.lock_shared();
+            }
+        })
     {
         // Roblox was already running: the UI shows why multi-instance is not active.
         log::info!("multi-instance not active at start: {e}");

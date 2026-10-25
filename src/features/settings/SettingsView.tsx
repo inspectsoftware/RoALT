@@ -1,11 +1,11 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { open as openFile, save as saveFile } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { api, asError, type ConflictPolicy, type ImportReport, type Settings, type VaultStatus } from "../../api";
+import { api, asError, type ConflictPolicy, type ImportReport, type RobloxClient, type Settings, type VaultStatus } from "../../api";
 import { qk, useMultiStatus, useSetSettings } from "../../data";
 import { NumberField, Segmented, Switch } from "../../ui/controls";
-import { Dialog } from "../../ui/Dialog";
+import { ConfirmDialog, Dialog } from "../../ui/Dialog";
 import { Icon } from "../../ui/Icon";
 import { friendly, toast, toastError } from "../../ui/Toast";
 import { plural } from "../accounts/shared";
@@ -22,6 +22,10 @@ export const SETTINGS_SECTIONS = [
 ] as const;
 
 const SHORTCUTS = [
+  ["Go to Accounts", "Ctrl 1"],
+  ["Go to Launch", "Ctrl 2"],
+  ["Go to Servers", "Ctrl 3"],
+  ["Go to Settings", "Ctrl 4"],
   ["Add account", "Ctrl N"],
   ["Filter accounts", "Ctrl F"],
   ["Select all shown", "Ctrl A"],
@@ -47,6 +51,12 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
   const [importOpen, setImportOpen] = useState(false);
   const multi = useMultiStatus().data;
   const multiToggle = useMultiToggle((st) => st.message && toast(st.message, "error"));
+  // Asked again each time Settings opens: Roblox may have been installed meanwhile.
+  const client = useQuery({ queryKey: qk.client, queryFn: api.robloxClient, staleTime: 0 }).data;
+  const dataDir = useQuery({ queryKey: qk.dataDir, queryFn: api.dataDirInfo }).data;
+  const [movePath, setMovePath] = useState("");
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [moving, setMoving] = useState(false);
 
   const setMode = async (mode: "dpapi" | "master", current?: string, next?: string, done?: string) => {
     await api.vaultSetMode(mode, current || undefined, next || undefined);
@@ -63,6 +73,30 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
       }
     } catch (e) {
       toastError(e);
+    }
+  }
+
+  async function pickDataDir() {
+    try {
+      const path = await openFile({ directory: true, multiple: false, title: "Choose a folder for RoALT's data" });
+      if (path) {
+        setMovePath(path);
+        setMoveOpen(true);
+      }
+    } catch (e) {
+      toastError(e);
+    }
+  }
+
+  async function moveData() {
+    setMoving(true);
+    try {
+      await api.dataDirMove(movePath);
+      await api.appRestart();
+    } catch (e) {
+      toastError(e);
+      setMoving(false);
+      setMoveOpen(false);
     }
   }
 
@@ -87,6 +121,9 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
             options={[{ value: "detailed", label: "Detailed" }, { value: "compact", label: "Compact" }]}
             onChange={(density) => set.mutate({ density })}
           />
+        </Row>
+        <Row title="Close to tray" hint="The window hides; running clients and auto-rejoin keep working.">
+          <Switch label="Close to tray" checked={settings.closeToTray} onChange={(closeToTray) => set.mutate({ closeToTray })} />
         </Row>
 
         <Heading id="launching">Launching</Heading>
@@ -117,6 +154,15 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
             value={settings.launchDelayMs / 1000}
             onCommit={(s) => set.mutate({ launchDelayMs: Math.round(s * 1000) })}
           />
+        </Row>
+        <Row title="Auto-rejoin" hint="Relaunch a client that closes unexpectedly into the same target. Up to 3 tries.">
+          <Switch label="Auto-rejoin" checked={settings.autoRejoin} onChange={(autoRejoin) => set.mutate({ autoRejoin })} />
+        </Row>
+        <Row
+          title="Roblox client"
+          hint={client?.path ? <PathHint path={client.path} /> : client ? "Install Roblox from roblox.com, then come back here." : ""}
+        >
+          {client && <ClientStatus client={client} />}
         </Row>
 
         <Heading id="security">Security</Heading>
@@ -166,6 +212,12 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
         </Row>
 
         <Heading id="data">Data</Heading>
+        <Row title="Data folder" hint={dataDir ? <PathHint path={dataDir.path} /> : ""}>
+          <div className="flex gap-2">
+            <button className="btn" onClick={() => api.dataDirOpen().catch(toastError)}>Open</button>
+            {dataDir && !dataDir.overridden && <button className="btn" onClick={pickDataDir}>Move…</button>}
+          </div>
+        </Row>
         <Row
           title="Keep account info for"
           hint="How long the info panel reuses what Roblox said before asking again. Presence refreshes every minute while Accounts is open."
@@ -262,6 +314,21 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
         }}
       />
       <ImportDialog open={importOpen} path={importPath} onClose={() => setImportOpen(false)} />
+      <ConfirmDialog
+        open={moveOpen}
+        onClose={() => !moving && setMoveOpen(false)}
+        onConfirm={() => void moveData()}
+        busy={moving}
+        title="Move data folder?"
+        text={
+          <>
+            RoALT copies its data to <span className="mono text-text break-all">{movePath}</span> and restarts to use it. The old
+            copy is removed after the restart.
+          </>
+        }
+        confirmLabel={moving ? "Moving…" : "Move and restart"}
+        safe
+      />
     </main>
   );
 }
@@ -352,7 +419,25 @@ function Heading({ id, children }: { id: string; children: ReactNode }) {
   return <h2 id={id} className="label mt-8 first-of-type:mt-6 scroll-mt-6">{children}</h2>;
 }
 
-function Row({ title, hint, children, last }: { title: ReactNode; hint: string; children: ReactNode; last?: boolean }) {
+function PathHint({ path }: { path: string }) {
+  return <span className="mono block truncate selectable" title={path}>{path}</span>;
+}
+
+function ClientStatus({ client }: { client: RobloxClient }) {
+  const [label, color] = !client.path
+    ? ["not installed", "var(--orange)"]
+    : client.bootstrapper
+      ? ["via a bootstrapper", "var(--blue)"]
+      : ["detected", "var(--accent-text)"];
+  return (
+    <span className="mono inline-flex items-center gap-1.5 text-xs">
+      <span aria-hidden="true" className="w-1.5 h-1.5 flex-none" style={{ background: color }} />
+      {label}
+    </span>
+  );
+}
+
+function Row({ title, hint, children, last }: { title: ReactNode; hint: ReactNode; children: ReactNode; last?: boolean }) {
   return (
     <div className={`flex flex-wrap items-center gap-x-6 gap-y-2 py-4 ${last ? "" : "border-b border-line"}`}>
       <div className="flex-[1_1_280px] min-w-0 flex flex-col gap-0.5">

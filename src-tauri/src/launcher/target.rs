@@ -211,7 +211,7 @@ fn is_digits(s: &str, max: usize) -> bool {
     (1..=max).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_digit())
 }
 
-fn is_uuid(s: &str) -> bool {
+pub(crate) fn is_uuid(s: &str) -> bool {
     s.len() == 36
         && s.bytes().enumerate().all(|(i, b)| match i {
             8 | 13 | 18 | 23 => b == b'-',

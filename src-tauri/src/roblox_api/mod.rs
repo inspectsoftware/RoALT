@@ -28,8 +28,8 @@ use zeroize::Zeroizing;
 use crate::error::{AppError, Result};
 use crate::vault::Secret;
 use types::{
-    AuthenticatedUser, Data, FriendOnline, Game, Presences, Profiles, ShareLinkResolution, ShareLinkV2, SocialCounts,
-    Thumbnails, TwoStepConfig, UserDetails, UserPresence,
+    AuthenticatedUser, Data, FriendOnline, Game, Presences, Profiles, ServerList, ShareLinkResolution, ShareLinkV2,
+    SocialCounts, Thumbnails, TwoStepConfig, UserDetails, UserPresence,
 };
 
 /// Called with `(account_id, new cookie)` when Roblox rotates a stored account's cookie.
@@ -50,6 +50,8 @@ const HEADSHOT_STEP: Duration = Duration::from_millis(1);
 /// 2-step `mediaType` names by enum value.
 const MEDIA_TYPES: [&str; 8] =
     ["Email", "SMS", "Authenticator", "RecoveryCode", "SecurityKey", "CrossDevice", "Password", "Passkey"];
+const SIGNED_IN_ONLY: &str =
+    "Pick an account to sort by Recommended or Best latency: Roblox only does that for a signed-in account.";
 
 /// Headers, body and the rotated cookie (if any) of a 2xx answer.
 type Reply = (HeaderMap, Vec<u8>, Option<Secret>);
@@ -278,6 +280,7 @@ impl Client {
     /// without one get Roblox's 400 code 7 → `Invalid("Pick an account to sort by ...")`.
     /// Parsing is lenient (only id / maxPlayers / playing required, unknown fields ignored,
     /// rows with a missing id dropped); the cursor is URL-encoded and passed through opaque.
+    #[allow(clippy::too_many_arguments)] // one per query parameter, as the IPC command has them
     pub async fn servers_public(
         &self,
         account_id: i64,
@@ -288,8 +291,37 @@ impl Client {
         limit: u8,
         cursor: Option<&str>,
     ) -> Result<crate::model::ServerPage> {
-        let _ = (account_id, cookie, place_id, order, exclude_full, limit, cursor);
-        todo!()
+        use crate::model::{GameServer, ServerOrder, ServerPage};
+        if ![10, 25, 50, 100].contains(&limit) {
+            return Err(AppError::Invalid("A server page holds 10, 25, 50 or 100 servers.".into()));
+        }
+        let order_by = match order {
+            ServerOrder::OccupancyDesc => "OccupancyDesc",
+            ServerOrder::OccupancyAsc => "OccupancyAsc",
+            ServerOrder::Recommended => "Recommended",
+            ServerOrder::BestLatency => "BestLatency",
+        };
+        let route = endpoints::SERVERS_PUBLIC;
+        let mut url = format!(
+            "{}?orderBy={order_by}&excludeFullGames={exclude_full}&limit={limit}",
+            endpoints::fill(route, place_id)
+        );
+        if let Some(c) = cursor.filter(|c| !c.is_empty()) {
+            url.push_str("&cursor=");
+            url.push_str(&crate::launcher::uri::encode(c));
+        }
+        let list: ServerList = self.get(route, &url, account_id, cookie).await?;
+        let servers = list.data.unwrap_or_default().into_iter().filter_map(|r| {
+            Some(GameServer {
+                id: r.id.filter(|id| !id.is_empty())?,
+                playing: r.playing?,
+                max_players: r.max_players?,
+                fps: r.fps,
+                ping: r.ping,
+                friend_count: r.friend_count,
+            })
+        });
+        Ok(ServerPage { servers: servers.collect(), next_cursor: list.next_page_cursor.filter(|c| !c.is_empty()) })
     }
 
     /// One API call with throttle, CSRF retry, 429 backoff and cookie rotation.
@@ -365,6 +397,10 @@ impl Client {
                 lock(&self.csrf).insert(account_id, token.to_owned());
                 csrf_retried = true;
                 continue;
+            }
+            // The server list's "Guest users are not allowed." (Recommended / BestLatency).
+            if route == endpoints::SERVERS_PUBLIC && status == StatusCode::BAD_REQUEST && error_code(&bytes) == Some((7, 0)) {
+                return Err(AppError::Invalid(SIGNED_IN_ONLY.into()));
             }
             return Err(classify(status, &headers, &bytes));
         }

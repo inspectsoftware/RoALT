@@ -561,8 +561,11 @@ pub async fn game_info(s: State<'_, App>, place_id: i64) -> Result<GameInfo> {
     let universe = universe?.ok_or(AppError::NotFound)?;
     let game = s.api.games(&[universe]).await?.into_iter().find(|g| g.universe_id == universe).ok_or(AppError::NotFound)?;
     let info = game_info_of(place_id, game, icons.ok().and_then(|mut i| i.remove(&place_id)));
-    let json = serde_json::to_string(&info).map_err(|e| AppError::Internal(e.to_string()))?;
-    s.db.cache_put(&key, &json, now_ms())?;
+    // Without its icon (failed or still being made) it is asked for again next time.
+    if info.icon_url.is_some() {
+        let json = serde_json::to_string(&info).map_err(|e| AppError::Internal(e.to_string()))?;
+        s.db.cache_put(&key, &json, now_ms())?;
+    }
     Ok(info)
 }
 
@@ -578,6 +581,33 @@ fn game_info_of(place_id: i64, g: GameDetails, icon_url: Option<String>) -> Game
         max_players: g.max_players,
         icon_url,
         private_servers: g.private_servers,
+    }
+}
+
+/// The place a target leads to, for the server browser: its own place, a universe's root
+/// place, or where a share link points (resolved with `account_id`'s cookie, which share links
+/// need). `Invalid` for targets without a game (a user to follow).
+#[tauri::command]
+pub async fn target_place(app: AppHandle, s: State<'_, App>, target: LaunchTarget, account_id: Option<i64>) -> Result<i64> {
+    let no_game = || AppError::Invalid("That link doesn't lead to a game.".into());
+    match &target {
+        LaunchTarget::Place { place_id, .. }
+        | LaunchTarget::Server { place_id, .. }
+        | LaunchTarget::PrivateLink { place_id, .. }
+        | LaunchTarget::PrivateAccess { place_id, .. } => Ok(*place_id),
+        LaunchTarget::Universe { universe_id } => crate::launcher::root_place(&s.api, *universe_id).await,
+        LaunchTarget::ShareLink { .. } | LaunchTarget::ShareLinkV2 { .. } => {
+            let id = account_id.ok_or_else(|| AppError::Invalid("Pick an account first: share links open as an account.".into()))?;
+            let cookie = stored_cookie(&s, id)?;
+            match crate::launcher::resolve(&s.api, id, &cookie, &target).await {
+                Ok((join, _)) => join.place_id().ok_or_else(no_game),
+                Err(e) => {
+                    record_cookie_error(&app, &s, id, &e)?;
+                    Err(e)
+                }
+            }
+        }
+        LaunchTarget::FollowUser { .. } => Err(no_game()),
     }
 }
 

@@ -20,7 +20,7 @@ const ORDERS: { value: ServerOrder; label: string }[] = [
 ];
 
 /** The server browser. Roblox rate-limits the list, so pages load only when asked for. */
-export function ServersView({ accounts, picked, setPicked, place, setPlace, onBatch }: {
+export function ServersView({ accounts, picked, setPicked, place, setPlace, onBatch, step, setStep }: {
   accounts: AccountSummary[];
   picked: number[];
   setPicked: Dispatch<SetStateAction<number[]>>;
@@ -28,6 +28,9 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
   setPlace: (placeId: number) => void;
   /** A bulk launch started; its progress shows in the Launch view. */
   onBatch: () => void;
+  /** Shared with the Launch view: one launch at a time, also across views. */
+  step: string | null;
+  setStep: (step: string | null) => void;
 }) {
   const qc = useQueryClient();
   const multi = useMultiStatus().data;
@@ -39,25 +42,27 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
   const [order, setOrder] = useState<ServerOrder>("occupancyDesc");
   const [hideFull, setHideFull] = useState(true);
   const [pick, setPick] = useState<Pick>(null);
-  const [launching, setLaunching] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const valid = accounts.filter((a) => a.status === "valid");
   // In list order, which is also the bulk launch order; the first one asks Roblox.
   const chosen = valid.filter((a) => picked.includes(a.id));
   const asker = chosen[0]?.id;
-  const sort = asker === undefined && SIGNED_IN.includes(order) ? "occupancyDesc" : order;
+  // Recommended and Best ping need an account: without one, nothing is asked for.
+  const needsAccount = asker === undefined && SIGNED_IN.includes(order);
 
   const game = useQuery({ queryKey: qk.game(place), queryFn: () => api.gameInfo(place!), enabled: place !== null });
   const g = game.data;
-  const view = tab === "private" && g?.privateServers ? "private" : "public";
-  const pubKey = [...qk.servers, place, sort, hideFull];
+  // Not gated on g.privateServers: that guest hint is false for games whose servers exist anyway.
+  const view = tab;
+  const pubKey = [...qk.servers, place, order, hideFull];
   const pub = useInfiniteQuery({
     queryKey: pubKey,
     // The asking account isn't in the key: picking other accounts doesn't reload the list.
-    queryFn: ({ pageParam }) => api.serversList(place!, sort, hideFull, PAGE, pageParam ?? undefined, asker),
+    queryFn: ({ pageParam }) => api.serversList(place!, order, hideFull, PAGE, pageParam ?? undefined, asker),
     initialPageParam: null as string | null,
     getNextPageParam: (p) => p.nextCursor,
-    enabled: !!g && view === "public",
+    enabled: !!g && view === "public" && !needsAccount,
   });
   const privKey = [...qk.privateServers, place, asker];
   const priv = useInfiniteQuery({
@@ -87,22 +92,37 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
     ? `${short(pubPick)}${free === null ? "" : ` · ${free} free`}`
     : privPick ? `${privPick.name || "Private server"} · ${free} free` : "No server picked";
   const n = chosen.length;
-  const blocked = launchBlocked(n > 1, multi, batch);
-  const warning = blocked ?? (free !== null && n > free ? `Only ${plural(free, "free slot")} for ${plural(n, "account")}.` : null);
-  const canJoin = !!target && n > 0 && !launching && !blocked;
+  const askerName = chosen[0] ? accountName(chosen[0]) : "";
+  const restricted = !!privPick && !!priv.data?.pages.some((p) => p.joinRestricted);
+  const noJoin = `Roblox doesn't let ${askerName} join servers of this game.`;
+  const blocked = launchBlocked(n > 1, multi, batch) ?? (restricted && n === 1 ? noJoin : null);
+  const warning =
+    blocked ??
+    (restricted ? noJoin : null) ??
+    (privPick && n > 1 ? `Access was checked for ${askerName} only; accounts without access can't join.` : null) ??
+    (free !== null && n > free ? `Only ${plural(free, "free slot")} for ${plural(n, "account")}.` : null);
+  const canJoin = !!target && n > 0 && !step && !blocked;
 
   async function load(e: FormEvent) {
     e.preventDefault();
     const p = await api.targetParse(text).catch(() => null);
     const t = p?.kind === "target" ? p.target : null;
-    if (!t || !("placeId" in t)) {
-      setTextError("Paste a game link or place ID.");
+    if (!t || t.kind === "followUser") {
+      setTextError(p && "reason" in p ? p.reason : "Paste a game link or place ID.");
       return;
     }
-    setTextError(null);
-    setPlace(t.placeId);
-    setTab("public");
-    setPick(t.kind === "server" ? { kind: "public", id: t.jobId } : null);
+    // Universe and share links need a lookup (share links with the first picked account).
+    setLoading(true);
+    try {
+      setPlace("placeId" in t ? t.placeId : await api.targetPlace(t, asker));
+      setTextError(null);
+      setTab("public");
+      setPick(t.kind === "server" ? { kind: "public", id: t.jobId } : null);
+    } catch (e) {
+      setTextError(friendly(asError(e)));
+    } finally {
+      setLoading(false);
+    }
   }
 
   // Page 1 again, without asking for every page loaded so far.
@@ -117,7 +137,7 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
 
   async function join() {
     if (!canJoin || !target) return;
-    setLaunching(true);
+    setStep(n > 1 ? "Starting the batch…" : "Getting a ticket…");
     try {
       if (n > 1) {
         await api.bulkLaunch({ accountIds: chosen.map((a) => a.id), target, delayMs, sameServer: "off", favouriteId: null });
@@ -126,7 +146,7 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
     } catch (e) {
       launchFailed(e);
     } finally {
-      setLaunching(false);
+      setStep(null);
     }
   }
 
@@ -155,7 +175,7 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
                 setTextError(null);
               }}
             />
-            <button className="btn border-l-0">Load</button>
+            <button className="btn border-l-0" disabled={loading}>{loading ? "Loading…" : "Load"}</button>
           </div>
           {textError && <p id="servers-game-error" role="alert" className="alert">{textError}</p>}
         </form>
@@ -177,22 +197,20 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
       ) : (
         <>
           <div className="flex-none flex flex-wrap items-center gap-3 px-6 py-3.5">
-            {g?.privateServers && (
-              <Segmented
-                label="Server type"
-                value={view}
-                options={[{ value: "public", label: "Public" }, { value: "private", label: "Private" }]}
-                onChange={(v) => {
-                  setTab(v);
-                  setPick(null);
-                }}
-              />
-            )}
+            <Segmented
+              label="Server type"
+              value={view}
+              options={[{ value: "public", label: "Public" }, { value: "private", label: "Private" }]}
+              onChange={(v) => {
+                setTab(v);
+                setPick(null);
+              }}
+            />
             {view === "public" && (
               <>
                 <Segmented
                   label="Sort servers"
-                  value={sort}
+                  value={order}
                   options={ORDERS.map((o) =>
                     asker === undefined && SIGNED_IN.includes(o.value)
                       ? { ...o, disabled: true, title: "Pick an account: Roblox sorts this way only for a signed-in account." }
@@ -212,7 +230,7 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
               ) : (
                 list.dataUpdatedAt > 0 && <Updated at={list.dataUpdatedAt} />
               )}
-              <button className="btn" disabled={list.isFetching || (view === "private" && asker === undefined)} onClick={refresh}>
+              <button className="btn" disabled={list.isFetching || asker === undefined && (view === "private" || needsAccount)} onClick={refresh}>
                 <Icon name="refresh" size={14} className={list.isFetching ? "spin" : ""} />
                 Refresh
               </button>
@@ -223,14 +241,17 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
           </div>
 
           <div className="scroll flex-1 min-h-0 border-t border-line">
-            {view === "public" ? (
+            {view === "public" && needsAccount && !pub.data ? (
+              <p className="px-6 py-4 text-dim">Pick an account below: Roblox sorts this way only for a signed-in account.</p>
+            ) : view === "public" ? (
               <PublicTable servers={servers} pick={pubPick} onPick={(id) => setPick({ kind: "public", id })} />
             ) : asker === undefined ? (
               <p className="px-6 py-4 text-dim">Pick an account below: Roblox lists the private servers that account can see.</p>
             ) : (
               <>
+                <p className="px-6 pt-3 text-xs text-dim">As {askerName}</p>
                 {priv.data?.pages.some((p) => p.joinRestricted) && (
-                  <p className="alert mx-6 my-3">Roblox doesn't let this account join servers of this game.</p>
+                  <p className="alert mx-6 my-3">Roblox doesn't let {askerName} join servers of this game.</p>
                 )}
                 <PrivateTable servers={privates} pick={privPick?.vipServerId ?? null} onPick={(id) => setPick({ kind: "private", id })} />
               </>
@@ -239,12 +260,14 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
               {list.isError ? (
                 <>
                   <p role="alert" className="alert">{friendly(asError(list.error))}</p>
-                  <button className="btn" onClick={() => void (list.isFetchNextPageError ? list.fetchNextPage() : refresh())}>Try again</button>
+                  <button className="btn" disabled={list.isFetching} onClick={() => void (list.isFetchNextPageError ? list.fetchNextPage() : refresh())}>
+                    Try again
+                  </button>
                 </>
               ) : list.isFetching && !list.isFetchingNextPage && count === 0 ? (
                 "Loading servers…"
               ) : list.isSuccess && count === 0 ? (
-                view === "private" ? "No private servers this account can see." : hideFull ? "No servers with room right now." : "No servers right now."
+                view === "private" ? `No private servers ${askerName} can see.` : hideFull ? "No servers with room right now." : "No servers right now."
               ) : (
                 list.hasNextPage && (
                   <button className="btn" disabled={list.isFetching} onClick={() => void list.fetchNextPage()}>
@@ -274,11 +297,11 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
               <button
                 className="btn btn-primary ml-auto"
                 disabled={!canJoin}
-                title={target ? undefined : "Pick a server first"}
+                title={target ? (blocked ?? undefined) : "Pick a server first"}
                 onClick={() => void join()}
               >
                 <Icon name="play" size={12} fill />
-                {launching ? "Joining…" : `Join with ${plural(n, "account")}`}
+                {step ? "Joining…" : `Join with ${plural(n, "account")}`}
               </button>
             </div>
             <div aria-live="polite">{warning && <p className="alert mt-2">{warning}</p>}</div>

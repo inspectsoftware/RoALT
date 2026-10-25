@@ -307,7 +307,8 @@ impl Client {
         let list: ServerList = self.get(route, &url, account_id, cookie).await?;
         let servers = list.data.unwrap_or_default().into_iter().filter_map(|r| {
             Some(GameServer {
-                id: r.id.filter(|id| !id.is_empty())?,
+                // A job id goes into a launch URI: GUIDs only (DESIGN §6).
+                id: r.id.filter(|id| crate::launcher::target::is_uuid(id))?,
                 playing: r.playing?,
                 max_players: r.max_players?,
                 fps: r.fps,
@@ -647,7 +648,8 @@ fn sort_thumbnails(page: Thumbnails, out: &mut HashMap<i64, String>) -> Vec<i64>
     let mut pending = Vec::new();
     for t in page.data {
         match (t.state.as_str(), t.image_url) {
-            ("Completed", Some(url)) if !url.is_empty() => {
+            // The UI loads these as images: Roblox's CDN only.
+            ("Completed", Some(url)) if is_rbxcdn(&url) => {
                 out.insert(t.target_id, url);
             }
             ("Pending", _) => pending.push(t.target_id),
@@ -655,6 +657,11 @@ fn sort_thumbnails(page: Thumbnails, out: &mut HashMap<i64, String>) -> Vec<i64>
         }
     }
     pending
+}
+
+/// An https URL on *.rbxcdn.com.
+fn is_rbxcdn(url: &str) -> bool {
+    Url::parse(url).is_ok_and(|u| u.scheme() == "https" && u.host_str().is_some_and(|h| h.ends_with(".rbxcdn.com")))
 }
 
 /// Names of the enabled 2-step methods; recovery codes and the password don't count.

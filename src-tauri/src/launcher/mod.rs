@@ -199,7 +199,7 @@ async fn share_place(api: &Client, t: &ShareTarget) -> Result<i64> {
     }
 }
 
-async fn root_place(api: &Client, universe_id: i64) -> Result<i64> {
+pub(crate) async fn root_place(api: &Client, universe_id: i64) -> Result<i64> {
     let mut found = api.universe_root_places(&[universe_id]).await?;
     let place = found.remove(&universe_id).map(|(place_id, _)| place_id);
     place.ok_or_else(|| AppError::Invalid("This game no longer exists.".into()))

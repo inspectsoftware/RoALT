@@ -295,6 +295,8 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
           place={serversPlace}
           setPlace={setServersPlace}
           onBatch={() => setView("launch")}
+          step={launchStep}
+          setStep={setLaunchStep}
         />
       ) : (
         <SettingsView vault={vault} settings={settings} />

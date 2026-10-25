@@ -117,6 +117,8 @@ export const api = {
   serversList: (placeId: number, order: ServerOrder, excludeFull: boolean, limit: 10 | 25 | 50 | 100, cursor?: string, accountId?: number) =>
     invoke<ServerPage>("servers_list", { placeId, order, excludeFull, limit, cursor, accountId }),
   gameInfo: (placeId: number) => invoke<GameInfo>("game_info", { placeId }),
+  /** The place a target leads to (universes, share links with the account's cookie). */
+  targetPlace: (target: LaunchTarget, accountId?: number) => invoke<number>("target_place", { target, accountId }),
   privateServersList: (placeId: number, accountId: number, cursor?: string) =>
     invoke<PrivateServerPage>("private_servers_list", { placeId, accountId, cursor }),
 

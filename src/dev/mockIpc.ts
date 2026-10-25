@@ -635,6 +635,15 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "game_info":
       await sleep(400);
       return args.placeId === 1 ? fail("notFound", "Not found.") : fakeGame(args.placeId);
+    case "target_place": {
+      await sleep(300);
+      const t: LaunchTarget = args.target;
+      if ("placeId" in t) return t.placeId;
+      if (t.kind === "universe") return 4410028153;
+      if (t.kind === "followUser") return fail("invalid", "That link doesn't lead to a game.");
+      if (!args.accountId) return fail("invalid", "Pick an account first: share links open as an account.");
+      return 4410028153;
+    }
     case "private_servers_list": {
       await sleep(500);
       const a = find(args.accountId);

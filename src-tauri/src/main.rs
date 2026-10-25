@@ -241,6 +241,7 @@ fn main() {
             commands::bulk_current,
             commands::servers_list,
             commands::game_info,
+            commands::target_place,
             commands::private_servers_list,
             commands::groups_list,
             commands::group_save,

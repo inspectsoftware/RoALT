@@ -1148,3 +1148,11 @@ async fn private_servers_without_a_valid_cookie_is_cookie_invalid() {
     let r = c.private_servers(4, &Secret::new("OLD"), 920587237, None).await;
     assert!(matches!(r, Err(AppError::CookieInvalid)));
 }
+
+#[test]
+fn images_only_from_roblox_cdn() {
+    assert!(super::is_rbxcdn("https://tr.rbxcdn.com/180DAY-abc/150/150/Image/Png/noFilter"));
+    for url in ["http://tr.rbxcdn.com/x", "https://rbxcdn.com.evil.example/x", "https://evil.example/tr.rbxcdn.com", "", "javascript:alert(1)"] {
+        assert!(!super::is_rbxcdn(url), "{url}");
+    }
+}

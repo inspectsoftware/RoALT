@@ -38,8 +38,9 @@ pub fn find() -> Result<ClientExe> {
 
 /// Starts the client with the URI as its only argument (raw: no quoting, it contains no
 /// spaces), in its own folder, and closes the process handle at once (Roblox's anti-cheat has
-/// flagged long-held handles). Returns the PID. The URI is never logged.
-pub fn start(exe: &ClientExe, uri: &Secret) -> Result<u32> {
+/// flagged long-held handles). Returns the PID and its start time, read while our handle still
+/// reserves the PID (0: already gone). The URI is never logged.
+pub fn start(exe: &ClientExe, uri: &Secret) -> Result<(u32, u64)> {
     let dir = exe.path.parent().ok_or_else(|| AppError::Internal("Roblox's folder is unknown.".into()))?;
     let child = Command::new(&exe.path)
         .raw_arg(uri.expose())
@@ -49,8 +50,9 @@ pub fn start(exe: &ClientExe, uri: &Secret) -> Result<u32> {
         .stderr(Stdio::null())
         .spawn()
         .map_err(|e| AppError::Internal(format!("Could not start Roblox: {e}")))?;
+    let started = crate::instances::process::start_time(child.id()).unwrap_or(0);
     // Dropping the Child closes its process and thread handles; the process keeps running.
-    Ok(child.id())
+    Ok((child.id(), started))
 }
 
 /// The program of a `shell\open\command` line: `"C:\...\RobloxPlayerBeta.exe" %1`,
@@ -125,9 +127,11 @@ mod tests {
         let system = std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
         let exe = ClientExe { path: system.join(r"System32\cmd.exe"), bootstrapper: true };
         let out = std::env::temp_dir().join(format!("roalt-test-{}.txt", uuid::Uuid::new_v4()));
-        let arg = Secret::new(format!("/c cd > \"{}\"", out.display()));
+        // Kept alive a second so its start time is read before it exits.
+        let arg = Secret::new(format!("/c cd > \"{}\" & ping -n 2 127.0.0.1 >nul", out.display()));
 
-        assert!(start(&exe, &arg).unwrap() > 0);
+        let (pid, started) = start(&exe, &arg).unwrap();
+        assert!(pid > 0 && started > 0);
         let deadline = Instant::now() + Duration::from_secs(10);
         let written = loop {
             match std::fs::read_to_string(&out) {

@@ -413,6 +413,10 @@ pub struct LaunchInfo {
     pub via_bootstrapper: bool,
     /// Something the user should know (expired share link, launch data left out).
     pub warning: Option<String>,
+    /// Start time of `pid` (Unix s, 0: already gone), so a reused PID is never taken for it.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub pid_start: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]

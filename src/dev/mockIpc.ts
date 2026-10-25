@@ -5,11 +5,12 @@
 // A username containing "nobody" doesn't exist.
 // Launched clients start, join and play on timers; one fake Roblox client is already running,
 // so turning multi-instance on first asks to close it.
+// A bulk launch runs on timers too; "AFK 1" fails in it the same way and the batch goes on.
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type {
-  AccountInfo, AccountStatus, AccountSummary, Favourite, Group, Instance, JoinCandidate, LaunchTarget, MultiInstanceStatus, ParsedInput,
-  Presence, Settings, VaultMode,
+  AccountInfo, AccountStatus, AccountSummary, BulkProgress, BulkRequest, BulkStage, Favourite, GameServer, Group, Instance, JoinCandidate,
+  LaunchTarget, MultiInstanceStatus, ParsedInput, Presence, ServerOrder, ServerPage, Settings, VaultMode,
 } from "../api";
 
 const MIN = 60_000;
@@ -54,13 +55,16 @@ let accounts: AccountSummary[] = seed.map(([alias, displayName, username, userId
 
 let settings: Settings = {
   theme: "dark", density: "detailed", autoLockMinutes: 15, clipboardClearSeconds: 30, cacheMinutes: 10,
-  multiInstance: false, protectSharedLogin: true,
+  multiInstance: false, protectSharedLogin: true, launchDelayMs: 6000,
 };
 // Instances: a stranger client blocks multi-instance until "Close Roblox".
 let strangerRunning = true;
 let lockHeld = false;
 let instances: Instance[] = [];
-const instancesChanged = () => void emit("instances://changed");
+const instancesChanged = () => {
+  void emit("instances://changed");
+  mirrorBatch();
+};
 const multiStatus = (): MultiInstanceStatus => {
   const blockedBy = lockHeld ? [] : [...(strangerRunning ? [9120] : []), ...instances.filter((i) => i.state !== "exited").map((i) => i.pid)];
   const message = !settings.multiInstance || lockHeld ? null
@@ -90,7 +94,8 @@ function track(accountId: number, pid: number, target: LaunchTarget, placeId: nu
   instancesChanged();
   const step = (ms: number, f: () => void) => setTimeout(() => { if (i.state !== "exited") { f(); instancesChanged(); } }, ms);
   step(1500, () => { i.state = "joining"; });
-  step(4000, () => { i.state = "inGame"; i.jobId = crypto.randomUUID(); i.placeId ??= 1818; });
+  step(4000, () => { i.state = "inGame"; i.jobId = target.kind === "server" ? target.jobId : crypto.randomUUID(); i.placeId ??= 1818; });
+  return i;
 }
 const vault = { mode: "master" as VaultMode, locked: false, password: "password" };
 const FAKE_COOKIE = "_|WARNING:-DO-NOT-SHARE-THIS.--DEV-PREVIEW-FAKE-VALUE|_" + "0F1E2D3C4B5A69788796A5B4C3D2E1F0".repeat(6);
@@ -261,6 +266,143 @@ let favourites: Favourite[] = favSeed.map(([name, t, accountIds], i) => ({
 
 const placeOfTarget = (t: LaunchTarget) => ("placeId" in t ? t.placeId : t.kind === "shareLink" ? SKY.placeId : null);
 
+// ---------- M5: bulk launch, servers ----------
+
+const EXPIRED = "This cookie is not valid or has expired. Sign in again.";
+let batch: BulkProgress | null = null;
+let batchCancel = false;
+function bulkChanged() {
+  if (batch) void emit("bulk://progress", structuredClone(batch));
+}
+/** Started clients' stages follow their instances, as in launcher::bulk::stage_of. */
+function mirrorBatch() {
+  if (!batch || batch.done) return;
+  let moved = false;
+  for (const item of batch.items) {
+    const i = instances.find((x) => x.id === item.instanceId);
+    if (!i || item.stage.kind === "failed" || item.stage.kind === "cancelled") continue;
+    const stage: BulkStage = i.state === "disconnected" || i.state === "exited"
+      ? { kind: "failed", message: i.note ?? (i.state === "exited" ? "Closed" : "Disconnected") }
+      : { kind: i.state };
+    if (stage.kind !== item.stage.kind) {
+      item.stage = stage;
+      moved = true;
+    }
+  }
+  if (moved) bulkChanged();
+}
+
+/** A stable list of public servers per place. */
+function fakeServers(placeId: number): GameServer[] {
+  let seed = placeId % 2147483647 || 1;
+  const rnd = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
+  const hex = (n: number) => Array.from({ length: n }, () => Math.floor(rnd() * 16).toString(16)).join("");
+  return Array.from({ length: 140 }, () => ({
+    id: `${hex(8)}-${hex(4)}-4${hex(3)}-a${hex(3)}-${hex(12)}`,
+    playing: Math.floor(rnd() * 13), maxPlayers: 12, fps: Math.round((55 + rnd() * 5) * 10) / 10, ping: 30 + Math.floor(rnd() * 150), friendCount: null,
+  }));
+}
+function serverPage(placeId: number, order: ServerOrder, excludeFull: boolean, limit: number, cursor?: string): ServerPage {
+  const by: Record<ServerOrder, (a: GameServer, b: GameServer) => number> = {
+    occupancyDesc: (a, b) => b.playing - a.playing,
+    occupancyAsc: (a, b) => a.playing - b.playing,
+    recommended: (a, b) => (a.ping ?? 0) - (b.ping ?? 0) + (b.playing - a.playing) * 10,
+    bestLatency: (a, b) => (a.ping ?? 0) - (b.ping ?? 0),
+  };
+  const list = fakeServers(placeId).filter((s) => !excludeFull || s.playing < s.maxPlayers).sort(by[order]);
+  const from = Number(cursor) || 0;
+  return { servers: list.slice(from, from + limit), nextCursor: from + limit < list.length ? String(from + limit) : null };
+}
+
+async function runBatch(b: BulkProgress, favouriteId: number | null) {
+  const until = async (ok: () => boolean, ms: number) => {
+    for (const end = Date.now() + ms; Date.now() < end && !ok(); ) await sleep(200);
+  };
+  let target = b.target;
+  let follow = b.sameServer === "followFirst" && target.kind === "place";
+  if (b.sameServer === "pickFirst" && target.kind === "place") {
+    await sleep(600);
+    const fits = fakeServers(target.placeId).filter((s) => s.playing + b.items.length < s.maxPlayers).sort((x, y) => y.playing - x.playing)[0];
+    if (fits) {
+      b.jobId = fits.id;
+      target = { kind: "server", placeId: target.placeId, jobId: fits.id };
+    } else {
+      follow = true;
+      b.note = "No server had room for everyone, so the rest follow the first account.";
+    }
+  }
+  let prev: Instance | null = null;
+  for (const item of b.items) {
+    if (prev) {
+      const p: Instance = prev;
+      await until(() => p.state !== "starting" || batchCancel, 30_000);
+      await until(() => batchCancel, b.delayMs - 1000 + Math.random() * 2000);
+    }
+    if (batchCancel) break;
+    item.stage = { kind: "ticket" };
+    bulkChanged();
+    await sleep(800);
+    const a = find(item.accountId);
+    if (!a || a.username === "afk_unit_1") {
+      if (a) {
+        a.status = "invalid";
+        changed();
+      }
+      item.stage = { kind: "failed", message: EXPIRED };
+      bulkChanged();
+      continue;
+    }
+    retakeLock();
+    const i = track(a.id, 14000 + Math.floor(Math.random() * 9000), target, placeOfTarget(target), a.username === "studio_nova");
+    item.instanceId = i.id;
+    item.stage = { kind: "starting" };
+    bulkChanged();
+    if (!prev) {
+      const f = favourites.find((x) => x.id === favouriteId);
+      if (f) f.lastUsedAt = Date.now();
+    }
+    if (!prev && follow && target.kind === "place") {
+      await until(() => i.jobId !== null || i.state === "exited", 10_000);
+      if (i.jobId) {
+        b.jobId = i.jobId;
+        target = { kind: "server", placeId: target.placeId, jobId: i.jobId };
+      } else b.note = "Couldn't read the first account's server, so the rest join the game as given.";
+    }
+    prev = i;
+  }
+  if (batchCancel) {
+    for (const item of b.items) if (item.stage.kind === "queued") item.stage = { kind: "cancelled" };
+    b.stopped = "Cancelled";
+    bulkChanged();
+  }
+  const settling = (s: BulkStage) => s.kind === "ticket" || s.kind === "starting" || s.kind === "joining";
+  await until(() => !b.items.some((x) => settling(x.stage)), 120_000);
+  b.done = true;
+  bulkChanged();
+}
+
+function startBatch(r: BulkRequest) {
+  const ids = r.accountIds;
+  if (ids.length === 0) return fail("invalid", "Pick at least one account.");
+  if (new Set(ids).size !== ids.length) return fail("invalid", "An account is in the list twice.");
+  for (const id of ids) {
+    const a = find(id);
+    if (!a) return fail("notFound", "Not found.");
+    if (a.status !== "valid") return fail("invalid", `${a.alias || a.displayName} can't launch: sign in to it again.`);
+  }
+  if (batch && !batch.done) return fail("invalid", "A batch is already running.");
+  retakeLock();
+  if (ids.length > 1 && !lockHeld) return fail("invalid", multiStatus().message ?? "Turn on multi-instance to launch several accounts.");
+  batchCancel = false;
+  batch = {
+    batchId: crypto.randomUUID(), target: r.target, sameServer: r.sameServer, delayMs: Math.min(60_000, Math.max(2000, r.delayMs)),
+    jobId: null, items: ids.map((accountId) => ({ accountId, stage: { kind: "queued" }, instanceId: null })), stopped: null, done: false, note: null,
+  };
+  bulkChanged();
+  void runBatch(batch, r.favouriteId);
+  return Promise.resolve(batch.batchId);
+}
+
 function reauth(password?: string) {
   if (vault.mode === "master" && password !== vault.password) return fail("wrongPassword", "Wrong password.");
   return Promise.resolve();
@@ -417,6 +559,19 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
         .map((a): JoinCandidate => ({ userId: a.userId, username: a.username, displayName: a.displayName, accountId: a.id, presence: presenceOf(a) }));
       return structuredClone([...FRIENDS, ...mine]);
     }
+
+    case "bulk_launch":
+      await sleep(300);
+      return startBatch(args.request);
+    case "bulk_cancel":
+      if (!batch || batch.batchId !== args.batchId) return fail("notFound", "That batch isn't running.");
+      if (!batch.done) batchCancel = true;
+      return null;
+    case "bulk_current":
+      return batch && structuredClone(batch);
+    case "servers_list":
+      await sleep(500);
+      return serverPage(args.placeId, args.order, args.excludeFull, args.limit, args.cursor);
 
     case "groups_list":
       return structuredClone(groups);

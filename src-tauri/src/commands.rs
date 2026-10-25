@@ -522,6 +522,52 @@ pub(crate) async fn launch_tracked(
     Ok((info, instance))
 }
 
+// ---------- M7: client, data folder, notices ----------
+
+/// Shows a message to the user (a toast; the window may be hidden in the tray).
+pub fn notice(app: &AppHandle, error: bool, message: impl Into<String>) {
+    let _ = app.emit("app://notice", Notice { error, message: message.into() });
+}
+
+/// The Roblox client RoALT would start (`launcher::client::find`); not installed → path None.
+#[tauri::command]
+pub fn roblox_client() -> RobloxClient {
+    todo!()
+}
+
+/// Where the data lives now (see `main::data_dir`).
+#[tauri::command]
+pub fn data_dir_info(s: State<'_, App>) -> DataDir {
+    let _ = s;
+    todo!()
+}
+
+/// Opens the data folder in Explorer (opener plugin, Rust side: no capability needed).
+#[tauri::command]
+pub fn data_dir_open(app: AppHandle, s: State<'_, App>) -> Result<()> {
+    let _ = (app, s);
+    todo!()
+}
+
+/// Copies the database into `path` (an existing, empty folder or a new one; not the current
+/// folder or inside it) with SQLite's `VACUUM INTO` (consistent while open), then records it in
+/// `%LOCALAPPDATA%\RoALT\location.json` as `{"dataDir": path, "movedFrom": current}`. The move
+/// takes effect at the next start (`app_restart`); that start deletes the old folder's
+/// roalt.db, roalt.db-wal and roalt.db-shm once the new database opened, and drops `movedFrom`.
+/// Refused for test runs (`ROALT_DATA_DIR`) and when `path` already has a roalt.db. Async: the
+/// copy can take a moment.
+#[tauri::command]
+pub async fn data_dir_move(s: State<'_, App>, path: String) -> Result<()> {
+    let _ = (s, path);
+    todo!()
+}
+
+/// Restarts RoALT (after a data folder move).
+#[tauri::command]
+pub fn app_restart(app: AppHandle) {
+    app.restart();
+}
+
 // ---------- bulk ----------
 
 /// Starts a batch in the background (see `launcher::bulk::start`); returns its id.

@@ -604,6 +604,7 @@ mod tests {
             ended_at: None,
             via_bootstrapper: false,
             note: note.map(Into::into),
+            rejoins: 0,
         }
     }
 

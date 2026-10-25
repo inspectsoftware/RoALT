@@ -7,6 +7,7 @@ mod launcher;
 mod model;
 mod roblox_api;
 mod storage;
+mod tray;
 mod vault;
 mod webview;
 
@@ -49,7 +50,10 @@ impl App {
     }
 }
 
-/// `ROALT_DATA_DIR` (test runs) or `%LOCALAPPDATA%\RoALT`.
+/// `ROALT_DATA_DIR` (test runs), else the folder `%LOCALAPPDATA%\RoALT\location.json` names
+/// (`dataDir`, when it holds a roalt.db), else `%LOCALAPPDATA%\RoALT`. M7: read location.json;
+/// after a move (`movedFrom` set) the old folder's database files are deleted once the new
+/// database has opened (in `init`), and `movedFrom` is dropped.
 fn data_dir() -> PathBuf {
     if let Some(d) = std::env::var_os("ROALT_DATA_DIR") {
         return d.into();
@@ -242,6 +246,11 @@ fn main() {
             commands::servers_list,
             commands::game_info,
             commands::target_place,
+            commands::roblox_client,
+            commands::data_dir_info,
+            commands::data_dir_open,
+            commands::data_dir_move,
+            commands::app_restart,
             commands::private_servers_list,
             commands::groups_list,
             commands::group_save,

@@ -71,6 +71,7 @@ impl Tracker {
             ended_at: None,
             via_bootstrapper: info.via_bootstrapper,
             note: None,
+            rejoins: 0,
         };
         self.entries().push(Entry {
             inst: inst.clone(),
@@ -126,6 +127,19 @@ impl Tracker {
     /// True while a client RoALT started hasn't ended.
     pub fn any_running(&self) -> bool {
         self.entries().iter().any(|e| e.inst.state != InstanceState::Exited)
+    }
+
+    /// How many auto-rejoins led to the client `id` (shown in the UI, capped by `take_rejoins`).
+    pub fn set_rejoins(&self, id: &str, rejoins: u32) {
+        let _ = (id, rejoins);
+        todo!()
+    }
+
+    /// Clients that ended unexpectedly since the last call and may be rejoined (`wants_rejoin`),
+    /// each returned once. Drained whether or not auto-rejoin is on, so turning it on later
+    /// doesn't relaunch old exits.
+    pub fn take_rejoins(&self) -> Vec<Rejoin> {
+        todo!()
     }
 
     /// Forgets ended entries.
@@ -196,6 +210,28 @@ impl Tracker {
         prune(&mut entries);
         changed
     }
+}
+
+/// At most this many auto-rejoins in a row for one client.
+pub const MAX_REJOINS: u32 = 3;
+
+/// A client to launch again: same account, same target.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Rejoin {
+    /// The instance that ended.
+    pub from: String,
+    pub account_id: i64,
+    pub target: LaunchTarget,
+    /// For the new client: the ended one's `rejoins` + 1.
+    pub rejoins: u32,
+}
+
+/// An ended client is worth rejoining when it closed unexpectedly (note "Closed unexpectedly":
+/// not closed by the user, not replaced, not a wrong account or a human check) and has had
+/// fewer than `MAX_REJOINS` rejoins.
+pub fn wants_rejoin(inst: &Instance) -> bool {
+    let _ = inst;
+    todo!()
 }
 
 impl Default for Tracker {

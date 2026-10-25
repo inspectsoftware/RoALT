@@ -27,4 +27,12 @@ protectSharedLogin: boolean,
 /**
  * Bulk launch: wait between two launches (±1 s jitter is added), 2 000..=60 000.
  */
-launchDelayMs: number, };
+launchDelayMs: number, 
+/**
+ * Relaunch a client that closes unexpectedly into the same target (at most 3 tries).
+ */
+autoRejoin: boolean, 
+/**
+ * Closing the window hides it; the tray icon brings it back or quits.
+ */
+closeToTray: boolean, };

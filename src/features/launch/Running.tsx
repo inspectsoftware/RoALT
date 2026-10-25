@@ -35,7 +35,7 @@ export function useNow(ms: number) {
 }
 
 /** The Launch view's right column: the bulk launch, then clients RoALT started, newest first. */
-export function RunningPanel({ accounts }: { accounts: AccountSummary[] }) {
+export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[]; onPick: (ids: number[]) => void }) {
   const list = useInstances().data ?? [];
   const now = useNow(30_000);
   const [closing, setClosing] = useState<ReadonlySet<string>>(new Set());
@@ -45,12 +45,16 @@ export function RunningPanel({ accounts }: { accounts: AccountSummary[] }) {
   const running = list.filter(isRunning);
   const rows = [...list].sort((a, b) => Number(isRunning(b)) - Number(isRunning(a)) || b.startedAt - a.startedAt);
 
+  // Keyed by pid too: a close that reached only a bootstrapper ends with the client adopted
+  // under a new pid, which can then be closed again.
+  const closeKey = (i: Instance) => `${i.id}:${i.pid}`;
   const close = (i: Instance) => {
-    setClosing((s) => new Set(s).add(i.id));
+    const key = closeKey(i);
+    setClosing((s) => new Set(s).add(key));
     api.instanceClose(i.id, false).catch((e) => {
       setClosing((s) => {
         const next = new Set(s);
-        next.delete(i.id);
+        next.delete(key);
         return next;
       });
       toastError(e);
@@ -68,8 +72,8 @@ export function RunningPanel({ accounts }: { accounts: AccountSummary[] }) {
   };
 
   return (
-    <aside aria-label="Running clients" className="flex-[1_1_400px] min-w-0 max-w-[560px] flex flex-col bg-panel border-l border-line">
-      <BatchSection accounts={accounts} />
+    <aside aria-label="Running clients" className="@container flex-[1_1_400px] min-w-0 max-w-[560px] flex flex-col bg-panel border-l border-line">
+      <BatchSection accounts={accounts} onPick={onPick} />
       <div className="flex flex-wrap items-center gap-2.5 px-5 pt-[18px] pb-2.5">
         <span className="label whitespace-nowrap">Running clients</span>
         <span className="mono text-xs text-dim">{running.length}</span>
@@ -93,7 +97,7 @@ export function RunningPanel({ accounts }: { accounts: AccountSummary[] }) {
               <tr className="h-7 text-dim text-left">
                 <th className="pl-5 font-normal border-b border-line">Account</th>
                 <th className="font-normal border-b border-line">State</th>
-                <th className="font-normal border-b border-line">Job</th>
+                <th className="font-normal border-b border-line hidden @sm:table-cell">Job</th>
                 <th className="font-normal border-b border-line">Up</th>
                 <th className="w-12 border-b border-line">
                   <span className="sr-only">Close</span>
@@ -118,12 +122,12 @@ export function RunningPanel({ accounts }: { accounts: AccountSummary[] }) {
                       <span className="flex items-baseline gap-1.5">
                         <span aria-hidden="true" className={`w-1.5 h-1.5 flex-none ${i.state === "starting" || i.state === "joining" ? "pulse" : ""}`} style={{ background: color }} />
                         <span>
-                          {live ? label : i.note ?? label}
+                          {live ? (closing.has(closeKey(i)) ? "Closing…" : label) : i.note ?? label}
                           {live && i.note && <span className="text-orange"> · {i.note}</span>}
                         </span>
                       </span>
                     </td>
-                    <td className="pr-2 text-dim" title={i.jobId ?? undefined}>{i.jobId ? i.jobId.slice(0, 8) : "—"}</td>
+                    <td className="pr-2 text-dim hidden @sm:table-cell" title={i.jobId ?? undefined}>{i.jobId ? i.jobId.slice(0, 8) : "—"}</td>
                     <td className="pr-2 whitespace-nowrap">{uptime(i.startedAt, i.endedAt ?? now)}</td>
                     <td>
                       {live && (
@@ -131,7 +135,7 @@ export function RunningPanel({ accounts }: { accounts: AccountSummary[] }) {
                           className="wc w-9 h-8"
                           aria-label={`Close ${name}'s client`}
                           title="Close this client"
-                          disabled={closing.has(i.id)}
+                          disabled={closing.has(closeKey(i))}
                           onClick={() => close(i)}
                         >
                           <Icon name="x" size={10} />

@@ -59,3 +59,27 @@ share links resolve per account through `sharelinks/v1/resolve-link` and only Va
 join their exact server (Expired ones still open the game, with a warning); launch data over
 200 bytes is refused by Roblox, so it is dropped with a warning; usernames resolve through
 `users/v1/usernames/users` (banned users excluded).
+
+## M4 — multi-instance and process tracking
+
+**Built:** a multi-instance switch (sidebar and Settings → Launching). When on, RoALT holds a
+mutex named exactly like the event Roblox's client creates, so a new client can't tell the old
+one to quit. If Roblox is already running unprotected, the switch says so and offers "Close
+Roblox". The first time it is turned on, Roblox's stance on multiple clients is shown once.
+While RoALT's clients run (and while one is launching), Roblox's shared sign-in files are held
+locked so clients can't overwrite each other's session; they are released when the last client
+ends. The Launch view lists the clients RoALT started: account, state (starting, joining, in
+game, disconnected, ended, with problems such as a human check or a wrong account shown), job
+ID and uptime; close one (graceful, then forced after 5 s), close all, clear ended. Clients are
+tied to accounts through their own log file (by the launch's browser tracker id), followed
+through Roblox's updater relaunch and through bootstrappers such as Bloxstrap.
+
+**Test:** turn multi-instance on with Roblox closed; launch two accounts: both clients stay
+open, each row shows its account in game. Close one from its row. Turn protection off and on in
+Settings. Start Roblox normally first, then turn multi-instance on: the sidebar explains and
+"Close Roblox" fixes it.
+
+**Roblox differences:** the lock is now `ROBLOX_singletonEvent` (an event in client 0.744), not
+the old `ROBLOX_singletonMutex`; a mutex with that exact name blocks it. Roblox's tray process can
+already hold the name, so it counts as running. Logs are the only reliable source of the job id
+and of which account a client signed in as; presence lags.

@@ -19,6 +19,7 @@ const MAX_ENDED: usize = 30;
 const LOG_SKEW_SECS: u64 = 3;
 /// The note of a client whose log signed in as a different user than its account.
 pub const WRONG_ACCOUNT: &str = "Signed in as another account";
+pub const CHALLENGED: &str = "Roblox wants a human check";
 
 pub struct Tracker {
     inner: Mutex<Vec<Entry>>,
@@ -43,6 +44,8 @@ struct Entry {
     closing: bool,
     /// Unix ms the client first reached a server.
     in_game_at: Option<i64>,
+    /// Unix ms the bootstrapper of a not yet adopted entry was first seen gone.
+    gone_at: Option<i64>,
 }
 
 impl Tracker {
@@ -72,7 +75,7 @@ impl Tracker {
         self.entries().push(Entry {
             inst: inst.clone(),
             btid: info.browser_tracker_id,
-            start_time: None,
+            start_time: info.pid_start,
             adopted: !info.via_bootstrapper,
             alive: true,
             log: None,
@@ -82,6 +85,7 @@ impl Tracker {
             user_checked: false,
             closing: false,
             in_game_at: None,
+            gone_at: None,
         });
         inst
     }
@@ -102,20 +106,14 @@ impl Tracker {
     }
 
     /// The user asked to close it: its exit is not unexpected (no auto-rejoin, note "Closed").
-    pub fn mark_closing(&self, id: &str) {
-        if let Some(e) = self.entries().iter_mut().find(|e| e.inst.id == id && e.inst.state != InstanceState::Exited) {
-            e.closing = true;
-        }
-    }
-
-    /// The process to close for `id`: its pid and the start time it was first seen with (None
-    /// before the first poll). None once it ended or its process is gone, so a reused pid is
-    /// never closed; the next poll ends the entry.
-    pub fn close_target(&self, id: &str) -> Option<(u32, Option<u64>)> {
-        self.entries()
-            .iter()
-            .find(|e| e.inst.id == id && e.inst.state != InstanceState::Exited && e.alive)
-            .map(|e| (e.inst.pid, e.start_time))
+    /// Returns the process to close, under the same lock: its pid and the start time it was
+    /// first seen with (None before that). None once it ended or its process is gone, so a
+    /// reused pid is never closed; the next poll ends the entry.
+    pub fn mark_closing(&self, id: &str) -> Option<(u32, Option<u64>)> {
+        let mut entries = self.entries();
+        let e = entries.iter_mut().find(|e| e.inst.id == id && e.inst.state != InstanceState::Exited)?;
+        e.closing = true;
+        e.alive.then_some((e.inst.pid, e.start_time))
     }
 
     /// A close that didn't land: its exit counts as unexpected again.
@@ -154,10 +152,8 @@ impl Tracker {
                     let s = handle.state::<crate::App>();
                     let user_of = |account_id| s.db.account(account_id).ok().map(|a| a.user_id);
                     let changed = s.tracker.poll(logwatch::logs_dir().as_deref(), &Live, &user_of, crate::commands::now_ms());
-                    // The shared login files are held only while RoALT's clients run.
-                    if !s.tracker.any_running() {
-                        s.multi.release_shared();
-                    }
+                    // The shared login files are held only while RoALT's clients run (or launch).
+                    s.multi.release_if(|| !s.tracker.any_running());
                     changed
                 })
                 .await
@@ -232,6 +228,9 @@ fn observe(e: &mut Entry, dir: Option<&Path>, procs: &dyn Procs, roblox: &mut Op
     let seen = procs.start_time(e.inst.pid);
     let first = *e.start_time.get_or_insert(seen.unwrap_or(0));
     e.alive = seen == Some(first);
+    if !e.adopted && !e.alive {
+        e.gone_at.get_or_insert(now);
+    }
     let Some(dir) = dir else { return };
     let launched = UNIX_EPOCH + Duration::from_millis(e.inst.started_at.max(0) as u64);
     // A client starts after the launch (whole seconds: one of slack) and after the process it
@@ -297,11 +296,15 @@ fn created_secs(path: &Path) -> Option<u64> {
     Some(created.duration_since(UNIX_EPOCH).ok()?.as_secs())
 }
 
-/// Too early to call a vanished client gone: it never reached a game, was neither closed nor
-/// replaced, and was launched under 120 s ago.
+/// Too early to call a vanished client gone: it never reached a game, was not replaced, was
+/// launched under 120 s ago, and wasn't closed (a close that reached only a bootstrapper gets
+/// 5 s for the client it may already have started to show up).
 fn may_appear(e: &Entry, now: i64) -> bool {
-    e.in_game_at.is_none() && !e.closing && !e.facts.replaced && now - e.inst.started_at < REBIND_MS
+    let closed = e.closing && (e.adopted || e.gone_at.is_some_and(|g| now - g >= BOOTSTRAPPER_GRACE_MS));
+    e.in_game_at.is_none() && !closed && !e.facts.replaced && now - e.inst.started_at < REBIND_MS
 }
+
+const BOOTSTRAPPER_GRACE_MS: i64 = 5_000;
 
 /// Recomputes what the UI sees (under the lock, with the current closing flag).
 fn settle(e: &mut Entry, now: i64) {
@@ -331,7 +334,7 @@ fn state_of(facts: &LogFacts, bound: bool, ended: bool, closing: bool, expected_
     } else if matches!((facts.user_id, expected_user), (Some(got), Some(want)) if got != want) {
         Some(WRONG_ACCOUNT)
     } else if facts.challenged {
-        Some("Roblox wants a human check")
+        Some(CHALLENGED)
     } else {
         None
     };
@@ -401,7 +404,7 @@ mod tests {
     }
 
     fn info(pid: u32, started_at: i64, via_bootstrapper: bool) -> LaunchInfo {
-        LaunchInfo { account_id: 1, pid, browser_tracker_id: BTID, place_id: Some(1818), started_at, via_bootstrapper, warning: None }
+        LaunchInfo { account_id: 1, pid, browser_tracker_id: BTID, place_id: Some(1818), started_at, via_bootstrapper, warning: None, pid_start: None }
     }
 
     fn target() -> LaunchTarget {
@@ -691,6 +694,48 @@ mod tests {
         poll(start + 121_000);
         assert_eq!(state(&t, &id), (Exited, note("Closed unexpectedly"), 901));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn closing_a_bootstrapper_leaves_its_client_running() {
+        let dir = temp_dir();
+        let t = Tracker::new();
+        let start = now_ms();
+        let secs = (start / 1000) as u64;
+        let id = t.register(&info(900, start, true), target()).id;
+        let procs = Fake::new(&[(900, secs)]);
+        let poll = |now: i64| t.poll(Some(&dir), &procs, &user_of, now);
+        poll(start + 1_000);
+        assert_eq!(t.mark_closing(&id), Some((900, Some(secs))));
+
+        // The close reached only the bootstrapper; its client shows up within the grace.
+        procs.set(&[(901, secs + 1)]);
+        poll(start + 3_000);
+        assert_eq!(state(&t, &id), (Starting, None, 900));
+        append(&dir.join("0.744.0.7441080_20261024T120002Z_Player_DDDDD_last.log"), &[btid_line(BTID)]);
+        poll(start + 4_000);
+        assert_eq!(state(&t, &id), (Joining, None, 901));
+        // Closing applies to the client again, which then ends as closed.
+        assert_eq!(t.mark_closing(&id), Some((901, Some(secs + 1))));
+        procs.set(&[]);
+        poll(start + 5_000);
+        assert_eq!(state(&t, &id), (Exited, note("Closed"), 901));
+
+        // No client within the grace (and no log naming it): closed.
+        let empty = temp_dir();
+        let poll = |now: i64| t.poll(Some(&empty), &procs, &user_of, now);
+        let id = t.register(&info(910, start, true), target()).id;
+        procs.set(&[(910, secs)]);
+        poll(start + 1_000);
+        t.mark_closing(&id);
+        procs.set(&[]);
+        poll(start + 2_000);
+        assert_eq!(state(&t, &id).0, Starting);
+        poll(start + 8_000);
+        assert_eq!(state(&t, &id), (Exited, note("Closed"), 910));
+        assert_eq!(t.mark_closing(&id), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&empty).unwrap();
     }
 
     #[test]

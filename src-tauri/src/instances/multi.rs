@@ -7,6 +7,7 @@
 use std::fs::{File, OpenOptions};
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use windows::Win32::Foundation::{ERROR_INVALID_HANDLE, GENERIC_READ, HANDLE};
@@ -23,6 +24,9 @@ const RUNNING: &str = "Roblox is already running. Close it (including its tray i
 
 pub struct Multi {
     inner: Mutex<Option<Held>>,
+    /// Launches between `launching` and the client being tracked; outside `Held` so turning
+    /// multi-instance off and on during a launch doesn't forget it.
+    launches: AtomicUsize,
 }
 
 /// The mutex handle and the locked files; dropping it releases everything.
@@ -30,6 +34,18 @@ struct Held {
     _mutex: Singleton,
     /// Empty unless RoALT's clients run with protection on.
     files: Vec<File>,
+    /// Clients (pid, start time) already running when the lock was taken: started under an
+    /// earlier lock (a normal Roblox would have made `take` fail), e.g. before RoALT restarted.
+    survivors: Vec<(u32, u64)>,
+}
+
+/// A launch in flight (see `Multi::launching`); ends when dropped.
+pub struct Launching<'a>(&'a Multi);
+
+impl Drop for Launching<'_> {
+    fn drop(&mut self) {
+        self.0.launches.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 /// Our handle to the named mutex; closed on drop.
@@ -45,7 +61,7 @@ unsafe impl Sync for Singleton {}
 
 impl Multi {
     pub fn new() -> Multi {
-        Multi { inner: Mutex::new(None) }
+        Multi { inner: Mutex::new(None), launches: AtomicUsize::new(0) }
     }
 
     /// Takes the lock (no-op when held). The name decides: if it already belongs to an event
@@ -81,13 +97,49 @@ impl Multi {
         }
     }
 
-    fn lock_shared_at(&self, paths: &[PathBuf]) {
+    /// A launch is about to start a client: until the guard drops (after the client is
+    /// tracked), `release_if` keeps the files; with `protect` they are locked now.
+    pub fn launching(&self, protect: bool) -> Launching<'_> {
+        self.launching_at(protect, &shared_files())
+    }
+
+    /// Releases the shared login files when no launch is in flight, no survivor runs and
+    /// `idle()` (no tracked client runs) holds; checked under this lock, so a launch can't slip
+    /// in between the check and the release.
+    pub fn release_if(&self, idle: impl FnOnce() -> bool) {
         if let Some(h) = self.held().as_mut()
-            && h.files.len() < paths.len()
+            && !h.files.is_empty()
+            && !self.in_flight()
+            && !survivors_alive(h)
+            && idle()
         {
-            // Our own handles would make the new opens fail: drop them first.
             h.files.clear();
-            h.files = lock_files(paths);
+        }
+    }
+
+    /// A launch hasn't got its client tracked yet.
+    pub fn in_flight(&self) -> bool {
+        self.launches.load(Ordering::SeqCst) > 0
+    }
+
+    /// Clients from before the lock still run.
+    pub fn has_survivors(&self) -> bool {
+        self.held().as_mut().is_some_and(survivors_alive)
+    }
+
+    fn launching_at(&self, protect: bool, paths: &[PathBuf]) -> Launching<'_> {
+        // Counted before locking: a `release_if` racing with this either sees the count or
+        // runs before the relock below.
+        self.launches.fetch_add(1, Ordering::SeqCst);
+        if protect && let Some(h) = self.held().as_mut() {
+            relock(h, paths);
+        }
+        Launching(self)
+    }
+
+    fn lock_shared_at(&self, paths: &[PathBuf]) {
+        if let Some(h) = self.held().as_mut() {
+            relock(h, paths);
         }
     }
 
@@ -108,7 +160,8 @@ impl Multi {
     fn take(&self, name: &str) -> Result<()> {
         let mut held = self.held();
         if held.is_none() {
-            *held = Some(Held { _mutex: create_mutex(name)?, files: Vec::new() });
+            let survivors = process::roblox_processes().iter().map(|p| (p.pid, p.start_time)).collect();
+            *held = Some(Held { _mutex: create_mutex(name)?, files: Vec::new(), survivors });
         }
         Ok(())
     }
@@ -122,6 +175,21 @@ impl Default for Multi {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Locks `paths` unless all are already held. Our own handles would make the new opens fail:
+/// they are dropped first.
+fn relock(h: &mut Held, paths: &[PathBuf]) {
+    if h.files.len() < paths.len() {
+        h.files.clear();
+        h.files = lock_files(paths);
+    }
+}
+
+/// Drops survivors that have exited; true while any runs.
+fn survivors_alive(h: &mut Held) -> bool {
+    h.survivors.retain(|&(pid, t)| process::start_time(pid) == Some(t));
+    !h.survivors.is_empty()
 }
 
 /// Success, with or without ERROR_ALREADY_EXISTS (another tool's mutex blocks clients the same
@@ -216,6 +284,25 @@ mod tests {
     }
 
     #[test]
+    fn survivors_count_only_while_they_run() {
+        let m = Multi::new();
+        m.take(&test_name()).unwrap();
+        let mut child = std::process::Command::new("PING.EXE")
+            .args(["-n", "30", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let t = process::start_time(child.id()).unwrap();
+        m.held().as_mut().unwrap().survivors = vec![(child.id(), t), (child.id(), t - 5)];
+        assert!(m.has_survivors());
+        assert_eq!(m.held().as_ref().unwrap().survivors.len(), 1);
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(!m.has_survivors());
+        m.disable();
+    }
+
+    #[test]
     fn locks_shared_files_while_held_and_creates_missing_ones() {
         let dir = std::env::temp_dir().join(format!("roalt-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -228,7 +315,9 @@ mod tests {
         let m = Multi::new();
         m.lock_shared_at(&files); // not held: nothing
         File::open(&file).unwrap();
-        m.take(&test_name()).unwrap();
+        let name = test_name();
+        m.take(&name).unwrap();
+        m.held().as_mut().unwrap().survivors.clear(); // a real Roblox on this machine must not count
         m.lock_shared_at(&files);
         assert!(locked(&file) && locked(&missing));
         m.lock_shared_at(&files); // both held: kept, not reopened
@@ -238,6 +327,25 @@ mod tests {
         other.take(&test_name()).unwrap();
         other.lock_shared_at(&files);
         assert!(other.is_active());
+
+        // A launch in flight keeps them; so does a tracked client (idle false).
+        let launch = m.launching_at(true, &files);
+        m.release_if(|| true);
+        assert!(locked(&file));
+        drop(launch);
+        m.release_if(|| false);
+        assert!(locked(&file));
+        m.release_if(|| true);
+        File::open(&file).unwrap();
+        // Turning multi-instance off and on during a launch keeps it counted.
+        let launch = m.launching_at(false, &files);
+        m.disable();
+        m.take(&name).unwrap();
+        m.held().as_mut().unwrap().survivors.clear();
+        assert!(m.in_flight());
+        drop(launch);
+        assert!(!m.in_flight());
+        m.lock_shared_at(&files);
 
         // Releasing frees the files but keeps the lock; contents are untouched.
         m.release_shared();

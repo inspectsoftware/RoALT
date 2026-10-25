@@ -44,9 +44,12 @@ function remember(id: number) {
 }
 
 /** Why several accounts can't launch right now, or null. */
-export function bulkBlocked(multi: MultiInstanceStatus | undefined, batch: BulkProgress | null | undefined) {
-  if (!multi?.active) return (multi?.enabled && multi.message) || "Turn on multi-instance to launch several accounts.";
-  return batch && !batch.done ? "A batch is still running." : null;
+/** Why a launch can't start now: launches go one at a time (a running batch blocks single
+ * launches too), and several accounts need multi-instance. */
+export function launchBlocked(several: boolean, multi: MultiInstanceStatus | undefined, batch: BulkProgress | null | undefined) {
+  if (batch && !batch.done) return "A batch is still running.";
+  if (several && !multi?.active) return (multi?.enabled && multi.message) || "Turn on multi-instance to launch several accounts.";
+  return null;
 }
 
 /** Toasts a started client and remembers its account for the next start. */
@@ -114,7 +117,7 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
   const fav = draft.favId === null ? undefined : favourites.data?.find((f) => f.id === draft.favId);
   // A parse that hasn't caught up yet is launchable: resolveTarget parses again.
   const pending = !!text.trim() && draft.parsed?.text !== text;
-  const blocked = bulk ? bulkBlocked(multi, batch) : null;
+  const blocked = launchBlocked(bulk, multi, batch);
   const canLaunch = !!account && (usableTarget || pending) && !step && !blocked;
 
   /** What the draft launches; parses again if the debounce hasn't caught up, looks a username up. */

@@ -484,6 +484,10 @@ pub async fn launch(
     target: LaunchTarget,
     favourite_id: Option<i64>,
 ) -> Result<LaunchInfo> {
+    // Launches go strictly one at a time (DESIGN §6).
+    if s.bulk.current().is_some_and(|p| !p.done) {
+        return Err(AppError::Invalid("A batch is still running.".into()));
+    }
     Ok(launch_tracked(&app, &s, account_id, target, favourite_id).await?.0)
 }
 
@@ -500,9 +504,8 @@ pub(crate) async fn launch_tracked(
 ) -> Result<(LaunchInfo, Instance)> {
     let v = s.db.settings()?;
     retake_multi(s, &v);
-    if v.multi_instance && v.protect_shared_login {
-        s.multi.lock_shared();
-    }
+    // Holds the shared files until the client is tracked (the poll releases them when idle).
+    let launching = s.multi.launching(v.multi_instance && v.protect_shared_login);
     let info = match crate::launcher::launch(s, account_id, &target).await {
         Ok(info) => info,
         Err(e) => {
@@ -511,6 +514,7 @@ pub(crate) async fn launch_tracked(
         }
     };
     let instance = s.tracker.register(&info, target);
+    drop(launching);
     instances_changed(app);
     if let Some(f) = favourite_id {
         let _ = s.db.touch_favourite(f, now_ms());
@@ -628,9 +632,8 @@ pub fn instances_list(s: State<'_, App>) -> Vec<Instance> {
 #[tauri::command]
 pub async fn instance_close(s: State<'_, App>, id: String, force: bool) -> Result<()> {
     s.tracker.get(&id).ok_or(AppError::NotFound)?;
-    s.tracker.mark_closing(&id);
-    // Its process already gone (or not seen yet as it was): the next poll ends the entry.
-    let Some(target) = s.tracker.close_target(&id) else { return Ok(()) };
+    // Its process already gone: the next poll ends the entry.
+    let Some(target) = s.tracker.mark_closing(&id) else { return Ok(()) };
     let r = close_all(vec![target], force).await?.pop().unwrap_or(Ok(()));
     if r.is_err() {
         s.tracker.clear_closing(&id);
@@ -659,11 +662,8 @@ async fn close_all(targets: Vec<(u32, Option<u64>)>, force: bool) -> Result<Vec<
 #[tauri::command]
 pub async fn instances_close_all(s: State<'_, App>, force: bool) -> Result<()> {
     let running: Vec<Instance> = s.tracker.list().into_iter().filter(|i| i.state != InstanceState::Exited).collect();
-    for i in &running {
-        s.tracker.mark_closing(&i.id);
-    }
     let (ids, targets): (Vec<String>, Vec<_>) =
-        running.into_iter().filter_map(|i| Some((i.id.clone(), s.tracker.close_target(&i.id)?))).unzip();
+        running.into_iter().filter_map(|i| Some((i.id.clone(), s.tracker.mark_closing(&i.id)?))).unzip();
     for (id, r) in ids.iter().zip(close_all(targets, force).await?) {
         if let Err(e) = r {
             log::warn!("could not close Roblox client of instance {id}: {e}");
@@ -688,8 +688,16 @@ pub fn multi_instance_status(s: State<'_, App>) -> Result<MultiInstanceStatus> {
 
 /// Takes the lock when it is wanted but not held and Roblox has since closed (no-op otherwise).
 pub(crate) fn retake_multi(s: &App, v: &Settings) {
-    if v.multi_instance && !s.multi.is_active() {
-        let _ = s.multi.enable();
+    if v.multi_instance && !s.multi.is_active() && s.multi.enable().is_ok() {
+        protect_running(s, v);
+    }
+}
+
+/// Locks the shared login files at once when protection is on and clients already run
+/// (RoALT's, or ones from before a restart).
+fn protect_running(s: &App, v: &Settings) {
+    if v.protect_shared_login && (s.multi.in_flight() || s.tracker.any_running() || s.multi.has_survivors()) {
+        s.multi.lock_shared();
     }
 }
 
@@ -702,8 +710,9 @@ pub fn multi_instance_set(s: State<'_, App>, enabled: bool) -> Result<MultiInsta
     v.multi_instance = enabled;
     s.db.save_settings(&v)?;
     if enabled {
-        if let Err(e) = s.multi.enable() {
-            log::info!("multi-instance not active yet: {e}");
+        match s.multi.enable() {
+            Ok(()) => protect_running(&s, &v),
+            Err(e) => log::info!("multi-instance not active yet: {e}"),
         }
     } else {
         s.multi.disable();
@@ -723,6 +732,10 @@ pub async fn roblox_close_all(s: State<'_, App>, force: bool) -> Result<MultiIns
     for (p, r) in procs.iter().zip(close_all(targets, force).await?) {
         if let Err(e) = r {
             log::warn!("could not close Roblox process {}: {e}", p.pid);
+            // Still running: its exit stays unexpected.
+            for i in s.tracker.list().iter().filter(|i| i.pid == p.pid && i.state != InstanceState::Exited) {
+                s.tracker.clear_closing(&i.id);
+            }
         }
     }
     let v = s.db.settings()?;
@@ -991,8 +1004,8 @@ pub fn settings_set(s: State<'_, App>, patch: SettingsPatch) -> Result<Settings>
         v.protect_shared_login = p;
         if !p {
             s.multi.release_shared();
-        } else if v.multi_instance && s.tracker.any_running() {
-            s.multi.lock_shared();
+        } else if v.multi_instance {
+            protect_running(&s, &v);
         }
     }
     s.db.save_settings(&v)?;

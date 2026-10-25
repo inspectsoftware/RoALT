@@ -75,8 +75,12 @@ const multiStatus = (): MultiInstanceStatus => {
     : "Multi-instance isn't active yet. Turn it off and on again to retry.";
   return { enabled: settings.multiInstance, active: lockHeld, protectSharedLogin: settings.protectSharedLogin, blockedBy, message };
 };
+// A client launched without the lock owns Roblox's singleton event; clients started under the
+// lock don't block taking it again.
+let eventHolder: string | null = null;
 const retakeLock = () => {
-  if (settings.multiInstance && !lockHeld && multiStatus().blockedBy.length === 0) lockHeld = true;
+  const holder = instances.some((i) => i.id === eventHolder && i.state !== "exited");
+  if (settings.multiInstance && !lockHeld && !strangerRunning && !holder) lockHeld = true;
 };
 function endInstance(id: string, note: string) {
   const i = instances.find((x) => x.id === id);
@@ -94,6 +98,7 @@ function track(accountId: number, pid: number, target: LaunchTarget, placeId: nu
     startedAt: Date.now(), endedAt: null, viaBootstrapper, note: null,
   };
   instances.push(i);
+  if (!lockHeld) eventHolder = i.id;
   instancesChanged();
   const step = (ms: number, f: () => void) => setTimeout(() => { if (i.state !== "exited") { f(); instancesChanged(); } }, ms);
   step(1500, () => { i.state = "joining"; });
@@ -405,7 +410,8 @@ async function runBatch(b: BulkProgress, favouriteId: number | null) {
       if (f) f.lastUsedAt = Date.now();
     }
     if (!prev && follow && target.kind === "place") {
-      await until(() => i.jobId !== null || i.state === "exited", 10_000);
+      await until(() => batchCancel || i.jobId !== null || i.state === "exited", 10_000);
+      if (batchCancel) break;
       if (i.jobId) {
         b.jobId = i.jobId;
         target = { kind: "server", placeId: target.placeId, jobId: i.jobId };
@@ -413,13 +419,13 @@ async function runBatch(b: BulkProgress, favouriteId: number | null) {
     }
     prev = i;
   }
-  if (batchCancel) {
-    for (const item of b.items) if (item.stage.kind === "queued") item.stage = { kind: "cancelled" };
-    b.stopped = "Cancelled";
-    bulkChanged();
-  }
+  // As the backend: a stopped batch is done at once; otherwise it waits for its clients to settle.
   const settling = (s: BulkStage) => s.kind === "ticket" || s.kind === "starting" || s.kind === "joining";
-  await until(() => !b.items.some((x) => settling(x.stage)), 120_000);
+  if (!batchCancel) await until(() => batchCancel || !b.items.some((x) => settling(x.stage)), 120_000);
+  if (batchCancel) {
+    for (const item of b.items) if (item.stage.kind === "queued" || item.stage.kind === "ticket") item.stage = { kind: "cancelled" };
+    b.stopped = "Cancelled";
+  }
   b.done = true;
   bulkChanged();
 }
@@ -432,6 +438,8 @@ function startBatch(r: BulkRequest) {
     const a = find(id);
     if (!a) return fail("notFound", "Not found.");
     if (a.status !== "valid") return fail("invalid", `${a.alias || a.displayName} can't launch: sign in to it again.`);
+    const live = instances.some((i) => i.accountId === id && (i.state === "starting" || i.state === "joining" || i.state === "inGame"));
+    if (live) return fail("invalid", `${a.alias || a.displayName} is already running. Untick it or close its client first.`);
   }
   if (batch && !batch.done) return fail("invalid", "A batch is already running.");
   retakeLock();
@@ -439,7 +447,7 @@ function startBatch(r: BulkRequest) {
   batchCancel = false;
   batch = {
     batchId: crypto.randomUUID(), target: r.target, sameServer: r.sameServer, delayMs: Math.min(60_000, Math.max(2000, r.delayMs)),
-    jobId: null, items: ids.map((accountId) => ({ accountId, stage: { kind: "queued" }, instanceId: null })), stopped: null, done: false, note: null,
+    jobId: null, items: ids.map((accountId) => ({ accountId, userId: find(accountId)?.userId ?? 0, stage: { kind: "queued" }, instanceId: null })), stopped: null, done: false, note: null,
   };
   bulkChanged();
   void runBatch(batch, r.favouriteId);
@@ -555,6 +563,7 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
         : { userId: 7000000000 + name.length * 7919, username: name, displayName: name.replace(/_/g, " ") };
     }
     case "launch": {
+      if (batch && !batch.done) return fail("invalid", "A batch is still running.");
       await sleep(1200);
       const a = find(args.accountId);
       if (!a) return fail("notFound", "Not found.");

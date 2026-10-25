@@ -272,8 +272,9 @@ Copy user ID / username and "open profile" stay in the UI (clipboard API, opener
   (as in the brief): launch #1 normally, read its job ID from its log (presence as fallback), send the rest
   with `RequestGameJob`. Private-server targets are already one server.
 - **Bulk:** strictly one at a time; default stagger 6 s ± 1 s; ticket fetched right before each launch;
-  next launch waits for the previous client's log binding; pause the batch on a challenge or an account
-  mismatch in the log; cancel stops after the current step.
+  next launch waits for the previous client's log binding; stop the batch on a challenge, an account
+  mismatch in the log, a locked vault or multi-instance turned off (the accounts not yet launched are
+  cancelled and can be picked again in one click); cancel stops after the current step.
 - **Close:** WM_CLOSE twice (the client may show a leave prompt), then TerminateProcess after a few seconds.
 - **Auto-rejoin:** an instance that exits without RoALT closing it, and was not replaced by Roblox's own
   update or tray handover, relaunches into the same target after the stagger, at most 3 tries.

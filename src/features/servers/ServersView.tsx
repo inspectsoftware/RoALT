@@ -6,7 +6,7 @@ import { Segmented, Switch } from "../../ui/controls";
 import { Icon } from "../../ui/Icon";
 import { friendly } from "../../ui/Toast";
 import { accountName, avatarColor, plural } from "../accounts/shared";
-import { bulkBlocked, launched, launchFailed } from "../launch/LaunchView";
+import { launchBlocked, launched, launchFailed } from "../launch/LaunchView";
 import { useNow } from "../launch/Running";
 import { PrivateTable, PublicTable, short, type Pick } from "./ServerTables";
 
@@ -87,7 +87,7 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
     ? `${short(pubPick)}${free === null ? "" : ` · ${free} free`}`
     : privPick ? `${privPick.name || "Private server"} · ${free} free` : "No server picked";
   const n = chosen.length;
-  const blocked = n > 1 ? bulkBlocked(multi, batch) : null;
+  const blocked = launchBlocked(n > 1, multi, batch);
   const warning = blocked ?? (free !== null && n > free ? `Only ${plural(free, "free slot")} for ${plural(n, "account")}.` : null);
   const canJoin = !!target && n > 0 && !launching && !blocked;
 

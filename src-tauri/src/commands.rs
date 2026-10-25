@@ -35,9 +35,11 @@ pub fn vault_status(s: State<'_, App>) -> Result<VaultStatus> {
 }
 
 #[tauri::command]
-pub async fn vault_unlock(s: State<'_, App>, password: String) -> Result<()> {
+pub async fn vault_unlock(app: AppHandle, s: State<'_, App>, password: String) -> Result<()> {
     let rec = s.db.vault_record()?.ok_or(AppError::Internal("vault record missing".into()))?;
-    s.vault.unlock(&rec, &password)
+    s.vault.unlock(&rec, &password)?;
+    crate::tray::refresh(&app);
+    Ok(())
 }
 
 #[tauri::command]
@@ -63,6 +65,7 @@ pub async fn vault_set_mode(
     let new_rec = s.vault.rewrap(&rec, mode, current_password.as_deref(), new_password.as_deref())?;
     s.db.save_vault_record(&new_rec)?;
     s.vault.set_mode(mode);
+    crate::tray::refresh(&app);
     Ok(())
 }
 
@@ -485,7 +488,7 @@ pub async fn launch(
     favourite_id: Option<i64>,
 ) -> Result<LaunchInfo> {
     // Launches go strictly one at a time (DESIGN §6).
-    if s.bulk.current().is_some_and(|p| !p.done) {
+    if s.bulk.running() {
         return Err(AppError::Invalid("A batch is still running.".into()));
     }
     Ok(launch_tracked(&app, &s, account_id, target, favourite_id).await?.0)
@@ -532,24 +535,31 @@ pub fn notice(app: &AppHandle, error: bool, message: impl Into<String>) {
 /// The Roblox client RoALT would start (`launcher::client::find`); not installed → path None.
 #[tauri::command]
 pub fn roblox_client() -> RobloxClient {
-    todo!()
+    let exe = crate::launcher::client::find().ok();
+    RobloxClient {
+        path: exe.as_ref().map(|e| e.path.display().to_string()),
+        bootstrapper: exe.is_some_and(|e| e.bootstrapper),
+    }
 }
 
 /// Where the data lives now (see `main::data_dir`).
 #[tauri::command]
 pub fn data_dir_info(s: State<'_, App>) -> DataDir {
-    let _ = s;
-    todo!()
+    DataDir {
+        path: s.data_dir.display().to_string(),
+        default: crate::same_dir(&s.data_dir, &crate::default_dir()),
+        overridden: crate::data_dir_overridden(),
+    }
 }
 
 /// Opens the data folder in Explorer (opener plugin, Rust side: no capability needed).
 #[tauri::command]
 pub fn data_dir_open(app: AppHandle, s: State<'_, App>) -> Result<()> {
-    let _ = (app, s);
-    todo!()
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().open_path(s.data_dir.display().to_string(), None::<&str>).map_err(|e| AppError::Internal(e.to_string()))
 }
 
-/// Copies the database into `path` (an existing, empty folder or a new one; not the current
+/// Copies the database into `path` (a new folder or one without a roalt.db; not the current
 /// folder or inside it) with SQLite's `VACUUM INTO` (consistent while open), then records it in
 /// `%LOCALAPPDATA%\RoALT\location.json` as `{"dataDir": path, "movedFrom": current}`. The move
 /// takes effect at the next start (`app_restart`); that start deletes the old folder's
@@ -558,8 +568,15 @@ pub fn data_dir_open(app: AppHandle, s: State<'_, App>) -> Result<()> {
 /// copy can take a moment.
 #[tauri::command]
 pub async fn data_dir_move(s: State<'_, App>, path: String) -> Result<()> {
-    let _ = (s, path);
-    todo!()
+    if crate::data_dir_overridden() {
+        return Err(AppError::Invalid("A test run's data folder (ROALT_DATA_DIR) can't be moved.".into()));
+    }
+    let target = crate::move_target(&s.data_dir, &path)?;
+    std::fs::create_dir_all(&target)?;
+    s.db.copy_to(&target.join(crate::DB_FILE))?;
+    crate::write_location(&crate::Location { data_dir: target.clone(), moved_from: Some(s.data_dir.clone()) })?;
+    log::info!("database copied to {}; RoALT uses it from the next start", target.display());
+    Ok(())
 }
 
 /// Restarts RoALT (after a data folder move).
@@ -697,6 +714,7 @@ pub async fn servers_list(
 
 pub fn instances_changed(app: &AppHandle) {
     let _ = app.emit("instances://changed", ());
+    crate::tray::refresh(app);
 }
 
 #[tauri::command]
@@ -737,6 +755,11 @@ async fn close_all(targets: Vec<(u32, Option<u64>)>, force: bool) -> Result<Vec<
 
 #[tauri::command]
 pub async fn instances_close_all(s: State<'_, App>, force: bool) -> Result<()> {
+    close_running(&s, force).await
+}
+
+/// Asks every running client to close (also the tray's "Close all clients").
+pub(crate) async fn close_running(s: &App, force: bool) -> Result<()> {
     let running: Vec<Instance> = s.tracker.list().into_iter().filter(|i| i.state != InstanceState::Exited).collect();
     let (ids, targets): (Vec<String>, Vec<_>) =
         running.into_iter().filter_map(|i| Some((i.id.clone(), s.tracker.mark_closing(&i.id)?))).unzip();
@@ -821,7 +844,7 @@ pub async fn roblox_close_all(s: State<'_, App>, force: bool) -> Result<MultiIns
 
 const FAVOURITE_AAD: &[u8] = b"roalt.favourite";
 
-fn favourite_of(s: &App, row: crate::storage::FavouriteRow) -> Result<Favourite> {
+pub(crate) fn favourite_of(s: &App, row: crate::storage::FavouriteRow) -> Result<Favourite> {
     let json = s.vault.decrypt(FAVOURITE_AAD, &row.target)?;
     let target = serde_json::from_slice(&json).map_err(|_| AppError::Crypto)?;
     Ok(Favourite {
@@ -841,22 +864,27 @@ pub fn favourites_list(s: State<'_, App>) -> Result<Vec<Favourite>> {
 }
 
 #[tauri::command]
-pub fn favourite_save(s: State<'_, App>, input: FavouriteInput) -> Result<Favourite> {
+pub fn favourite_save(app: AppHandle, s: State<'_, App>, input: FavouriteInput) -> Result<Favourite> {
     let json = zeroize::Zeroizing::new(serde_json::to_vec(&input.target).map_err(|e| AppError::Internal(e.to_string()))?);
     let blob = s.vault.encrypt(FAVOURITE_AAD, &json)?;
     let id = s.db.save_favourite(input.id, &input.name, &blob, &input.account_ids, input.in_tray)?;
+    crate::tray::refresh(&app);
     let row = s.db.favourites()?.into_iter().find(|f| f.id == id).ok_or(AppError::NotFound)?;
     favourite_of(&s, row)
 }
 
 #[tauri::command]
-pub fn favourite_remove(s: State<'_, App>, id: i64) -> Result<()> {
-    s.db.remove_favourite(id)
+pub fn favourite_remove(app: AppHandle, s: State<'_, App>, id: i64) -> Result<()> {
+    s.db.remove_favourite(id)?;
+    crate::tray::refresh(&app);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn favourites_reorder(s: State<'_, App>, ids: Vec<i64>) -> Result<()> {
-    s.db.reorder_favourites(&ids)
+pub fn favourites_reorder(app: AppHandle, s: State<'_, App>, ids: Vec<i64>) -> Result<()> {
+    s.db.reorder_favourites(&ids)?;
+    crate::tray::refresh(&app);
+    Ok(())
 }
 
 fn presence_kind(s: Option<&str>) -> PresenceKind {
@@ -930,6 +958,7 @@ pub fn lock_vault(app: &AppHandle) {
     let s = app.state::<App>();
     s.vault.lock();
     let _ = app.emit("vault://locked", ());
+    crate::tray::refresh(app);
 }
 
 // ---------- groups ----------
@@ -1067,6 +1096,8 @@ pub fn settings_set(s: State<'_, App>, patch: SettingsPatch) -> Result<Settings>
         }
         v.cache_minutes = c;
     }
+    if let Some(r) = patch.auto_rejoin { v.auto_rejoin = r }
+    if let Some(c) = patch.close_to_tray { v.close_to_tray = c }
     if let Some(d) = patch.launch_delay_ms {
         if !(2_000..=60_000).contains(&d) {
             return Err(AppError::Invalid("The launch delay must be between 2 and 60 seconds.".into()));

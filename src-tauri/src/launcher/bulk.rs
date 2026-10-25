@@ -80,6 +80,11 @@ impl Bulk {
         self.batch().as_ref().map(|b| b.progress.clone())
     }
 
+    /// A batch is still running.
+    pub fn running(&self) -> bool {
+        self.batch().as_ref().is_some_and(|b| !b.progress.done)
+    }
+
     /// Asks the running batch to stop after its current step. `NotFound` when `batch_id` isn't
     /// the current batch; Ok (no-op) when it already finished.
     pub fn cancel(&self, batch_id: &str) -> Result<()> {
@@ -484,7 +489,7 @@ fn new_progress(batch_id: String, req: &BulkRequest, accounts: &[Account]) -> Bu
 }
 
 /// Alias, else display name, else username.
-fn name_of(a: &AccountSummary) -> String {
+pub(crate) fn name_of(a: &AccountSummary) -> String {
     [&a.alias, &a.display_name, &a.username].into_iter().find(|n| !n.trim().is_empty()).cloned().unwrap_or_default()
 }
 

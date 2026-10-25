@@ -60,10 +60,11 @@ pub fn start_time(pid: u32) -> Option<u64> {
 
 /// Asks the client to close: WM_CLOSE to its top-level windows, again after ~400 ms (Roblox may
 /// show a leave prompt), then TerminateProcess if it is still alive after `grace`. `force`
-/// terminates at once. Already gone → Ok.
-pub fn close(pid: u32, force: bool, grace: Duration) -> Result<()> {
-    // Pid + start time, so a pid reused while we wait is never touched.
-    let Some(t0) = start_time(pid) else { return Ok(()) };
+/// terminates at once. `expected` is the start time the process was seen with; another
+/// process now holding `pid` is left alone. Already gone → Ok.
+pub fn close(pid: u32, expected: Option<u64>, force: bool, grace: Duration) -> Result<()> {
+    // Pid + start time, so a pid already reused, or reused while we wait, is never touched.
+    let Some(t0) = start_time(pid).filter(|t| expected.is_none_or(|e| e == *t)) else { return Ok(()) };
     let alive = || start_time(pid) == Some(t0);
     if !force {
         let deadline = Instant::now() + grace;
@@ -191,17 +192,29 @@ mod tests {
     fn force_close_terminates() {
         let mut child = sleeper();
         let pid = child.id();
-        assert!(start_time(pid).is_some());
-        close(pid, true, Duration::from_secs(5)).unwrap();
+        let t0 = start_time(pid);
+        assert!(t0.is_some());
+        close(pid, t0, true, Duration::from_secs(5)).unwrap();
         assert_eq!(child.try_wait().unwrap().and_then(|s| s.code()), Some(1));
-        close(pid, true, Duration::from_secs(5)).unwrap(); // already gone
+        close(pid, t0, true, Duration::from_secs(5)).unwrap(); // already gone
+    }
+
+    #[test]
+    fn a_process_started_at_another_time_is_left_alone() {
+        let mut child = sleeper();
+        let pid = child.id();
+        let other = start_time(pid).map(|t| t - 10);
+        close(pid, other, true, Duration::from_secs(5)).unwrap();
+        assert!(child.try_wait().unwrap().is_none(), "a reused pid must not be closed");
+        close(pid, None, true, Duration::from_secs(5)).unwrap();
+        child.wait().unwrap();
     }
 
     #[test]
     fn graceful_close_without_windows_terminates_after_grace() {
         let mut child = sleeper();
         let begun = Instant::now();
-        close(child.id(), false, Duration::from_millis(200)).unwrap();
+        close(child.id(), None, false, Duration::from_millis(200)).unwrap();
         assert!(begun.elapsed() >= Duration::from_millis(400));
         assert_eq!(child.try_wait().unwrap().and_then(|s| s.code()), Some(1));
     }

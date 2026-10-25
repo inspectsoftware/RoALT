@@ -484,8 +484,13 @@ pub async fn launch(
     target: LaunchTarget,
     favourite_id: Option<i64>,
 ) -> Result<LaunchInfo> {
-    // The lock has to be held before this client starts, or the next one replaces it.
-    retake_multi(&s, &s.db.settings()?);
+    // The lock has to be held before this client starts, or the next one replaces it; so do
+    // the shared login files, while protection is on.
+    let v = s.db.settings()?;
+    retake_multi(&s, &v);
+    if v.multi_instance && v.protect_shared_login {
+        s.multi.lock_shared();
+    }
     let info = match crate::launcher::launch(&s, account_id, &target).await {
         Ok(info) => info,
         Err(e) => {
@@ -515,11 +520,33 @@ pub fn instances_list(s: State<'_, App>) -> Vec<Instance> {
 /// Asks one client to close (graceful unless `force`); not treated as an unexpected exit.
 #[tauri::command]
 pub async fn instance_close(s: State<'_, App>, id: String, force: bool) -> Result<()> {
-    let inst = s.tracker.get(&id).ok_or(AppError::NotFound)?;
+    s.tracker.get(&id).ok_or(AppError::NotFound)?;
     s.tracker.mark_closing(&id);
-    tauri::async_runtime::spawn_blocking(move || crate::instances::process::close(inst.pid, force, Duration::from_secs(5)))
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?
+    // Its process already gone (or not seen yet as it was): the next poll ends the entry.
+    let Some(target) = s.tracker.close_target(&id) else { return Ok(()) };
+    let r = close_all(vec![target], force).await?.pop().unwrap_or(Ok(()));
+    if r.is_err() {
+        s.tracker.clear_closing(&id);
+    }
+    r
+}
+
+/// Closes the processes at once (each `process::close` waits up to its grace), so the whole
+/// thing takes one grace period, not one per client. Results in input order.
+async fn close_all(targets: Vec<(u32, Option<u64>)>, force: bool) -> Result<Vec<Result<()>>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        std::thread::scope(|sc| {
+            let jobs: Vec<_> = targets
+                .into_iter()
+                .map(|(pid, t0)| sc.spawn(move || crate::instances::process::close(pid, t0, force, Duration::from_secs(5))))
+                .collect();
+            jobs.into_iter()
+                .map(|j| j.join().unwrap_or_else(|_| Err(AppError::Internal("close panicked".into()))))
+                .collect()
+        })
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))
 }
 
 #[tauri::command]
@@ -528,16 +555,15 @@ pub async fn instances_close_all(s: State<'_, App>, force: bool) -> Result<()> {
     for i in &running {
         s.tracker.mark_closing(&i.id);
     }
-    let pids: Vec<u32> = running.iter().map(|i| i.pid).collect();
-    tauri::async_runtime::spawn_blocking(move || {
-        for pid in pids {
-            if let Err(e) = crate::instances::process::close(pid, force, Duration::from_secs(5)) {
-                log::warn!("could not close Roblox client {pid}: {e}");
-            }
+    let (ids, targets): (Vec<String>, Vec<_>) =
+        running.into_iter().filter_map(|i| Some((i.id.clone(), s.tracker.close_target(&i.id)?))).unzip();
+    for (id, r) in ids.iter().zip(close_all(targets, force).await?) {
+        if let Err(e) = r {
+            log::warn!("could not close Roblox client of instance {id}: {e}");
+            s.tracker.clear_closing(id);
         }
-    })
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -556,7 +582,7 @@ pub fn multi_instance_status(s: State<'_, App>) -> Result<MultiInstanceStatus> {
 /// Takes the lock when it is wanted but not held and Roblox has since closed (no-op otherwise).
 fn retake_multi(s: &App, v: &Settings) {
     if v.multi_instance && !s.multi.is_active() {
-        let _ = s.multi.enable(v.protect_shared_login);
+        let _ = s.multi.enable();
     }
 }
 
@@ -569,7 +595,7 @@ pub fn multi_instance_set(s: State<'_, App>, enabled: bool) -> Result<MultiInsta
     v.multi_instance = enabled;
     s.db.save_settings(&v)?;
     if enabled {
-        if let Err(e) = s.multi.enable(v.protect_shared_login) {
+        if let Err(e) = s.multi.enable() {
             log::info!("multi-instance not active yet: {e}");
         }
     } else {
@@ -585,15 +611,13 @@ pub async fn roblox_close_all(s: State<'_, App>, force: bool) -> Result<MultiIns
     for i in s.tracker.list() {
         s.tracker.mark_closing(&i.id);
     }
-    tauri::async_runtime::spawn_blocking(move || {
-        for p in crate::instances::process::roblox_processes() {
-            if let Err(e) = crate::instances::process::close(p.pid, force, Duration::from_secs(5)) {
-                log::warn!("could not close Roblox process {}: {e}", p.pid);
-            }
+    let procs = crate::instances::process::roblox_processes();
+    let targets = procs.iter().map(|p| (p.pid, Some(p.start_time))).collect();
+    for (p, r) in procs.iter().zip(close_all(targets, force).await?) {
+        if let Err(e) = r {
+            log::warn!("could not close Roblox process {}: {e}", p.pid);
         }
-    })
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))?;
+    }
     let v = s.db.settings()?;
     retake_multi(&s, &v);
     Ok(s.multi.status(v.multi_instance, v.protect_shared_login))
@@ -852,7 +876,11 @@ pub fn settings_set(s: State<'_, App>, patch: SettingsPatch) -> Result<Settings>
         && p != v.protect_shared_login
     {
         v.protect_shared_login = p;
-        s.multi.set_protect_shared_login(p);
+        if !p {
+            s.multi.release_shared();
+        } else if v.multi_instance && s.tracker.any_running() {
+            s.multi.lock_shared();
+        }
     }
     s.db.save_settings(&v)?;
     Ok(v)

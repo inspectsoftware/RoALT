@@ -1,16 +1,15 @@
 //! Multi-instance: hold a mutex named exactly `ROBLOX_singletonEvent` (no prefix, not owned)
 //! before any client starts, so a new client can't create its singleton event and doesn't
-//! close the running one (research multi-instance M1-M5). Optionally hold Roblox's shared
-//! login files (`%LOCALAPPDATA%\Roblox\LocalStorage\RobloxCookies.dat`, `appStorage.json`)
-//! open with share mode 0 so clients can't overwrite each other's session (M6).
+//! close the running one (research multi-instance M1-M5). Optionally, while RoALT's clients
+//! run, hold Roblox's shared login files (`%LOCALAPPDATA%\Roblox\LocalStorage\RobloxCookies.dat`,
+//! `appStorage.json`) open with share mode 0 so clients can't overwrite each other's session (M6).
 
 use std::fs::{File, OpenOptions};
-use std::io::ErrorKind;
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 
-use windows::Win32::Foundation::{ERROR_INVALID_HANDLE, HANDLE};
+use windows::Win32::Foundation::{ERROR_INVALID_HANDLE, GENERIC_READ, HANDLE};
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::core::{HSTRING, Owned};
 
@@ -29,6 +28,7 @@ pub struct Multi {
 /// The mutex handle and the locked files; dropping it releases everything.
 struct Held {
     _mutex: Singleton,
+    /// Empty unless RoALT's clients run with protection on.
     files: Vec<File>,
 }
 
@@ -48,28 +48,14 @@ impl Multi {
         Multi { inner: Mutex::new(None) }
     }
 
-    /// Takes the lock (no-op when held). If any RobloxPlayerBeta.exe runs (including Roblox's
-    /// own tray process) or the name is already an event (`ERROR_INVALID_HANDLE`), nothing is
-    /// held and the error says Roblox must be closed first. An existing *mutex* of that name
-    /// (another tool) is fine: it blocks clients the same way. With `protect_shared_login`,
-    /// also opens both shared files with share mode 0 (missing files are skipped).
-    pub fn enable(&self, protect_shared_login: bool) -> Result<()> {
-        if self.is_active() {
-            return Ok(());
-        }
-        if !process::roblox_processes().is_empty() {
-            return Err(AppError::Invalid(RUNNING.into()));
-        }
-        let files = if protect_shared_login { shared_files() } else { Vec::new() };
-        self.take(SINGLETON_NAME, &files)
-    }
-
-    /// Locks or releases the shared login files while keeping the mutex (no-op when not held,
-    /// so it works while clients run).
-    pub fn set_protect_shared_login(&self, on: bool) {
-        if let Some(h) = self.held().as_mut() {
-            h.files = if on { lock_files(&shared_files()) } else { Vec::new() };
-        }
+    /// Takes the lock (no-op when held). The name decides: if it already belongs to an event
+    /// (`ERROR_INVALID_HANDLE`), Roblox is running unprotected and nothing is held; the error
+    /// says Roblox must be closed first. Clients RoALT started under an earlier lock never
+    /// created that event, so the lock can be taken again while they run (e.g. after a
+    /// restart). An existing *mutex* of that name (another tool) is fine: it blocks clients the
+    /// same way.
+    pub fn enable(&self) -> Result<()> {
+        self.take(SINGLETON_NAME)
     }
 
     /// Releases the mutex and the files.
@@ -79,6 +65,30 @@ impl Multi {
 
     pub fn is_active(&self) -> bool {
         self.held().is_some()
+    }
+
+    /// Locks both shared login files while the lock is held, creating missing ones (a fresh
+    /// install has none yet). No-op when both are already locked; a busy file is logged and
+    /// tried again next time.
+    pub fn lock_shared(&self) {
+        self.lock_shared_at(&shared_files());
+    }
+
+    /// Releases the shared login files, keeping the lock.
+    pub fn release_shared(&self) {
+        if let Some(h) = self.held().as_mut() {
+            h.files.clear();
+        }
+    }
+
+    fn lock_shared_at(&self, paths: &[PathBuf]) {
+        if let Some(h) = self.held().as_mut()
+            && h.files.len() < paths.len()
+        {
+            // Our own handles would make the new opens fail: drop them first.
+            h.files.clear();
+            h.files = lock_files(paths);
+        }
     }
 
     /// For the UI; `blocked_by` lists running RobloxPlayerBeta.exe PIDs when not active.
@@ -94,11 +104,11 @@ impl Multi {
         MultiInstanceStatus { enabled, active, protect_shared_login, blocked_by, message }
     }
 
-    /// Creates (or opens) the mutex `name` and locks `files`; no-op when already held.
-    fn take(&self, name: &str, files: &[PathBuf]) -> Result<()> {
+    /// Creates (or opens) the mutex `name`; no-op when already held.
+    fn take(&self, name: &str) -> Result<()> {
         let mut held = self.held();
         if held.is_none() {
-            *held = Some(Held { _mutex: create_mutex(name)?, files: lock_files(files) });
+            *held = Some(Held { _mutex: create_mutex(name)?, files: Vec::new() });
         }
         Ok(())
     }
@@ -129,17 +139,23 @@ fn create_mutex(name: &str) -> Result<Singleton> {
     Ok(Singleton { _handle: unsafe { Owned::new(h) } })
 }
 
-/// Opens each file with share mode 0 so nothing else can open it until it is dropped. Missing
-/// files are skipped; a busy one is logged and skipped (the mutex alone still works).
+/// Opens each file read-only with share mode 0 so nothing else can open it until it is
+/// dropped. A missing file (and its folder) is created empty, as evanovar does (OPEN_ALWAYS:
+/// `write` only lets std create it, `access_mode` keeps the access read-only, nothing is
+/// truncated). A busy one is logged and skipped (the mutex alone still works).
 fn lock_files(paths: &[PathBuf]) -> Vec<File> {
     paths
         .iter()
-        .filter_map(|p| match OpenOptions::new().read(true).share_mode(0).open(p) {
-            Ok(f) => Some(f),
-            Err(e) if e.kind() == ErrorKind::NotFound => None,
-            Err(e) => {
-                log::warn!("could not lock {}: {e}", p.display());
-                None
+        .filter_map(|p| {
+            if let Some(dir) = p.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            match OpenOptions::new().write(true).create(true).access_mode(GENERIC_READ.0).share_mode(0).open(p) {
+                Ok(f) => Some(f),
+                Err(e) => {
+                    log::warn!("could not lock {}: {e}", p.display());
+                    None
+                }
             }
         })
         .collect()
@@ -174,14 +190,14 @@ mod tests {
         let name = test_name();
         let (a, b) = (Multi::new(), Multi::new());
         assert!(!a.status(false, false).active && a.status(false, false).message.is_none());
-        a.take(&name, &[]).unwrap();
+        a.take(&name).unwrap();
         assert!(a.is_active());
         let s = a.status(true, true);
         assert!(s.active && s.blocked_by.is_empty() && s.message.is_none() && s.protect_shared_login);
         // A client can't create its event while the mutex holds the name.
         assert_eq!(event(&name).unwrap_err().code(), ERROR_INVALID_HANDLE.to_hresult());
         // Creating the same mutex again (ERROR_ALREADY_EXISTS) still counts as held.
-        b.take(&name, &[]).unwrap();
+        b.take(&name).unwrap();
         assert!(b.is_active());
         a.disable();
         b.disable();
@@ -194,33 +210,43 @@ mod tests {
         let name = test_name();
         let _roblox = event(&name).unwrap();
         let m = Multi::new();
-        let err = m.take(&name, &[]).unwrap_err();
+        let err = m.take(&name).unwrap_err();
         assert!(matches!(err, AppError::Invalid(ref s) if s == RUNNING), "{err}");
         assert!(!m.is_active());
     }
 
     #[test]
-    fn locks_shared_files_until_disabled() {
+    fn locks_shared_files_while_held_and_creates_missing_ones() {
         let dir = std::env::temp_dir().join(format!("roalt-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("RobloxCookies.dat");
         std::fs::write(&file, b"{}").unwrap();
-        let files = [file.clone(), dir.join("appStorage.json")]; // the second is missing: skipped
+        let missing = dir.join("LocalStorage").join("appStorage.json");
+        let files = [file.clone(), missing.clone()];
+        let locked = |p: &PathBuf| File::open(p).unwrap_err().raw_os_error() == Some(ERROR_SHARING_VIOLATION.0 as i32);
 
         let m = Multi::new();
-        m.take(&test_name(), &files).unwrap();
-        let err = File::open(&file).unwrap_err();
-        assert_eq!(err.raw_os_error(), Some(ERROR_SHARING_VIOLATION.0 as i32));
+        m.lock_shared_at(&files); // not held: nothing
+        File::open(&file).unwrap();
+        m.take(&test_name()).unwrap();
+        m.lock_shared_at(&files);
+        assert!(locked(&file) && locked(&missing));
+        m.lock_shared_at(&files); // both held: kept, not reopened
+        assert!(locked(&file) && locked(&missing));
         // A busy file is skipped, not an error.
         let other = Multi::new();
-        other.take(&test_name(), &files).unwrap();
+        other.take(&test_name()).unwrap();
+        other.lock_shared_at(&files);
         assert!(other.is_active());
 
-        // Turning protection off frees the files but keeps the lock.
-        m.set_protect_shared_login(false);
-        File::open(&file).unwrap();
+        // Releasing frees the files but keeps the lock; contents are untouched.
+        m.release_shared();
+        assert_eq!(std::fs::read(&file).unwrap(), b"{}");
         assert!(m.is_active());
+        m.lock_shared_at(&files);
+        assert!(locked(&file));
         m.disable();
+        File::open(&file).unwrap();
         other.disable();
         std::fs::remove_dir_all(&dir).unwrap();
     }

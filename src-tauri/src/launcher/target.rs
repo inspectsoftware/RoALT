@@ -43,9 +43,6 @@ const SHARE_TYPES: [(&str, bool); 12] = [
     ("AvatarItemAffiliate", false),
     ("ContentPost", false),
 ];
-/// Roblox's limit, in bytes after decoding.
-const MAX_LAUNCH_DATA: usize = 200;
-
 /// Lower-cased keys; the first non-empty value wins.
 type Query = HashMap<String, String>;
 
@@ -168,7 +165,8 @@ fn with_place(place_id: i64, q: &Query, start: bool) -> ParsedInput {
         }
         return target(LaunchTarget::Server { place_id, job_id: j.to_ascii_lowercase() });
     }
-    let launch_data = q.get("launchdata").filter(|d| start && d.len() <= MAX_LAUNCH_DATA);
+    // Over-long data is kept here; resolve drops it at launch and says so.
+    let launch_data = q.get("launchdata").filter(|_| start);
     place(place_id, launch_data.cloned())
 }
 
@@ -343,13 +341,10 @@ mod tests {
     }
 
     #[test]
-    fn launch_data_over_200_bytes_is_dropped() {
+    fn long_launch_data_is_kept_for_resolve_to_drop() {
         let at = |d: &str| data(&format!("roblox://placeId=1&launchData={d}"));
-        assert_eq!(at(&"a".repeat(200)), Some("a".repeat(200)));
-        assert_eq!(at(&"a".repeat(201)), None);
-        // Counted after decoding: 600 characters that decode to 200 bytes are kept; 67 × "€" (201 bytes) is not.
+        assert_eq!(at(&"a".repeat(201)), Some("a".repeat(201)));
         assert_eq!(at(&"%41".repeat(200)), Some("A".repeat(200)));
-        assert_eq!(at(&"%E2%82%AC".repeat(67)), None);
     }
 
     #[test]

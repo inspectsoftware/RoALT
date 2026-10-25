@@ -397,4 +397,6 @@ pub struct LaunchInfo {
     pub started_at: i64,
     /// True when a bootstrapper (not RobloxPlayerBeta.exe) handled the launch.
     pub via_bootstrapper: bool,
+    /// Something the user should know (expired share link, launch data left out).
+    pub warning: Option<String>,
 }

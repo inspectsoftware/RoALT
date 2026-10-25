@@ -23,4 +23,8 @@ startedAt: number,
 /**
  * True when a bootstrapper (not RobloxPlayerBeta.exe) handled the launch.
  */
-viaBootstrapper: boolean, };
+viaBootstrapper: boolean, 
+/**
+ * Something the user should know (expired share link, launch data left out).
+ */
+warning: string | null, };

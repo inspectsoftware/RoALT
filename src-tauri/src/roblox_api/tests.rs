@@ -628,8 +628,16 @@ fn share(link_type: &str) -> LaunchTarget {
     LaunchTarget::ShareLink { code: "ce65b2c80e8dae48866fe2f919966557".into(), link_type: link_type.into() }
 }
 
-/// `resolve` against canned answers, as account 4 with cookie "OLD".
+/// `resolve` against canned answers, as account 4 with cookie "OLD" (the warning is dropped).
 async fn resolve_with(answers: Vec<String>, target: LaunchTarget) -> (Result<Join>, mpsc::Receiver<String>) {
+    let (r, reqs) = resolve_warn(answers, target).await;
+    (r.map(|(join, _)| join), reqs)
+}
+
+async fn resolve_warn(
+    answers: Vec<String>,
+    target: LaunchTarget,
+) -> (Result<(Join, Option<&'static str>)>, mpsc::Receiver<String>) {
     let (base, reqs) = serve(answers);
     let (c, _) = client(&base);
     (resolve(&c, 4, &Secret::new("OLD"), &target).await, reqs)
@@ -714,8 +722,10 @@ async fn share_link_status_invalid_fails_and_expired_still_joins() {
     assert!(invalid(join, "This share link is no longer valid."));
 
     let expired = format!(r#"{{"privateServerInviteData":{{"status":"Expired","placeId":5,"linkCode":"{LINK_CODE}"}}}}"#);
-    let (join, _) = resolve_with(vec![ok(&expired)], share("Server")).await;
-    assert_eq!(join.unwrap(), Join::Private { place_id: 5, link_code: Some(LINK_CODE.into()), access_code: None });
+    let (r, _) = resolve_warn(vec![ok(&expired)], share("Server")).await;
+    let (join, warning) = r.unwrap();
+    assert_eq!(join, Join::Private { place_id: 5, link_code: Some(LINK_CODE.into()), access_code: None });
+    assert!(warning.unwrap().contains("expired"));
 
     // A server link without a usable link code, and types that are no game.
     let no_code = ok(r#"{"privateServerInviteData":{"status":"Valid","placeId":5,"linkCode":"1+placelauncherurl:x"}}"#);
@@ -736,7 +746,17 @@ async fn experience_invite_joins_its_server_while_valid() {
     let left = format!(r#"{{"experienceInviteData":{{"status":"InviterNotInExperience","placeId":1818,"instanceId":"{JOB}"}}}}"#);
     let (join, _) = resolve_with(vec![ok(&left)], share("ExperienceInvite")).await;
     assert_eq!(join.unwrap(), Join::Game { place_id: 1818, launch_data: None });
+
+    // Notification invites carry the inviter's server the same way.
+    let note = format!(r#"{{"notificationExperienceInviteData":{{"status":"Valid","placeId":1818,"instanceId":"{JOB}","launchData":"x"}}}}"#);
+    let (join, _) = resolve_with(vec![ok(&note)], share("NotificationExperienceInvite")).await;
+    assert_eq!(join.unwrap(), Join::Job { place_id: 1818, job_id: JOB.into() });
+    let old = format!(r#"{{"notificationExperienceInviteData":{{"status":"Expired","placeId":1818,"instanceId":"{JOB}","launchData":"x"}}}}"#);
+    let (r, _) = resolve_warn(vec![ok(&old)], share("NotificationExperienceInvite")).await;
+    assert_eq!(r.unwrap(), (Join::Game { place_id: 1818, launch_data: Some("x".into()) }, Some(EXPIRED_TEXT)));
 }
+
+const EXPIRED_TEXT: &str = "This share link has expired, so Roblox may refuse the join.";
 
 #[tokio::test]
 async fn experience_details_resolve_the_universe_to_its_root_place() {
@@ -794,17 +814,18 @@ async fn direct_targets_need_no_call_and_long_launch_data_is_dropped() {
     let at_limit = "x".repeat(200);
     assert_eq!(
         resolve(&c, 4, &cookie, &place(&at_limit)).await.unwrap(),
-        Join::Game { place_id: 1818, launch_data: Some(at_limit) }
+        (Join::Game { place_id: 1818, launch_data: Some(at_limit) }, None)
     );
-    let over = resolve(&c, 4, &cookie, &place(&"x".repeat(201))).await.unwrap();
+    let (over, warning) = resolve(&c, 4, &cookie, &place(&"x".repeat(201))).await.unwrap();
     assert_eq!(over, Join::Game { place_id: 1818, launch_data: None });
+    assert!(warning.unwrap().contains("200-byte"));
 
     let server = LaunchTarget::Server { place_id: 1, job_id: JOB.into() };
-    assert_eq!(resolve(&c, 4, &cookie, &server).await.unwrap(), Join::Job { place_id: 1, job_id: JOB.into() });
+    assert_eq!(resolve(&c, 4, &cookie, &server).await.unwrap().0, Join::Job { place_id: 1, job_id: JOB.into() });
     let access = LaunchTarget::PrivateAccess { place_id: 1, access_code: JOB.into() };
     let want = Join::Private { place_id: 1, link_code: None, access_code: Some(JOB.into()) };
-    assert_eq!(resolve(&c, 4, &cookie, &access).await.unwrap(), want);
-    let follow = resolve(&c, 4, &cookie, &LaunchTarget::FollowUser { user_id: 2 }).await.unwrap();
+    assert_eq!(resolve(&c, 4, &cookie, &access).await.unwrap().0, want);
+    let (follow, _) = resolve(&c, 4, &cookie, &LaunchTarget::FollowUser { user_id: 2 }).await.unwrap();
     assert_eq!((follow.place_id(), follow), (None, Join::Follow { user_id: 2 }));
 }
 
@@ -867,5 +888,9 @@ async fn live_public_endpoints() {
     assert!(plus.contains_key(&1), "{plus:?}");
     let counts = c.social_counts(1).await.unwrap();
     assert!(counts.followers > 1_000_000, "{counts:?}");
-    println!("user={user:?}\nheads={heads:?}\nplus={plus:?}\ncounts={counts:?}");
+    let games = c.universe_root_places(&[383310974]).await.unwrap();
+    assert_eq!(games.get(&383310974).map(|g| g.0), Some(920587237), "{games:?}");
+    let found = c.users_by_name(&["Roblox".to_owned()]).await.unwrap();
+    assert_eq!(found.first().map(|u| u.id), Some(1));
+    println!("user={user:?}\nheads={heads:?}\nplus={plus:?}\ncounts={counts:?}\ngames={games:?}");
 }

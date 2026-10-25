@@ -21,6 +21,8 @@ const LAUNCH_ERRORS: Record<string, string> = {
   notFound: "That account or game no longer exists.",
 };
 const invalid = (message: string): ErrorPayload => ({ kind: "invalid", message });
+/** One launch at a time, also across remounts of the view. */
+let busy = false;
 
 function lastUsed() {
   try {
@@ -37,18 +39,19 @@ function remember(id: number) {
   }
 }
 
-export function LaunchView({ accounts, selected, setSelected, draft, setDraft }: {
+export function LaunchView({ accounts, selected, setSelected, draft, setDraft, step, setStep }: {
   accounts: AccountSummary[];
   selected: number | null;
   setSelected: (id: number) => void;
   draft: Draft;
   setDraft: Dispatch<SetStateAction<Draft>>;
+  step: string | null;
+  setStep: (step: string | null) => void;
 }) {
   const qc = useQueryClient();
   const favourites = useFavourites();
   const [last] = useState(lastUsed);
-  const [step, setStep] = useState<string | null>(null);
-  const busy = useRef(false);
+  const pasted = useRef(false);
   const [joinOpen, setJoinOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
 
@@ -80,7 +83,9 @@ export function LaunchView({ accounts, selected, setSelected, draft, setDraft }:
   const look = parsed && describe(parsed, place, user);
   const usableTarget = !!look && look.tone !== "bad" && !(parsed?.kind === "jobIdOnly" && place === null);
   const fav = draft.favId === null ? undefined : favourites.data?.find((f) => f.id === draft.favId);
-  const canLaunch = !!account && usableTarget && !step;
+  // A parse that hasn't caught up yet is launchable: resolveTarget parses again.
+  const pending = !!text.trim() && draft.parsed?.text !== text;
+  const canLaunch = !!account && (usableTarget || pending) && !step;
 
   /** What the draft launches; parses again if the debounce hasn't caught up, looks a username up. */
   async function resolveTarget(onLookup?: (name: string) => void): Promise<LaunchTarget> {
@@ -110,9 +115,9 @@ export function LaunchView({ accounts, selected, setSelected, draft, setDraft }:
   }
 
   async function launch() {
-    if (!canLaunch || !account || busy.current) return;
+    if (!canLaunch || !account || busy) return;
     const a = account;
-    busy.current = true;
+    busy = true;
     setStep("Getting a ticket…");
     let timer = 0;
     try {
@@ -122,14 +127,14 @@ export function LaunchView({ accounts, selected, setSelected, draft, setDraft }:
       const info = await api.launch(a.id, target, draft.favId ?? undefined);
       remember(a.id);
       if (draft.favId !== null) qc.invalidateQueries({ queryKey: qk.favourites });
-      toast(`Launched ${accountName(a)}${info.viaBootstrapper ? " via Bloxstrap" : ""}`);
+      toast(`Launched ${accountName(a)}${info.viaBootstrapper ? " via a bootstrapper" : ""}`);
+      if (info.warning) toast(info.warning, "error");
     } catch (e) {
       const err = asError(e);
-      if (err.kind === "cookieInvalid" || err.kind === "challenge") qc.invalidateQueries({ queryKey: qk.accounts });
       if (err.kind !== "cancelled") toast(LAUNCH_ERRORS[err.kind] ?? friendly(err), "error");
     } finally {
       clearTimeout(timer);
-      busy.current = false;
+      busy = false;
       setStep(null);
     }
   }
@@ -185,6 +190,12 @@ export function LaunchView({ accounts, selected, setSelected, draft, setDraft }:
               spellCheck={false}
               autoComplete="off"
               value={text}
+              onPaste={() => {
+                pasted.current = true;
+              }}
+              onKeyDown={() => {
+                pasted.current = false;
+              }}
               onChange={(e) => {
                 const v = e.target.value;
                 setDraft((d) => ({ ...d, text: v, favId: null, note: null }));
@@ -192,22 +203,23 @@ export function LaunchView({ accounts, selected, setSelected, draft, setDraft }:
             />
             {text.trim() && (
               <div className="enter flex items-center gap-3 min-h-[46px] px-3 py-1.5 border border-line bg-raised">
-                {look ? (
-                  <>
-                    <span aria-hidden="true" className="w-2 h-2 flex-none" style={MARK[look.tone]} />
-                    <span className="flex items-baseline gap-3 min-w-0" aria-live="polite">
+                <span
+                  aria-hidden="true"
+                  className={`w-2 h-2 flex-none ${look ? "" : "bg-dim pulse"}`}
+                  style={look ? MARK[look.tone] : undefined}
+                />
+                <span className="flex items-baseline gap-3 min-w-0" aria-live="polite">
+                  {look ? (
+                    <>
                       <span className="font-semibold flex-none">{look.kind}</span>
                       <span className={`mono truncate ${look.tone === "bad" ? "text-orange" : "text-dim"}`} title={look.detail}>
                         {look.detail}
                       </span>
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <span aria-hidden="true" className="w-2 h-2 flex-none bg-dim pulse" />
+                    </>
+                  ) : (
                     <span className="text-dim">Reading…</span>
-                  </>
-                )}
+                  )}
+                </span>
                 {draft.note && <span className="tag flex-none max-w-[30%] truncate">{draft.note}</span>}
                 <button
                   className="btn btn-sm ml-auto flex-none"
@@ -225,7 +237,13 @@ export function LaunchView({ accounts, selected, setSelected, draft, setDraft }:
                 <span className="label">Place ID</span>
                 <input
                   className="field mono"
-                  autoFocus
+                  ref={(el) => {
+                    // Jump here after a pasted job ID, not while it is being typed.
+                    if (el && pasted.current) {
+                      pasted.current = false;
+                      el.focus();
+                    }
+                  }}
                   inputMode="numeric"
                   spellCheck={false}
                   placeholder="The game's place ID or link"
@@ -233,7 +251,7 @@ export function LaunchView({ accounts, selected, setSelected, draft, setDraft }:
                   aria-invalid={draft.place.trim() !== "" && place === null}
                   onChange={(e) => {
                     const v = e.target.value;
-                    setDraft((d) => ({ ...d, place: v }));
+                    setDraft((d) => ({ ...d, place: v, favId: null, note: null }));
                   }}
                 />
               </label>
@@ -310,7 +328,7 @@ export function LaunchView({ accounts, selected, setSelected, draft, setDraft }:
         accounts={accounts}
         initial={
           fav ?? {
-            name: look ? `${look.kind} · ${look.detail}`.replace(/ · \w+ code ••••/, "").slice(0, 64) : "",
+            name: look ? `${look.kind} · ${look.detail}`.replace(/ · \w+ code ••••/, "").slice(0, 60) : "",
             accountIds: account ? [account.id] : [],
             inTray: false,
           }

@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, asError, type AccountSummary, type Favourite, type LaunchTarget } from "../../api";
 import { qk, useFavourites } from "../../data";
 import { Switch } from "../../ui/controls";
-import { Dialog } from "../../ui/Dialog";
+import { ConfirmDialog, Dialog } from "../../ui/Dialog";
 import { Icon } from "../../ui/Icon";
 import { friendly, toast } from "../../ui/Toast";
 import { accountName, Avatar, Status } from "../accounts/shared";
@@ -20,6 +20,7 @@ export function FavouritesNav({ accounts, active, onPick }: {
   const [menuFor, setMenuFor] = useState<Favourite | null>(null);
   const [editing, setEditing] = useState<Favourite | null>(null);
   const [editOpen, setEditOpen] = useState(false);
+  const [deleting, setDeleting] = useState<Favourite | null>(null);
 
   const remove = useMutation({
     mutationFn: (f: Favourite) => api.favouriteRemove(f.id),
@@ -27,11 +28,13 @@ export function FavouritesNav({ accounts, active, onPick }: {
       qc.setQueryData<Favourite[]>(qk.favourites, (list) => list?.filter((x) => x.id !== f.id));
       toast(`Deleted ${f.name}`);
     },
+    onSettled: () => setDeleting(null),
   });
 
   const openMenu = (f: Favourite) => {
     setMenuFor(f);
     menu.current?.showPopover();
+    menu.current?.querySelector<HTMLElement>(".menu-item")?.focus();
   };
 
   return (
@@ -84,12 +87,26 @@ export function FavouritesNav({ accounts, active, onPick }: {
           popoverTarget="fav-menu"
           popoverTargetAction="hide"
           disabled={remove.isPending}
-          onClick={() => menuFor && remove.mutate(menuFor)}
+          onClick={() => setDeleting(menuFor)}
         >
           <Icon name="trash" size={12} />
           Delete
         </button>
       </div>
+
+      <ConfirmDialog
+        open={!!deleting}
+        onClose={() => setDeleting(null)}
+        onConfirm={() => deleting && remove.mutate(deleting)}
+        busy={remove.isPending}
+        title="Delete favourite?"
+        text={
+          <>
+            <span className="text-text font-medium">{deleting?.name}</span> and its saved link are deleted.
+          </>
+        }
+        confirmLabel="Delete favourite"
+      />
 
       {editing && (
         <FavouriteDialog
@@ -158,7 +175,7 @@ export function FavouriteDialog({ open, onClose, accounts, initial, resolve, onS
           <span className="label">Name</span>
           <input
             className="field"
-            maxLength={64}
+            maxLength={60}
             value={name}
             aria-invalid={!!error && !name.trim()}
             onChange={(e) => {

@@ -331,12 +331,17 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       await sleep(1200);
       const a = find(args.accountId);
       if (!a) return fail("notFound", "Not found.");
-      if (a.username === "afk_unit_1") return fail("cookieInvalid", "This cookie is not valid or has expired. Sign in again.");
+      if (a.username === "afk_unit_1") {
+        a.status = "invalid";
+        changed();
+        return fail("cookieInvalid", "This cookie is not valid or has expired. Sign in again.");
+      }
       const f = favourites.find((x) => x.id === args.favouriteId);
       if (f) f.lastUsedAt = Date.now();
       return {
         accountId: a.id, pid: 14000 + Math.floor(Math.random() * 9000), browserTrackerId: Math.floor(Math.random() * 1e12),
         placeId: placeOfTarget(args.target), startedAt: Date.now(), viaBootstrapper: a.username === "studio_nova",
+        warning: args.target.kind === "shareLink" && args.target.code.startsWith("0") ? "This share link has expired, so Roblox may refuse the join." : null,
       };
     }
     case "favourites_list":

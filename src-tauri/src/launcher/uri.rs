@@ -68,10 +68,10 @@ pub fn player_uri(ticket: &Secret, launch_time_ms: i64, p: &PlaceLaunch) -> Secr
 }
 
 /// A random 16-digit browser tracker id, unique per launch (the client log names it, which is
-/// how a client is tied back to its account).
+/// how a client is tied back to its account). Kept at or below 2^53 - 1 so JavaScript holds it exactly.
 pub fn new_browser_tracker_id() -> i64 {
     const LOW: i64 = 1_000_000_000_000_000;
-    LOW + (Uuid::new_v4().as_u128() % (9 * LOW as u128)) as i64
+    LOW + (Uuid::new_v4().as_u128() % (8 * LOW as u128)) as i64
 }
 
 /// JavaScript's `encodeURIComponent`.
@@ -147,7 +147,7 @@ mod tests {
     #[test]
     fn browser_tracker_ids_are_16_random_digits() {
         let ids: Vec<i64> = (0..1000).map(|_| new_browser_tracker_id()).collect();
-        assert!(ids.iter().all(|id| (1_000_000_000_000_000..=9_999_999_999_999_999).contains(id)));
+        assert!(ids.iter().all(|id| (1_000_000_000_000_000..=8_999_999_999_999_999).contains(id)));
         assert!(ids.iter().all(|id| id.to_string().len() == 16));
         let mut unique = ids.clone();
         unique.sort_unstable();

@@ -123,6 +123,8 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
   // Shared by the Accounts and Launch views: the account picked in one is picked in the other.
   const [selected, setSelected] = useState<number | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
+  // Kept here so a launch in flight survives leaving the view.
+  const [launchStep, setLaunchStep] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const known = useRef<Set<number> | null>(null);
 
@@ -238,7 +240,15 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
           onLaunch={launchAs}
         />
       ) : view === "launch" ? (
-        <LaunchView accounts={accounts.data} selected={selected} setSelected={setSelected} draft={draft} setDraft={setDraft} />
+        <LaunchView
+          accounts={accounts.data}
+          selected={selected}
+          setSelected={setSelected}
+          draft={draft}
+          setDraft={setDraft}
+          step={launchStep}
+          setStep={setLaunchStep}
+        />
       ) : (
         <SettingsView vault={vault} settings={settings} />
       )}

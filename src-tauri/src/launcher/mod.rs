@@ -46,14 +46,23 @@ impl Join {
 /// - `ShareLink` → `POST apis.roblox.com/sharelinks/v1/resolve-link`. Server links use
 ///   `privateServerInviteData` (`placeId` + `linkCode`; universe → root place only when
 ///   `placeId` is missing). `Invalid` status → `AppError::Invalid("This share link is no
-///   longer valid.")`; `Expired` still joins, as the website does. ExperienceInvite with an
-///   instance → `Job`; ExperienceDetails / Affiliate / Event / Notification / Screenshot → the
-///   game (root place, launch data when given); Profile → `Follow`; other types → `Invalid`.
+///   longer valid.")`; `Expired` still joins, as the website does, with a warning.
+///   ExperienceInvite / NotificationExperienceInvite with an instance → `Job`; ExperienceDetails /
+///   Affiliate / Event / Screenshot → the game (root place, launch data when given); Profile →
+///   `Follow`; other types → `Invalid`.
 /// - `ShareLinkV2` → `POST apis.roblox.com/deeplinks/v2/resolve`; `Experience` → `Game`
 ///   (`targetId` place, `customData` as launch data); other link types → `Invalid`.
 /// - `Universe` → its root place (`games.roblox.com/v1/games?universeIds=`).
-/// - Launch data over 200 bytes is dropped (Roblox's limit) with a log line.
-pub async fn resolve(api: &Client, account_id: i64, cookie: &Secret, target: &LaunchTarget) -> Result<Join> {
+/// - Launch data over 200 bytes is dropped (Roblox's limit) with a warning.
+///
+/// The second value is a warning for the user (expired link, dropped launch data).
+pub async fn resolve(
+    api: &Client,
+    account_id: i64,
+    cookie: &Secret,
+    target: &LaunchTarget,
+) -> Result<(Join, Option<&'static str>)> {
+    let mut warning = None;
     let join = match target.clone() {
         LaunchTarget::Place { place_id, launch_data } => Join::Game { place_id, launch_data },
         LaunchTarget::Server { place_id, job_id } => Join::Job { place_id, job_id },
@@ -64,16 +73,27 @@ pub async fn resolve(api: &Client, account_id: i64, cookie: &Secret, target: &La
             Join::Private { place_id, link_code: None, access_code: Some(access_code) }
         }
         LaunchTarget::ShareLink { code, link_type } => {
-            share_join(api, api.resolve_share_link(account_id, cookie, &code, &link_type).await?).await?
+            let (join, expired) =
+                share_join(api, api.resolve_share_link(account_id, cookie, &code, &link_type).await?).await?;
+            warning = expired.then_some(EXPIRED);
+            join
         }
-        LaunchTarget::ShareLinkV2 { code } => v2_join(api.resolve_share_link_v2(account_id, cookie, &code).await?)?,
+        LaunchTarget::ShareLinkV2 { code } => {
+            let v = api.resolve_share_link_v2(account_id, cookie, &code).await?;
+            warning = is_status(&v.status, "Expired").then_some(EXPIRED);
+            v2_join(v)?
+        }
         LaunchTarget::Universe { universe_id } => {
             Join::Game { place_id: root_place(api, universe_id).await?, launch_data: None }
         }
         LaunchTarget::FollowUser { user_id } => Join::Follow { user_id },
     };
-    Ok(cap_launch_data(join))
+    let (join, dropped) = cap_launch_data(join);
+    Ok((join, warning.or(dropped.then_some(DATA_DROPPED))))
 }
+
+const EXPIRED: &str = "This share link has expired, so Roblox may refuse the join.";
+const DATA_DROPPED: &str = "The link's launch data is over Roblox's 200-byte limit and was left out.";
 
 /// One launch: resolve → `client-assertion` (failure ignored) → `authentication-ticket` →
 /// URI with a fresh `browsertrackerid` → start the client (`client::find` + `client::start`).
@@ -82,7 +102,7 @@ pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget) -> Result<L
     let cookie = account_cookie(s, account_id)?;
     // Before any network call: no ticket is fetched when Roblox isn't installed.
     let exe = client::find()?;
-    let join = resolve(&s.api, account_id, &cookie, target).await?;
+    let (join, warning) = resolve(&s.api, account_id, &cookie, target).await?;
     let assertion = s.api.client_assertion(account_id, &cookie).await.ok();
     let ticket = s.api.authentication_ticket(account_id, &cookie, assertion.as_ref()).await?;
     let (browser_tracker_id, started_at) = (uri::new_browser_tracker_id(), crate::commands::now_ms());
@@ -96,6 +116,7 @@ pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget) -> Result<L
         place_id: join.place_id(),
         started_at,
         via_bootstrapper: exe.bootstrapper,
+        warning: warning.map(str::to_owned),
     })
 }
 
@@ -112,12 +133,13 @@ enum ShareKind {
     Profile,
 }
 
-/// The filled `*Data` object of a share-link answer, mapped as `resolve` describes.
-async fn share_join(api: &Client, r: ShareLinkResolution) -> Result<Join> {
+/// The filled `*Data` object of a share-link answer, mapped as `resolve` describes, and
+/// whether the link has expired.
+async fn share_join(api: &Client, r: ShareLinkResolution) -> Result<(Join, bool)> {
     let filled = [
         (ShareKind::Server, r.private_server_invite_data),
         (ShareKind::Invite, r.experience_invite_data),
-        (ShareKind::Game, r.notification_experience_invite_data),
+        (ShareKind::Invite, r.notification_experience_invite_data),
         (ShareKind::Game, r.screenshot_invite_data),
         (ShareKind::Game, r.experience_details_invite_data),
         (ShareKind::Game, r.experience_affiliate_data),
@@ -135,7 +157,8 @@ async fn share_join(api: &Client, r: ShareLinkResolution) -> Result<Join> {
         ShareKind::Invite if t.status.is_none() || is_status(&t.status, "Valid") => code(t.instance_id.clone()),
         _ => None,
     };
-    Ok(match (kind, job) {
+    let expired = is_status(&t.status, "Expired");
+    let join = match (kind, job) {
         (ShareKind::Server, _) => Join::Private {
             place_id: share_place(api, &t).await?,
             link_code: Some(code(t.link_code).ok_or_else(no_longer_valid)?),
@@ -148,7 +171,8 @@ async fn share_join(api: &Client, r: ShareLinkResolution) -> Result<Join> {
             let launch_data = data.or_else(|| text(t.join_data.as_ref()?.get("launchData")?));
             Join::Game { place_id: share_place(api, &t).await?, launch_data }
         }
-    })
+    };
+    Ok((join, expired))
 }
 
 /// `deeplinks/v2/resolve`: only `Experience` links launch a game.
@@ -179,14 +203,14 @@ async fn root_place(api: &Client, universe_id: i64) -> Result<i64> {
     place.ok_or_else(|| AppError::Invalid("This game no longer exists.".into()))
 }
 
-/// Drops launch data over Roblox's 200-byte limit. Its content is never logged.
-fn cap_launch_data(join: Join) -> Join {
+/// Drops launch data over Roblox's 200-byte limit (true when it did). Its content is never logged.
+fn cap_launch_data(join: Join) -> (Join, bool) {
     match join {
         Join::Game { place_id, launch_data: Some(d) } if d.len() > MAX_LAUNCH_DATA => {
             log::warn!("launch data of {} bytes dropped (limit {MAX_LAUNCH_DATA})", d.len());
-            Join::Game { place_id, launch_data: None }
+            (Join::Game { place_id, launch_data: None }, true)
         }
-        join => join,
+        join => (join, false),
     }
 }
 

@@ -58,7 +58,7 @@ export function JoinDialog({ open, onClose, account, accounts, onPick }: {
               Try again
             </button>
           </div>
-        ) : !list.data ? (
+        ) : !list.data || list.isFetching ? (
           <div aria-busy="true" aria-label="Loading">
             {[0, 1, 2].map((i) => (
               <div key={i} className="flex items-center gap-3 h-[52px] px-4 border-b border-line">

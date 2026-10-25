@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { api, asError, events, type Favourite, type Settings, type Theme, type VaultStatus } from "./api";
-import { qk, queryClient, useAccounts, useGroups, useSetSettings, useSettings, useVault } from "./data";
+import { qk, queryClient, useAccounts, useGroups, useInstances, useSetSettings, useSettings, useVault } from "./data";
 import { AccountsView } from "./features/accounts/AccountsView";
 import { AddAccountDialog } from "./features/accounts/AddAccountDialog";
 import { GroupsNav } from "./features/accounts/GroupsNav";
 import { FavouritesNav } from "./features/launch/Favourites";
 import { LaunchView } from "./features/launch/LaunchView";
+import { isRunning, MultiInstanceSwitch, RunningPanel } from "./features/launch/Running";
 import { draftFor, EMPTY_DRAFT, type Draft } from "./features/launch/target";
 import { SettingsView, SETTINGS_SECTIONS } from "./features/settings/SettingsView";
 import { UnlockScreen, type LockReason } from "./features/vault/UnlockScreen";
@@ -53,6 +54,9 @@ function Root() {
     const subs = [
       events.onAccountsChanged(() => {
         for (const queryKey of [qk.accounts, qk.groups, qk.vault]) qc.invalidateQueries({ queryKey });
+      }),
+      events.onInstancesChanged(() => {
+        for (const queryKey of [qk.instances, qk.multi]) qc.invalidateQueries({ queryKey });
       }),
       events.onVaultLocked(() => {
         if (Date.now() - manualLockAt.current > 3000) setLockReason("idle");
@@ -118,6 +122,7 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
   const qc = useQueryClient();
   const accounts = useAccounts();
   const groups = useGroups();
+  const running = useInstances().data?.filter(isRunning).length ?? 0;
   const [view, setView] = useState<"accounts" | "launch" | "settings">("accounts");
   const [group, setGroup] = useState<number | null>(null);
   // Shared by the Accounts and Launch views: the account picked in one is picked in the other.
@@ -192,6 +197,11 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
           <button className="nav-item" aria-current={view === "launch" ? "page" : undefined} onClick={() => setView("launch")}>
             <Icon name="play" fill />
             <span className="flex-1">Launch</span>
+            {running > 0 && (
+              <span className="mono text-xs text-accent-text" title={`${running} running`}>
+                {running}
+              </span>
+            )}
           </button>
           <button className="nav-item" aria-current={view === "settings" ? "page" : undefined} onClick={() => setView("settings")}>
             <Icon name="settings" />
@@ -219,9 +229,12 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
             }}
           />
         </div>
-        <div className="mono flex items-center gap-2 mt-3 p-3 border border-line text-[11px] text-dim">
-          <span aria-hidden="true" className="w-1.5 h-1.5 flex-none bg-accent-text" />
-          Vault · {vault.mode === "master" ? "master password" : "DPAPI"} · unlocked
+        <div className="flex flex-col gap-2.5 mt-3 p-3 border border-line">
+          <MultiInstanceSwitch />
+          <div className="mono flex items-center gap-2 text-[11px] text-dim">
+            <span aria-hidden="true" className="w-1.5 h-1.5 flex-none bg-accent-text" />
+            Vault · {vault.mode === "master" ? "master password" : "DPAPI"} · unlocked
+          </div>
         </div>
       </nav>
 
@@ -240,15 +253,18 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
           onLaunch={launchAs}
         />
       ) : view === "launch" ? (
-        <LaunchView
-          accounts={accounts.data}
-          selected={selected}
-          setSelected={setSelected}
-          draft={draft}
-          setDraft={setDraft}
-          step={launchStep}
-          setStep={setLaunchStep}
-        />
+        <>
+          <LaunchView
+            accounts={accounts.data}
+            selected={selected}
+            setSelected={setSelected}
+            draft={draft}
+            setDraft={setDraft}
+            step={launchStep}
+            setStep={setLaunchStep}
+          />
+          <RunningPanel accounts={accounts.data} />
+        </>
       ) : (
         <SettingsView vault={vault} settings={settings} />
       )}

@@ -484,6 +484,8 @@ pub async fn launch(
     target: LaunchTarget,
     favourite_id: Option<i64>,
 ) -> Result<LaunchInfo> {
+    // The lock has to be held before this client starts, or the next one replaces it.
+    retake_multi(&s, &s.db.settings()?);
     let info = match crate::launcher::launch(&s, account_id, &target).await {
         Ok(info) => info,
         Err(e) => {
@@ -547,12 +549,20 @@ pub fn instances_clear_ended(app: AppHandle, s: State<'_, App>) {
 #[tauri::command]
 pub fn multi_instance_status(s: State<'_, App>) -> Result<MultiInstanceStatus> {
     let v = s.db.settings()?;
+    retake_multi(&s, &v);
     Ok(s.multi.status(v.multi_instance, v.protect_shared_login))
 }
 
+/// Takes the lock when it is wanted but not held and Roblox has since closed (no-op otherwise).
+fn retake_multi(s: &App, v: &Settings) {
+    if v.multi_instance && !s.multi.is_active() {
+        let _ = s.multi.enable(v.protect_shared_login);
+    }
+}
+
 /// Turns multi-instance on or off (saved). Turning it on while Roblox runs saves the setting
-/// but reports why the lock isn't held yet; it is taken at the next start, or after
-/// `roblox_close_all`.
+/// but reports why the lock isn't held yet; it is taken once Roblox has closed (status check,
+/// next launch, next start) or after `roblox_close_all`.
 #[tauri::command]
 pub fn multi_instance_set(s: State<'_, App>, enabled: bool) -> Result<MultiInstanceStatus> {
     let mut v = s.db.settings()?;
@@ -585,9 +595,7 @@ pub async fn roblox_close_all(s: State<'_, App>, force: bool) -> Result<MultiIns
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
     let v = s.db.settings()?;
-    if v.multi_instance {
-        let _ = s.multi.enable(v.protect_shared_login);
-    }
+    retake_multi(&s, &v);
     Ok(s.multi.status(v.multi_instance, v.protect_shared_login))
 }
 

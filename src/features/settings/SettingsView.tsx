@@ -3,8 +3,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { open as openFile, save as saveFile } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, asError, type ConflictPolicy, type ImportReport, type Settings, type VaultStatus } from "../../api";
-import { qk, useSetSettings } from "../../data";
-import { Segmented } from "../../ui/controls";
+import { qk, useMultiStatus, useSetSettings } from "../../data";
+import { Segmented, Switch } from "../../ui/controls";
 import { Dialog } from "../../ui/Dialog";
 import { Icon } from "../../ui/Icon";
 import { friendly, toast, toastError } from "../../ui/Toast";
@@ -13,6 +13,7 @@ import { PasswordDialog } from "../vault/PasswordDialog";
 
 export const SETTINGS_SECTIONS = [
   ["general", "General"],
+  ["launching", "Launching"],
   ["security", "Security"],
   ["data", "Data"],
   ["shortcuts", "Shortcuts"],
@@ -43,6 +44,13 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
   const [dlg, setDlg] = useState<VaultDialog | null>(null);
   const [importPath, setImportPath] = useState("");
   const [importOpen, setImportOpen] = useState(false);
+  const multi = useMultiStatus().data;
+  const setMulti = (enabled: boolean) =>
+    api.multiInstanceSet(enabled).then((st) => {
+      qc.setQueryData(qk.multi, st);
+      qc.invalidateQueries({ queryKey: qk.settings });
+      if (st.message) toast(st.message, "error");
+    }, toastError);
 
   const setMode = async (mode: "dpapi" | "master", current?: string, next?: string, done?: string) => {
     await api.vaultSetMode(mode, current || undefined, next || undefined);
@@ -82,6 +90,24 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
             value={settings.density}
             options={[{ value: "detailed", label: "Detailed" }, { value: "compact", label: "Compact" }]}
             onChange={(density) => set.mutate({ density })}
+          />
+        </Row>
+
+        <Heading id="launching">Launching</Heading>
+        <Row
+          title="Multi-instance"
+          hint="RoALT holds Roblox's single-instance lock while it runs, so each account gets its own client. Turn it on before the first client starts."
+        >
+          <Switch label="Multi-instance" checked={multi?.enabled ?? settings.multiInstance} onChange={setMulti} />
+        </Row>
+        <Row
+          title="Protect each client's sign-in"
+          hint="While multi-instance is on, lock Roblox's shared sign-in files so clients can't overwrite each other's session (error 773, wrong account in game)."
+        >
+          <Switch
+            label="Protect each client's sign-in"
+            checked={settings.protectSharedLogin}
+            onChange={(protectSharedLogin) => set.mutate({ protectSharedLogin }, { onSuccess: () => qc.invalidateQueries({ queryKey: qk.multi }) })}
           />
         </Row>
 

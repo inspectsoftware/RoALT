@@ -64,6 +64,19 @@ pub struct Game {
     pub name: String,
 }
 
+/// A row of `games.roblox.com/v1/games?universeIds=` with what the server browser shows.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct GameDetails {
+    pub universe_id: i64,
+    pub root_place_id: i64,
+    pub name: String,
+    pub creator: String,
+    pub playing: i64,
+    pub visits: i64,
+    pub max_players: i32,
+    pub private_servers: bool,
+}
+
 /// `thumbnails.roblox.com/v1/users/avatar-headshot` (and `/v1/batch`).
 #[derive(Deserialize, Debug)]
 pub struct Thumbnails {

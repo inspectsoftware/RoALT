@@ -581,3 +581,53 @@ pub struct ServerPage {
     /// Opaque; None on the last page.
     pub next_cursor: Option<String>,
 }
+
+// ---------- M6: server browser ----------
+
+/// What the Servers view shows about a game.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct GameInfo {
+    /// The place that was asked about (may differ from the root place).
+    pub place_id: i64,
+    pub universe_id: i64,
+    pub root_place_id: i64,
+    pub name: String,
+    pub creator: String,
+    pub playing: i64,
+    pub visits: i64,
+    pub max_players: i32,
+    /// 150×150 icon on *.rbxcdn.com, when Roblox has one.
+    pub icon_url: Option<String>,
+    /// The game sells private servers.
+    pub private_servers: bool,
+}
+
+/// One private server of a place, as one account sees it.
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PrivateServer {
+    pub vip_server_id: i64,
+    pub name: String,
+    pub owner_id: Option<i64>,
+    pub owner_name: Option<String>,
+    pub playing: i32,
+    pub max_players: i32,
+    /// The running server's job id, when it runs.
+    pub job_id: Option<String>,
+    /// Only when this account can join it (launch with `LaunchTarget::PrivateAccess`).
+    pub access_code: Option<String>,
+}
+
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PrivateServerPage {
+    pub servers: Vec<PrivateServer>,
+    /// Opaque; None on the last page.
+    pub next_cursor: Option<String>,
+    /// Roblox says this account may not join servers of this game (`gameJoinRestricted`).
+    pub join_restricted: bool,
+}

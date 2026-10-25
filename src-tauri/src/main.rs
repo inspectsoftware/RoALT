@@ -235,6 +235,8 @@ fn main() {
             commands::bulk_cancel,
             commands::bulk_current,
             commands::servers_list,
+            commands::game_info,
+            commands::private_servers_list,
             commands::groups_list,
             commands::group_save,
             commands::group_remove,

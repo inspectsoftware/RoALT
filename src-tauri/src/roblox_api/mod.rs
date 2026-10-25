@@ -28,7 +28,7 @@ use zeroize::Zeroizing;
 use crate::error::{AppError, Result};
 use crate::vault::Secret;
 use types::{
-    AuthenticatedUser, Data, FriendOnline, Game, Presences, Profiles, ServerList, ShareLinkResolution, ShareLinkV2,
+    AuthenticatedUser, Data, FriendOnline, Game, GameDetails, Presences, Profiles, ServerList, ShareLinkResolution, ShareLinkV2,
     SocialCounts, Thumbnails, TwoStepConfig, UserDetails, UserPresence,
 };
 
@@ -322,6 +322,45 @@ impl Client {
             })
         });
         Ok(ServerPage { servers: servers.collect(), next_cursor: list.next_page_cursor.filter(|c| !c.is_empty()) })
+    }
+
+    /// `GET apis.roblox.com/universes/v1/places/{placeId}/universe` (no cookie): the place's
+    /// universe; `{"universeId": null}` (unknown place) → None.
+    pub async fn place_universe(&self, place_id: i64) -> Result<Option<i64>> {
+        let _ = place_id;
+        todo!()
+    }
+
+    /// `GET games.roblox.com/v1/games?universeIds=` (no cookie, ≤50 per call, the existing
+    /// `GAMES` endpoint) with everything `GameInfo` needs: id, rootPlaceId, name, creator.name,
+    /// playing, visits, maxPlayers, createVipServersAllowed. Lenient: missing fields default;
+    /// unknown universes are absent. (`universe_root_places` may be rebuilt on top of it.)
+    pub async fn games(&self, universe_ids: &[i64]) -> Result<Vec<GameDetails>> {
+        let _ = universe_ids;
+        todo!()
+    }
+
+    /// `GET thumbnails.roblox.com/v1/places/gameicons?placeIds=..` (no cookie, `PLACE_ICONS`):
+    /// place id → image URL for `Completed` icons (matched by `targetId`, not by order).
+    pub async fn place_icons(&self, place_ids: &[i64]) -> Result<HashMap<i64, String>> {
+        let _ = place_ids;
+        todo!()
+    }
+
+    /// `GET games.roblox.com/v1/games/{placeId}/private-servers?cursor=..` with the account's
+    /// cookie (Roblox only answers signed in). Lenient parsing: `data[]` rows with `vipServerId`,
+    /// `name`, `owner{id,name}`, `playing`, `maxPlayers`, `id` (job id, may be absent),
+    /// `accessCode` (only present when this account can join), `nextPageCursor`,
+    /// `gameJoinRestricted`. Job ids and access codes that aren't GUIDs are dropped.
+    pub async fn private_servers(
+        &self,
+        account_id: i64,
+        cookie: &Secret,
+        place_id: i64,
+        cursor: Option<&str>,
+    ) -> Result<crate::model::PrivateServerPage> {
+        let _ = (account_id, cookie, place_id, cursor);
+        todo!()
     }
 
     /// One API call with throttle, CSRF retry, 429 backoff and cookie rotation.

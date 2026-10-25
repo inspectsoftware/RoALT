@@ -540,6 +540,29 @@ pub fn bulk_current(s: State<'_, App>) -> Option<BulkProgress> {
 
 // ---------- servers ----------
 
+/// The game behind a place: name, creator, players, icon, whether it sells private servers.
+/// Cached for `settings.cache_minutes` (key `game:<place_id>`, JSON of `GameInfo`). No cookie.
+/// `NotFound` when Roblox knows no such place (no universe) or no such game.
+#[tauri::command]
+pub async fn game_info(s: State<'_, App>, place_id: i64) -> Result<GameInfo> {
+    let _ = (s, place_id);
+    todo!()
+}
+
+/// One page of the place's private servers as `account_id` sees them (its cookie; joinable ones
+/// carry an access code). `Locked` when the vault is locked.
+#[tauri::command]
+pub async fn private_servers_list(
+    app: AppHandle,
+    s: State<'_, App>,
+    place_id: i64,
+    account_id: i64,
+    cursor: Option<String>,
+) -> Result<PrivateServerPage> {
+    let _ = (app, s, place_id, account_id, cursor);
+    todo!()
+}
+
 /// One page of a place's public servers (`cursor` from the previous page). With `account_id`,
 /// asked with that account's cookie (needed for Recommended / BestLatency; a guest gets 3
 /// requests a minute). `limit` is 10, 25, 50 or 100.

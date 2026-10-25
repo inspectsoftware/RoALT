@@ -48,7 +48,7 @@ struct Entry {
     in_game_at: Option<i64>,
     /// Unix ms the bootstrapper of a not yet adopted entry was first seen gone.
     gone_at: Option<i64>,
-    /// Ended and already looked at by `take_rejoins`.
+    /// Handed out by `take_rejoins` (or ended): not again until it is back in a game.
     rejoin_seen: bool,
 }
 
@@ -141,16 +141,23 @@ impl Tracker {
         }
     }
 
-    /// Clients that ended unexpectedly since the last call and may be rejoined (`wants_rejoin`),
-    /// each returned once. Drained whether or not auto-rejoin is on, so turning it on later
-    /// doesn't relaunch old exits.
+    /// Clients that got disconnected since the last call and may be rejoined (`wants_rejoin`),
+    /// each returned once per disconnect (again after it got back into a game). Drained whether
+    /// or not auto-rejoin is on, so turning it on later doesn't relaunch old disconnects.
     pub fn take_rejoins(&self) -> Vec<Rejoin> {
         let mut out = Vec::new();
-        for e in self.entries().iter_mut().filter(|e| e.inst.state == InstanceState::Exited && !e.rejoin_seen) {
-            e.rejoin_seen = true;
-            if wants_rejoin(&e.inst) {
-                let i = &e.inst;
-                out.push(Rejoin { from: i.id.clone(), account_id: i.account_id, target: i.target.clone(), rejoins: i.rejoins + 1 });
+        for e in self.entries().iter_mut() {
+            match e.inst.state {
+                InstanceState::Disconnected | InstanceState::Exited if !e.rejoin_seen => {
+                    e.rejoin_seen = true;
+                    if wants_rejoin(&e.inst, &e.facts) {
+                        let i = &e.inst;
+                        out.push(Rejoin { from: i.id.clone(), account_id: i.account_id, target: i.target.clone(), rejoins: i.rejoins + 1 });
+                    }
+                }
+                InstanceState::Disconnected | InstanceState::Exited => {}
+                // Reconnected (or teleported): a later disconnect counts again.
+                _ => e.rejoin_seen = false,
             }
         }
         out
@@ -241,11 +248,18 @@ pub struct Rejoin {
     pub rejoins: u32,
 }
 
-/// An ended client is worth rejoining when it closed unexpectedly (note "Closed unexpectedly":
-/// not closed by the user, not replaced, not a wrong account or a human check) and has had
-/// fewer than `MAX_REJOINS` rejoins.
-pub fn wants_rejoin(inst: &Instance) -> bool {
-    inst.state == InstanceState::Exited && inst.note.as_deref() == Some(UNEXPECTED) && inst.rejoins < MAX_REJOINS
+/// A client is worth rejoining when Roblox disconnected it (kicked, server shut down, connection
+/// lost; not the player's own Leave, research: reason 285) and it either still shows the
+/// disconnect dialog (no problem note) or then closed by itself ("Closed unexpectedly"), with
+/// fewer than `MAX_REJOINS` rejoins. A plain exit isn't one: closing Roblox's window leaves no
+/// trace in its log, so it can't be told apart from a crash.
+pub fn wants_rejoin(inst: &Instance, facts: &LogFacts) -> bool {
+    let ok = match inst.state {
+        InstanceState::Disconnected => inst.note.is_none(),
+        InstanceState::Exited => inst.note.as_deref() == Some(UNEXPECTED),
+        _ => false,
+    };
+    ok && facts.disconnected && !facts.left && !facts.replaced && inst.rejoins < MAX_REJOINS
 }
 
 impl Default for Tracker {
@@ -789,50 +803,77 @@ mod tests {
     }
 
     #[test]
-    fn rejoins_only_unexpected_exits_up_to_three_times() {
+    fn rejoins_only_disconnects_roblox_caused_up_to_three_times() {
         let base = Tracker::new().register(&info(100, 0, false), target());
-        let ended = |note: &str, rejoins| Instance { state: Exited, note: Some(note.into()), rejoins, ..base.clone() };
-        assert!(wants_rejoin(&ended("Closed unexpectedly", 0)));
-        assert!(wants_rejoin(&ended("Closed unexpectedly", 2)));
-        assert!(!wants_rejoin(&ended("Closed unexpectedly", 3)));
-        assert!(!wants_rejoin(&ended("Closed unexpectedly", 9)));
-        for n in ["Closed", "Replaced by another Roblox client", WRONG_ACCOUNT, CHALLENGED] {
-            assert!(!wants_rejoin(&ended(n, 0)), "{n}");
+        let inst = |state, note: Option<&str>, rejoins| Instance { state, note: note.map(Into::into), rejoins, ..base.clone() };
+        let facts = |disconnected, left| {
+            let mut f = LogFacts::default();
+            (f.disconnected, f.left) = (disconnected, left);
+            f
+        };
+        let kicked = facts(true, false);
+        assert!(wants_rejoin(&inst(Disconnected, None, 0), &kicked));
+        assert!(wants_rejoin(&inst(Disconnected, None, 2), &kicked));
+        assert!(wants_rejoin(&inst(Exited, Some(UNEXPECTED), 0), &kicked), "closed by itself after the kick");
+        assert!(!wants_rejoin(&inst(Disconnected, None, MAX_REJOINS), &kicked));
+        assert!(!wants_rejoin(&inst(Disconnected, None, 0), &facts(true, true)), "the player left");
+        assert!(!wants_rejoin(&inst(Exited, Some(UNEXPECTED), 0), &facts(false, false)), "a plain exit");
+        for n in ["Closed", WRONG_ACCOUNT, CHALLENGED] {
+            assert!(!wants_rejoin(&inst(Exited, Some(n), 0), &kicked), "{n}");
         }
-        for state in [Starting, Joining, InGame, Disconnected] {
-            assert!(!wants_rejoin(&Instance { state, ..base.clone() }), "{state:?}");
+        assert!(!wants_rejoin(&inst(Disconnected, Some(CHALLENGED), 0), &kicked));
+        for state in [Starting, Joining, InGame] {
+            assert!(!wants_rejoin(&inst(state, None, 0), &kicked), "{state:?}");
         }
     }
 
     #[test]
-    fn hands_out_each_unexpected_exit_once() {
+    fn hands_out_each_disconnect_once() {
+        let dir = temp_dir();
         let t = Tracker::new();
         let start = now_ms();
         let secs = (start / 1000) as u64;
         let launch = |pid: u32, account_id: i64| LaunchInfo { account_id, browser_tracker_id: BTID + i64::from(pid), ..info(pid, start, false) };
         let follow = LaunchTarget::FollowUser { user_id: 42 };
-        let crashed = t.register(&launch(100, 7), follow.clone()).id;
-        let closed = t.register(&launch(200, 1), target()).id;
-        let capped = t.register(&launch(300, 1), target()).id;
-        let running = t.register(&launch(400, 1), target()).id;
-        t.set_rejoins(&crashed, 2);
-        t.set_rejoins(&capped, MAX_REJOINS);
-        let procs = Fake::new(&[(100, secs), (200, secs), (300, secs), (400, secs)]);
-        t.poll(None, &procs, &user_of, start + 1_000);
+        let kicked = t.register(&launch(100, 7), follow.clone()).id;
+        let left = t.register(&launch(200, 1), target()).id;
+        let closed = t.register(&launch(300, 1), target()).id;
+        t.set_rejoins(&kicked, 1);
+        let log = |pid: u32| dir.join(format!("0.744.0.7441080_20261024T1200{pid}Z_Player_R{pid}_last.log"));
+        for pid in [100, 200, 300] {
+            append(&log(pid), &[btid_line(BTID + i64::from(pid))]);
+            append(&log(pid), &join_lines(USER));
+            append(&log(pid), &[replicator()]);
+        }
+        let procs = Fake::new(&[(100, secs), (200, secs), (300, secs)]);
+        let poll = |now: i64| t.poll(Some(&dir), &procs, &user_of, now);
+        poll(start + 1_000);
+        assert_eq!(state(&t, &kicked).0, InGame);
         assert!(t.take_rejoins().is_empty());
 
-        t.mark_closing(&closed);
-        procs.set(&[(400, secs)]);
-        // Never reached a game: gone for good after 120 s.
-        t.poll(None, &procs, &user_of, start + 121_000);
-        assert_eq!(state(&t, &closed).1, note("Closed"));
-        assert_eq!(state(&t, &capped).1, note("Closed unexpectedly"));
-        assert_eq!(t.take_rejoins(), vec![Rejoin { from: crashed.clone(), account_id: 7, target: follow, rejoins: 3 }]);
+        // Kicked (idle, 267) and left by the player (285): only the kick is handed out, once.
+        append(&log(100), &["[FLog::Network] Sending disconnect with reason: 267".into()]);
+        append(&log(200), &["[FLog::Network] Disconnection Notification. Reason: 285".into()]);
+        // A plain exit (the window closed) is no disconnect.
+        procs.set(&[(100, secs), (200, secs)]);
+        poll(start + 2_000);
+        assert_eq!(state(&t, &kicked).0, Disconnected);
+        assert_eq!(state(&t, &closed), (Exited, note("Closed unexpectedly"), 300));
+        assert_eq!(t.take_rejoins(), vec![Rejoin { from: kicked.clone(), account_id: 7, target: follow.clone(), rejoins: 2 }]);
         assert!(t.take_rejoins().is_empty());
-        t.poll(None, &procs, &user_of, start + 122_000);
+        poll(start + 3_000);
         assert!(t.take_rejoins().is_empty());
-        assert_eq!(t.get(&crashed).unwrap().rejoins, 2);
-        assert_eq!(state(&t, &running).0, Starting);
+
+        // Reconnected, then kicked again: handed out again.
+        append(&log(100), &join_lines(USER));
+        append(&log(100), &[replicator()]);
+        poll(start + 4_000);
+        assert!(t.take_rejoins().is_empty());
+        append(&log(100), &["[FLog::Network] Lost connection with reason : You have been kicked from the game".into()]);
+        poll(start + 5_000);
+        assert_eq!(t.take_rejoins().len(), 1);
+        assert_eq!(state(&t, &left).0, Disconnected);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

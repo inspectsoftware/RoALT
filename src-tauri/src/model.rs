@@ -155,7 +155,8 @@ pub struct Settings {
     pub protect_shared_login: bool,
     /// Bulk launch: wait between two launches (±1 s jitter is added), 2 000..=60 000.
     pub launch_delay_ms: u32,
-    /// Relaunch a client that closes unexpectedly into the same target (at most 3 tries).
+    /// Relaunch a client Roblox disconnects (kicked, server shut down, connection lost; not the
+    /// player's own Leave) into the same target, at most 3 tries in a row.
     pub auto_rejoin: bool,
     /// Closing the window hides it; the tray icon brings it back or quits.
     pub close_to_tray: bool,

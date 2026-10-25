@@ -363,7 +363,7 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
                 onChange={setSameServer}
               />
             )}
-            <span className="flex items-center gap-2.5" title="Relaunch a client that closes unexpectedly into the same target. Up to 3 tries.">
+            <span className="flex items-center gap-2.5" title="Relaunch a client Roblox disconnects (kicked, server shut down, connection lost) into the same target. Up to 3 tries.">
               <Switch
                 label="Auto-rejoin"
                 checked={settings?.autoRejoin ?? false}

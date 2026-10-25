@@ -29,7 +29,8 @@ protectSharedLogin: boolean,
  */
 launchDelayMs: number, 
 /**
- * Relaunch a client that closes unexpectedly into the same target (at most 3 tries).
+ * Relaunch a client Roblox disconnects (kicked, server shut down, connection lost; not the
+ * player's own Leave) into the same target, at most 3 tries in a row.
  */
 autoRejoin: boolean, 
 /**

@@ -155,7 +155,7 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
             onCommit={(s) => set.mutate({ launchDelayMs: Math.round(s * 1000) })}
           />
         </Row>
-        <Row title="Auto-rejoin" hint="Relaunch a client that closes unexpectedly into the same target. Up to 3 tries.">
+        <Row title="Auto-rejoin" hint="Relaunch a client Roblox disconnects (kicked, server shut down, connection lost) into the same target. Up to 3 tries.">
           <Switch label="Auto-rejoin" checked={settings.autoRejoin} onChange={(autoRejoin) => set.mutate({ autoRejoin })} />
         </Row>
         <Row

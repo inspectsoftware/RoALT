@@ -8,7 +8,7 @@
 // A bulk launch runs on timers too; "AFK 1" fails in it the same way and the batch goes on.
 // Servers: place 1 doesn't exist; Mega Obby (7719004215) sells no private servers; "Builder" may
 // not join private servers. Without an account the public list allows 3 requests a minute, as Roblox does.
-// "Alt 02"'s first client closes unexpectedly 20 s into its game; with auto-rejoin on it comes back once.
+// "Alt 02"'s first client is kicked 20 s into its game; with auto-rejoin on it is closed and comes back once.
 // Moving the data folder to a path containing "bad" fails.
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
@@ -105,18 +105,23 @@ function track(accountId: number, pid: number, target: LaunchTarget, placeId: nu
   const step = (ms: number, f: () => void) => setTimeout(() => { if (i.state !== "exited") { f(); instancesChanged(); } }, ms);
   step(1500, () => { i.state = "joining"; });
   step(4000, () => { i.state = "inGame"; i.jobId = target.kind === "server" ? target.jobId : crypto.randomUUID(); i.placeId ??= 1818; });
-  if (accountId === 3 && rejoins === 0) setTimeout(() => crash(i), 24_000);
+  if (accountId === 3 && rejoins === 0) setTimeout(() => kick(i), 24_000);
   return i;
 }
-/** As instances::rejoin: after the launch delay, the same account and target again. */
-function crash(i: Instance) {
+/** As instances::rejoin: a disconnected client is closed after the launch delay and the same
+ * account launched into the same target again. */
+function kick(i: Instance) {
   if (i.state === "exited") return;
-  endInstance(i.id, "Closed unexpectedly");
+  i.state = "disconnected";
+  instancesChanged();
   if (!settings.autoRejoin) return;
   setTimeout(() => {
     const a = find(i.accountId);
-    if (!a || !settings.autoRejoin || (batch && !batch.done) || instances.some((x) => x.accountId === a.id && x.state !== "exited")) return;
-    void emit("app://notice", { error: false, message: `${a.alias || a.displayName} closed unexpectedly and is rejoining.` });
+    if (i.state !== "disconnected") return;
+    const busy = instances.some((x) => x.id !== i.id && x.accountId === i.accountId && x.state !== "exited" && x.state !== "disconnected");
+    if (!a || !settings.autoRejoin || (batch && !batch.done) || busy) return;
+    endInstance(i.id, "Closed");
+    void emit("app://notice", { error: false, message: `${a.alias || a.displayName} was disconnected and is rejoining.` });
     retakeLock();
     track(a.id, 14000 + Math.floor(Math.random() * 9000), i.target, i.placeId, i.viaBootstrapper, i.rejoins + 1);
   }, settings.launchDelayMs);

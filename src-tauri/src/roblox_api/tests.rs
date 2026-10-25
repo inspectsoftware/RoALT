@@ -1132,13 +1132,13 @@ async fn private_servers_send_the_cookie_and_keep_only_guid_secrets() {
     ];
     assert_eq!(page, PrivateServerPage { servers: want, next_cursor: Some("NEXT+/=".into()), join_restricted: true });
     let req = reqs.recv().unwrap();
-    assert_eq!(first_line(&req), "GET /v1/games/920587237/private-servers?cursor=abc%2B%2F%3D HTTP/1.1");
+    assert_eq!(first_line(&req), "GET /v1/games/920587237/private-servers?sortOrder=Desc&excludeFullGames=false&cursor=abc%2B%2F%3D HTTP/1.1");
     assert!(has(&req, "\r\ncookie: .ROBLOSECURITY=OLD\r\n"));
 
     // First page: no query at all; an empty next cursor is the last page.
     let page = c.private_servers(4, &cookie, 920587237, Some("")).await.unwrap();
     assert_eq!(page, PrivateServerPage { servers: vec![], next_cursor: None, join_restricted: false });
-    assert_eq!(first_line(&reqs.recv().unwrap()), "GET /v1/games/920587237/private-servers HTTP/1.1");
+    assert_eq!(first_line(&reqs.recv().unwrap()), "GET /v1/games/920587237/private-servers?sortOrder=Desc&excludeFullGames=false HTTP/1.1");
 }
 
 #[tokio::test]

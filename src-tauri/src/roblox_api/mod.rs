@@ -379,9 +379,10 @@ impl Client {
         use crate::launcher::target::is_uuid;
         use crate::model::{PrivateServer, PrivateServerPage};
         let route = endpoints::SERVERS_PRIVATE;
-        let mut url = endpoints::fill(route, place_id);
+        // The query the website sends.
+        let mut url = endpoints::fill(route, place_id) + "?sortOrder=Desc&excludeFullGames=false";
         if let Some(c) = cursor.filter(|c| !c.is_empty()) {
-            url.push_str("?cursor=");
+            url.push_str("&cursor=");
             url.push_str(&crate::launcher::uri::encode(c));
         }
         let list: PrivateServerList = self.get(route, &url, account_id, Some(cookie)).await?;

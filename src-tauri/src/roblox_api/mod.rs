@@ -28,8 +28,8 @@ use zeroize::Zeroizing;
 use crate::error::{AppError, Result};
 use crate::vault::Secret;
 use types::{
-    AuthenticatedUser, FriendOnline, Presences, Profiles, ShareLinkResolution, ShareLinkV2, SocialCounts, Thumbnails,
-    TwoStepConfig, UserDetails, UserPresence,
+    AuthenticatedUser, Data, FriendOnline, Game, Presences, Profiles, ShareLinkResolution, ShareLinkV2, SocialCounts,
+    Thumbnails, TwoStepConfig, UserDetails, UserPresence,
 };
 
 /// Called with `(account_id, new cookie)` when Roblox rotates a stored account's cookie.
@@ -40,6 +40,8 @@ const USER_AGENT: &str =
 const MAX_ATTEMPTS: u32 = 3;
 const CSRF: &str = "x-csrf-token";
 const CHALLENGE: &str = "rblx-challenge-id";
+/// The response header that carries a launch ticket (a secret).
+const TICKET_HEADER: &str = "rbx-authentication-ticket";
 const HEADSHOT_RETRIES: u32 = 5;
 #[cfg(not(test))]
 const HEADSHOT_STEP: Duration = Duration::from_millis(500);
@@ -208,51 +210,66 @@ impl Client {
     /// `GET auth.roblox.com/v1/client-assertion/` → the whole JSON answer (`{clientAssertion}`),
     /// sent as the body of the ticket request. Callers ignore failures, as the website does.
     pub async fn client_assertion(&self, account_id: i64, cookie: &Secret) -> Result<Value> {
-        let _ = (account_id, cookie);
-        todo!("roblox_api: client_assertion")
+        let url = endpoints::CLIENT_ASSERTION;
+        self.get(url, url, account_id, Some(cookie)).await
     }
 
     /// `POST auth.roblox.com/v1/authentication-ticket/` (JSON body = the assertion, or `{}`),
     /// with Referer/Origin www.roblox.com; the ticket is the `rbx-authentication-ticket`
     /// response header (missing → `Roblox("no ticket")`). Fetched right before each launch.
     pub async fn authentication_ticket(&self, account_id: i64, cookie: &Secret, assertion: Option<&Value>) -> Result<Secret> {
-        let _ = (account_id, cookie, assertion);
-        todo!("roblox_api: authentication_ticket")
+        let (url, empty) = (endpoints::AUTH_TICKET, Value::Object(Default::default()));
+        let body = assertion.unwrap_or(&empty);
+        let (headers, _, _) = self.request(Method::POST, url, url, Some(body), account_id, Some(cookie)).await?;
+        let ticket = headers.get(TICKET_HEADER).and_then(|v| v.to_str().ok()).filter(|t| !t.is_empty());
+        ticket.map(Secret::new).ok_or_else(|| AppError::Roblox("no ticket".into()))
     }
 
     /// `POST apis.roblox.com/sharelinks/v1/resolve-link {linkId, linkType}` (cookie + CSRF).
     /// The answer has one `*Data` object per link type; see types::ShareLinkResolution.
     pub async fn resolve_share_link(&self, account_id: i64, cookie: &Secret, code: &str, link_type: &str) -> Result<ShareLinkResolution> {
-        let _ = (account_id, cookie, code, link_type);
-        todo!("roblox_api: resolve_share_link")
+        let (url, body) = (endpoints::SHARE_LINK, serde_json::json!({ "linkId": code, "linkType": link_type }));
+        let (_, bytes, _) = self.request(Method::POST, url, url, Some(&body), account_id, Some(cookie)).await?;
+        json(&bytes)
     }
 
     /// `POST apis.roblox.com/deeplinks/v2/resolve {linkId}` (cookie + CSRF) for `?v=v2` links.
     pub async fn resolve_share_link_v2(&self, account_id: i64, cookie: &Secret, code: &str) -> Result<ShareLinkV2> {
-        let _ = (account_id, cookie, code);
-        todo!("roblox_api: resolve_share_link_v2")
+        let (url, body) = (endpoints::SHARE_LINK_V2, serde_json::json!({ "linkId": code }));
+        let (_, bytes, _) = self.request(Method::POST, url, url, Some(&body), account_id, Some(cookie)).await?;
+        json(&bytes)
     }
 
     /// `GET games.roblox.com/v1/games?universeIds=<csv ≤50>` (no cookie) → universe id →
     /// (root place id, game name). Unknown universes are absent.
     pub async fn universe_root_places(&self, universe_ids: &[i64]) -> Result<HashMap<i64, (i64, String)>> {
-        let _ = universe_ids;
-        todo!("roblox_api: universe_root_places")
+        let mut out = HashMap::new();
+        for chunk in valid_ids(universe_ids).chunks(50) {
+            let url = endpoints::fill(endpoints::GAMES, csv(chunk));
+            let page: Data<Game> = self.get(endpoints::GAMES, &url, 0, None).await?;
+            out.extend(page.data.into_iter().map(|g| (g.id, (g.root_place_id, g.name))));
+        }
+        Ok(out)
     }
 
     /// `POST users.roblox.com/v1/usernames/users {usernames ≤200, excludeBannedUsers:true}`
     /// (no cookie). Matches previous usernames too; unknown names are absent.
     pub async fn users_by_name(&self, names: &[String]) -> Result<Vec<AuthenticatedUser>> {
-        let _ = names;
-        todo!("roblox_api: users_by_name")
+        let (url, mut out) = (endpoints::USERS_BY_NAME, Vec::new());
+        for chunk in names.chunks(200) {
+            let body = serde_json::json!({ "usernames": chunk, "excludeBannedUsers": true });
+            let (_, bytes, _) = self.request(Method::POST, url, url, Some(&body), 0, None).await?;
+            out.extend(json::<Data<AuthenticatedUser>>(&bytes)?.data);
+        }
+        Ok(out)
     }
 
     /// `GET friends.roblox.com/v1/users/{id}/friends/online` with the account's cookie:
     /// friends online right now with their presence (PascalCase `UserPresenceType` string,
     /// `gameInstanceId`), see research account-info A14.
     pub async fn friends_online(&self, account_id: i64, cookie: &Secret, user_id: i64) -> Result<Vec<FriendOnline>> {
-        let _ = (account_id, cookie, user_id);
-        todo!("roblox_api: friends_online")
+        let url = endpoints::fill(endpoints::FRIENDS_ONLINE, user_id);
+        Ok(self.get::<Data<FriendOnline>>(endpoints::FRIENDS_ONLINE, &url, account_id, Some(cookie)).await?.data)
     }
 
     /// One API call with throttle, CSRF retry, 429 backoff and cookie rotation.

@@ -206,6 +206,18 @@ async fn reauth(app: &AppHandle, s: &App, password: Option<String>, prompt: &str
 
 const REVEAL_PROMPT: &str = "Confirm it's you to reveal a Roblox cookie.";
 
+/// Records a dead or challenged cookie on the account (true when `e` was one).
+fn record_cookie_error(app: &AppHandle, s: &App, id: i64, e: &AppError) -> Result<bool> {
+    let status = match e {
+        AppError::CookieInvalid | AppError::BoundSessionRequired => AccountStatus::Invalid,
+        AppError::Challenge => AccountStatus::Challenged,
+        _ => return Ok(false),
+    };
+    s.db.set_status(id, status, now_ms(), None, None)?;
+    accounts_changed(app);
+    Ok(true)
+}
+
 fn stored_cookie(s: &App, id: i64) -> Result<Secret> {
     let (user_id, blob) = s.db.account_cookie(id)?;
     s.vault.decrypt_secret(&cookie_aad(user_id), &blob)
@@ -319,16 +331,7 @@ pub async fn account_info(app: AppHandle, s: State<'_, App>, id: i64, refresh: b
     let robux = match robux {
         Ok(r) => Some(r),
         Err(e) => {
-            let status = match e {
-                AppError::CookieInvalid | AppError::BoundSessionRequired => Some(AccountStatus::Invalid),
-                AppError::Challenge => Some(AccountStatus::Challenged),
-                _ => None,
-            };
-            if let Some(st) = status {
-                s.db.set_status(id, st, now_ms(), None, None)?;
-                accounts_changed(&app);
-            }
-            if status.is_some() || unavailable.len() == 8 {
+            if record_cookie_error(&app, &s, id, &e)? || unavailable.len() == 8 {
                 return Err(e);
             }
             None
@@ -474,8 +477,20 @@ pub async fn user_lookup(s: State<'_, App>, name: String) -> Result<UserRef> {
 /// Launches one account and starts following its client. `favourite_id` marks that
 /// favourite as used.
 #[tauri::command]
-pub async fn launch(app: AppHandle, s: State<'_, App>, account_id: i64, target: LaunchTarget, favourite_id: Option<i64>) -> Result<LaunchInfo> {
-    let info = crate::launcher::launch(&s, account_id, &target).await?;
+pub async fn launch(
+    app: AppHandle,
+    s: State<'_, App>,
+    account_id: i64,
+    target: LaunchTarget,
+    favourite_id: Option<i64>,
+) -> Result<LaunchInfo> {
+    let info = match crate::launcher::launch(&s, account_id, &target).await {
+        Ok(info) => info,
+        Err(e) => {
+            record_cookie_error(&app, &s, account_id, &e)?;
+            return Err(e);
+        }
+    };
     s.tracker.register(&info, target);
     instances_changed(&app);
     if let Some(f) = favourite_id {
@@ -629,13 +644,19 @@ fn presence_kind(s: Option<&str>) -> PresenceKind {
 /// Who `account_id` can join: its friends online on Roblox, then the other stored accounts
 /// with a valid cookie (each asked about itself). Asked when the picker opens, not polled.
 #[tauri::command]
-pub async fn join_candidates(s: State<'_, App>, account_id: i64) -> Result<Vec<JoinCandidate>> {
+pub async fn join_candidates(app: AppHandle, s: State<'_, App>, account_id: i64) -> Result<Vec<JoinCandidate>> {
     let me = s.db.account(account_id)?;
     let cookie = stored_cookie(&s, account_id)?;
-    let mut out: Vec<JoinCandidate> = s
-        .api
-        .friends_online(account_id, &cookie, me.user_id)
-        .await?
+    // Friends are optional: a transient failure still offers the other stored accounts.
+    let friends = match s.api.friends_online(account_id, &cookie, me.user_id).await {
+        Ok(f) => f,
+        Err(e) if record_cookie_error(&app, &s, account_id, &e)? => return Err(e),
+        Err(e) => {
+            log::info!("friends online for account {account_id} failed: {e}");
+            Vec::new()
+        }
+    };
+    let mut out: Vec<JoinCandidate> = friends
         .into_iter()
         .map(|f| {
             let p = f.presence.unwrap_or_default();
@@ -823,10 +844,7 @@ pub fn settings_set(s: State<'_, App>, patch: SettingsPatch) -> Result<Settings>
         && p != v.protect_shared_login
     {
         v.protect_shared_login = p;
-        if s.multi.is_active() {
-            s.multi.disable();
-            let _ = s.multi.enable(p);
-        }
+        s.multi.set_protect_shared_login(p);
     }
     s.db.save_settings(&v)?;
     Ok(v)

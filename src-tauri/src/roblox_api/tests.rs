@@ -5,6 +5,8 @@ use std::sync::mpsc;
 use reqwest::header::HeaderName;
 
 use super::*;
+use crate::launcher::{Join, resolve};
+use crate::model::LaunchTarget;
 
 fn fixture(name: &str) -> String {
     let path = format!("{}/../docs/research/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
@@ -613,6 +615,264 @@ async fn two_step_maps_int_and_string_media_types() {
     assert!(has(&req, "\r\ncookie: .ROBLOSECURITY=OLD\r\n"));
 }
 
+// Launching end to end: the API calls and `launcher::resolve` on top of them.
+
+const LINK_CODE: &str = "67771413747491684286858666824242";
+const JOB: &str = "8d3e4f5a-1b2c-4d5e-8f90-123456789abc";
+
+fn csrf_403() -> String {
+    reply("403 Forbidden", &["x-csrf-token: TOK"], r#"{"errors":[{"code":0,"message":"XSRF token invalid"}]}"#)
+}
+
+fn share(link_type: &str) -> LaunchTarget {
+    LaunchTarget::ShareLink { code: "ce65b2c80e8dae48866fe2f919966557".into(), link_type: link_type.into() }
+}
+
+/// `resolve` against canned answers, as account 4 with cookie "OLD" (the warning is dropped).
+async fn resolve_with(answers: Vec<String>, target: LaunchTarget) -> (Result<Join>, mpsc::Receiver<String>) {
+    let (r, reqs) = resolve_warn(answers, target).await;
+    (r.map(|(join, _)| join), reqs)
+}
+
+async fn resolve_warn(
+    answers: Vec<String>,
+    target: LaunchTarget,
+) -> (Result<(Join, Option<&'static str>)>, mpsc::Receiver<String>) {
+    let (base, reqs) = serve(answers);
+    let (c, _) = client(&base);
+    (resolve(&c, 4, &Secret::new("OLD"), &target).await, reqs)
+}
+
+fn invalid(r: Result<Join>, want: &str) -> bool {
+    matches!(r, Err(AppError::Invalid(m)) if m == want)
+}
+
+#[tokio::test]
+async fn ticket_comes_from_the_header_after_a_csrf_retry() {
+    let assertion = r#"{"clientAssertion":"ASSERT.abc"}"#;
+    let ticket = reply("200 OK", &["rbx-authentication-ticket: TICKET-123"], "");
+    let (base, reqs) = serve(vec![ok(assertion), csrf_403(), ticket]);
+    let (c, _) = client(&base);
+    let cookie = Secret::new("OLD");
+
+    let assertion = c.client_assertion(3, &cookie).await.ok();
+    let ticket = c.authentication_ticket(3, &cookie, assertion.as_ref()).await.unwrap();
+    assert_eq!(ticket.expose(), "TICKET-123");
+    assert!(!format!("{ticket:?}").contains("TICKET"));
+
+    let get = reqs.recv().unwrap();
+    assert_eq!(first_line(&get), "GET /v1/client-assertion/ HTTP/1.1");
+    assert!(has(&get, "\r\ncookie: .ROBLOSECURITY=OLD\r\n"));
+    let (first, retry) = (reqs.recv().unwrap(), reqs.recv().unwrap());
+    assert!(!has(&first, "x-csrf-token") && has(&retry, "\r\nx-csrf-token: TOK\r\n"));
+    for r in [&first, &retry] {
+        assert_eq!(first_line(r), "POST /v1/authentication-ticket/ HTTP/1.1");
+        assert!(has(r, "\r\ncookie: .ROBLOSECURITY=OLD\r\n") && has(r, "\r\ncontent-type: application/json\r\n"));
+        assert!(has(r, "\r\nreferer: https://www.roblox.com/\r\n") && has(r, "\r\norigin: https://www.roblox.com\r\n"));
+        // The assertion answer is the ticket request's body, unchanged.
+        assert_eq!(body_of(r), serde_json::json!({ "clientAssertion": "ASSERT.abc" }));
+    }
+}
+
+#[tokio::test]
+async fn ticket_without_assertion_sends_empty_object() {
+    let missing = String::from_utf8(fixture_body("authlaunch-client-assertion-nocookie.json")).unwrap();
+    let ticket = reply("200 OK", &["rbx-authentication-ticket: T2"], "{}");
+    let (base, reqs) = serve(vec![reply("401 Unauthorized", &[], &missing), ticket, ok("{}")]);
+    let (c, _) = client(&base);
+    let cookie = Secret::new("OLD");
+
+    // A failed assertion is ignored, as the website does.
+    let assertion = c.client_assertion(3, &cookie).await.ok();
+    assert!(assertion.is_none());
+    assert_eq!(c.authentication_ticket(3, &cookie, None).await.unwrap().expose(), "T2");
+    reqs.recv().unwrap();
+    assert_eq!(body_of(&reqs.recv().unwrap()), serde_json::json!({}));
+
+    // A 2xx without the header is no ticket.
+    let r = c.authentication_ticket(3, &cookie, None).await;
+    assert!(matches!(r, Err(AppError::Roblox(m)) if m == "no ticket"));
+}
+
+#[tokio::test]
+async fn server_share_link_joins_privately_with_its_link_code() {
+    let answer = format!(
+        r#"{{"experienceInviteData":null,"privateServerInviteData":{{"status":"Valid","ownerUserId":45348281,
+        "universeId":6430220996,"privateServerId":1630945839,"linkCode":"{LINK_CODE}","placeId":18980972074}},
+        "experienceAffiliateData":null}}"#
+    );
+    let (join, reqs) = resolve_with(vec![csrf_403(), ok(&answer)], share("Server")).await;
+    let want = Join::Private { place_id: 18980972074, link_code: Some(LINK_CODE.into()), access_code: None };
+    assert_eq!(join.unwrap(), want);
+
+    let (first, retry) = (reqs.recv().unwrap(), reqs.recv().unwrap());
+    assert!(has(&retry, "\r\nx-csrf-token: TOK\r\n"));
+    for r in [&first, &retry] {
+        assert_eq!(first_line(r), "POST /sharelinks/v1/resolve-link HTTP/1.1");
+        assert!(has(r, "\r\ncookie: .ROBLOSECURITY=OLD\r\n") && has(r, "\r\norigin: https://www.roblox.com\r\n"));
+        let body = serde_json::json!({ "linkId": "ce65b2c80e8dae48866fe2f919966557", "linkType": "Server" });
+        assert_eq!(body_of(r), body);
+    }
+}
+
+#[tokio::test]
+async fn share_link_status_invalid_fails_and_expired_still_joins() {
+    let gone = ok(r#"{"privateServerInviteData":{"status":"Invalid"}}"#);
+    let (join, _) = resolve_with(vec![gone], share("Server")).await;
+    assert!(invalid(join, "This share link is no longer valid."));
+
+    let expired = format!(r#"{{"privateServerInviteData":{{"status":"Expired","placeId":5,"linkCode":"{LINK_CODE}"}}}}"#);
+    let (r, _) = resolve_warn(vec![ok(&expired)], share("Server")).await;
+    let (join, warning) = r.unwrap();
+    assert_eq!(join, Join::Private { place_id: 5, link_code: Some(LINK_CODE.into()), access_code: None });
+    assert!(warning.unwrap().contains("expired"));
+
+    // A server link without a usable link code, and types that are no game.
+    let no_code = ok(r#"{"privateServerInviteData":{"status":"Valid","placeId":5,"linkCode":"1+placelauncherurl:x"}}"#);
+    let (join, _) = resolve_with(vec![no_code], share("Server")).await;
+    assert!(invalid(join, "This share link is no longer valid."));
+    let friend = ok(r#"{"friendInviteData":{"status":"Valid","senderUserId":1},"privateServerInviteData":null}"#);
+    let (join, _) = resolve_with(vec![friend], share("FriendInvite")).await;
+    assert!(invalid(join, "This share link doesn't lead to a game or a player."));
+}
+
+#[tokio::test]
+async fn experience_invite_joins_its_server_while_valid() {
+    let valid = format!(r#"{{"experienceInviteData":{{"status":"Valid","placeId":1818,"instanceId":"{JOB}","inviterId":9}}}}"#);
+    let (join, _) = resolve_with(vec![ok(&valid)], share("ExperienceInvite")).await;
+    assert_eq!(join.unwrap(), Join::Job { place_id: 1818, job_id: JOB.into() });
+
+    // Expired (or the inviter left): the website opens the game instead.
+    let left = format!(r#"{{"experienceInviteData":{{"status":"InviterNotInExperience","placeId":1818,"instanceId":"{JOB}"}}}}"#);
+    let (join, _) = resolve_with(vec![ok(&left)], share("ExperienceInvite")).await;
+    assert_eq!(join.unwrap(), Join::Game { place_id: 1818, launch_data: None });
+
+    // Notification invites carry the inviter's server the same way.
+    let note = format!(r#"{{"notificationExperienceInviteData":{{"status":"Valid","placeId":1818,"instanceId":"{JOB}","launchData":"x"}}}}"#);
+    let (join, _) = resolve_with(vec![ok(&note)], share("NotificationExperienceInvite")).await;
+    assert_eq!(join.unwrap(), Join::Job { place_id: 1818, job_id: JOB.into() });
+    let old = format!(r#"{{"notificationExperienceInviteData":{{"status":"Expired","placeId":1818,"instanceId":"{JOB}","launchData":"x"}}}}"#);
+    let (r, _) = resolve_warn(vec![ok(&old)], share("NotificationExperienceInvite")).await;
+    assert_eq!(r.unwrap(), (Join::Game { place_id: 1818, launch_data: Some("x".into()) }, Some(EXPIRED_TEXT)));
+}
+
+const EXPIRED_TEXT: &str = "This share link has expired, so Roblox may refuse the join.";
+
+#[tokio::test]
+async fn experience_details_resolve_the_universe_to_its_root_place() {
+    let details = ok(r#"{"experienceDetailsInviteData":{"status":"Valid","universeId":994732206}}"#);
+    let games = ok(&fixture("meta-games-by-universe.json"));
+    let (join, reqs) = resolve_with(vec![details, games], share("ExperienceDetails")).await;
+    assert_eq!(join.unwrap(), Join::Game { place_id: 2753915549, launch_data: None });
+
+    reqs.recv().unwrap();
+    let req = reqs.recv().unwrap();
+    assert_eq!(first_line(&req), "GET /v1/games?universeIds=994732206 HTTP/1.1");
+    assert!(!has(&req, "\r\ncookie:"));
+
+    // Affiliate links keep their launch data in joinData; an unknown universe is no game.
+    let affiliate = ok(r#"{"experienceAffiliateData":{"status":"Valid","universeId":7,"joinData":{"launchData":"ref=abc"}}}"#);
+    let root = ok(r#"{"data":[{"id":7,"rootPlaceId":70,"name":"Seven"}]}"#);
+    let (join, _) = resolve_with(vec![affiliate, root], share("ExperienceAffiliate")).await;
+    assert_eq!(join.unwrap(), Join::Game { place_id: 70, launch_data: Some("ref=abc".into()) });
+    let (join, _) = resolve_with(vec![ok(r#"{"data":[]}"#)], LaunchTarget::Universe { universe_id: 8 }).await;
+    assert!(invalid(join, "This game no longer exists."));
+}
+
+#[tokio::test]
+async fn profile_link_follows_the_user() {
+    let profile = ok(r#"{"profileLinkResolutionResponseData":{"status":"Valid","userId":156}}"#);
+    let (join, _) = resolve_with(vec![profile], share("Profile")).await;
+    assert_eq!(join.unwrap(), Join::Follow { user_id: 156 });
+}
+
+#[tokio::test]
+async fn v2_experience_link_is_a_game_with_custom_data() {
+    let v2 = ok(r#"{"linkType":"Experience","status":"Valid","targetId":1818,"customData":{"k":"v"}}"#);
+    let target = LaunchTarget::ShareLinkV2 { code: "abc123".into() };
+    let (join, reqs) = resolve_with(vec![csrf_403(), v2], target.clone()).await;
+    assert_eq!(join.unwrap(), Join::Game { place_id: 1818, launch_data: Some(r#"{"k":"v"}"#.into()) });
+    reqs.recv().unwrap();
+    let req = reqs.recv().unwrap();
+    assert_eq!(first_line(&req), "POST /deeplinks/v2/resolve HTTP/1.1");
+    assert!(has(&req, "\r\nx-csrf-token: TOK\r\n") && has(&req, "\r\ncookie: .ROBLOSECURITY=OLD\r\n"));
+    assert_eq!(body_of(&req), serde_json::json!({ "linkId": "abc123" }));
+
+    let text = ok(r#"{"linkType":"Experience","targetId":1818,"customData":"plain"}"#);
+    let (join, _) = resolve_with(vec![text], target.clone()).await;
+    assert_eq!(join.unwrap(), Join::Game { place_id: 1818, launch_data: Some("plain".into()) });
+    let studio = ok(r#"{"linkType":"StudioEdit","status":"Valid","targetId":1818}"#);
+    let (join, _) = resolve_with(vec![studio], target).await;
+    assert!(invalid(join, "This share link doesn't lead to a game."));
+}
+
+#[tokio::test]
+async fn direct_targets_need_no_call_and_long_launch_data_is_dropped() {
+    let (c, _) = client("http://127.0.0.1:1");
+    let cookie = Secret::new("OLD");
+    let place = |d: &str| LaunchTarget::Place { place_id: 1818, launch_data: Some(d.into()) };
+    let at_limit = "x".repeat(200);
+    assert_eq!(
+        resolve(&c, 4, &cookie, &place(&at_limit)).await.unwrap(),
+        (Join::Game { place_id: 1818, launch_data: Some(at_limit) }, None)
+    );
+    let (over, warning) = resolve(&c, 4, &cookie, &place(&"x".repeat(201))).await.unwrap();
+    assert_eq!(over, Join::Game { place_id: 1818, launch_data: None });
+    assert!(warning.unwrap().contains("200-byte"));
+
+    let server = LaunchTarget::Server { place_id: 1, job_id: JOB.into() };
+    assert_eq!(resolve(&c, 4, &cookie, &server).await.unwrap().0, Join::Job { place_id: 1, job_id: JOB.into() });
+    let access = LaunchTarget::PrivateAccess { place_id: 1, access_code: JOB.into() };
+    let want = Join::Private { place_id: 1, link_code: None, access_code: Some(JOB.into()) };
+    assert_eq!(resolve(&c, 4, &cookie, &access).await.unwrap().0, want);
+    let (follow, _) = resolve(&c, 4, &cookie, &LaunchTarget::FollowUser { user_id: 2 }).await.unwrap();
+    assert_eq!((follow.place_id(), follow), (None, Join::Follow { user_id: 2 }));
+}
+
+#[tokio::test]
+async fn users_by_name_excludes_banned_and_sends_no_cookie() {
+    let found = String::from_utf8(fixture_body("authlaunch-csrf-users-v1-usernames-nocsrf.json")).unwrap();
+    let (base, reqs) = serve(vec![ok(&found)]);
+    let (c, _) = client(&base);
+    let users = c.users_by_name(&["Roblox".to_string()]).await.unwrap();
+    assert_eq!(users, [AuthenticatedUser { id: 1, name: "Roblox".into(), display_name: "Roblox".into() }]);
+
+    let req = reqs.recv().unwrap();
+    assert_eq!(first_line(&req), "POST /v1/usernames/users HTTP/1.1");
+    assert_eq!(body_of(&req), serde_json::json!({ "usernames": ["Roblox"], "excludeBannedUsers": true }));
+    assert!(!has(&req, "\r\ncookie:"));
+    assert!(c.users_by_name(&[]).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn friends_online_reads_pascal_case_presence() {
+    let body = format!(
+        r#"{{"data":[{{"id":156,"name":"builderman","displayName":"Builder","sortScore":1.5,"userPresence":{{
+        "UserPresenceType":"InGame","UserLocationType":"Game","lastLocation":"Crossroads","placeId":1818,
+        "rootPlaceId":1818,"gameInstanceId":"{JOB}","universeId":13058,"lastOnline":"2026-10-24T10:00:00Z"}}}},
+        {{"id":261,"name":"shedletsky","displayName":"Shedletsky","userPresence":{{"UserPresenceType":"Online"}}}},
+        {{"id":7,"name":"x","displayName":"X"}}]}}"#
+    );
+    let missing = String::from_utf8(fixture_body("acctinfo-friends-online-1-nocookie.json")).unwrap();
+    let (base, reqs) = serve(vec![ok(&body), reply("401 Unauthorized", &[], &missing)]);
+    let (c, _) = client(&base);
+    let cookie = Secret::new("OLD");
+
+    let friends = c.friends_online(4, &cookie, 1).await.unwrap();
+    assert_eq!(friends.iter().map(|f| f.id).collect::<Vec<_>>(), [156, 261, 7]);
+    let p = friends[0].presence.clone().unwrap();
+    assert_eq!((p.user_presence_type.as_deref(), p.game_instance_id.as_deref()), (Some("InGame"), Some(JOB)));
+    assert_eq!((p.place_id, p.root_place_id, p.universe_id), (Some(1818), Some(1818), Some(13058)));
+    assert_eq!((friends[0].display_name.as_str(), p.last_location.as_deref()), ("Builder", Some("Crossroads")));
+    assert_eq!(friends[1].presence.as_ref().unwrap().user_presence_type.as_deref(), Some("Online"));
+    assert!(friends[2].presence.is_none());
+
+    let req = reqs.recv().unwrap();
+    assert_eq!(first_line(&req), "GET /v1/users/1/friends/online HTTP/1.1");
+    assert!(has(&req, "\r\ncookie: .ROBLOSECURITY=OLD\r\n"));
+    assert!(matches!(c.friends_online(4, &cookie, 1).await, Err(AppError::CookieInvalid)));
+}
+
 /// Live check of the public (cookie-less) endpoints against roblox.com, user 1 ("Roblox").
 /// Not run by default: `cargo test live_public -- --ignored --nocapture`.
 #[tokio::test]
@@ -628,5 +888,9 @@ async fn live_public_endpoints() {
     assert!(plus.contains_key(&1), "{plus:?}");
     let counts = c.social_counts(1).await.unwrap();
     assert!(counts.followers > 1_000_000, "{counts:?}");
-    println!("user={user:?}\nheads={heads:?}\nplus={plus:?}\ncounts={counts:?}");
+    let games = c.universe_root_places(&[383310974]).await.unwrap();
+    assert_eq!(games.get(&383310974).map(|g| g.0), Some(920587237), "{games:?}");
+    let found = c.users_by_name(&["Roblox".to_owned()]).await.unwrap();
+    assert_eq!(found.first().map(|u| u.id), Some(1));
+    println!("user={user:?}\nheads={heads:?}\nplus={plus:?}\ncounts={counts:?}\ngames={games:?}");
 }

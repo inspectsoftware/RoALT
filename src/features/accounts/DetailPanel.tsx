@@ -19,7 +19,7 @@ const clip = (text: string, done: string) => writeText(text).then(() => toast(do
 const openLink = (url: string) => openUrl(url).catch(toastError);
 
 /** The parent keys this by account id, so local edits reset when the selection changes. */
-export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, checking, onValidate, onRemove }: {
+export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, checking, onValidate, onRemove, onLaunch }: {
   account: AccountSummary;
   groups: Group[];
   vaultMode: VaultMode;
@@ -27,6 +27,7 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
   checking: boolean;
   onValidate: () => void;
   onRemove: () => void;
+  onLaunch: () => void;
 }) {
   const qc = useQueryClient();
   const update = useUpdateAccount();
@@ -141,6 +142,15 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
       )}
 
       <Section>
+        <button
+          className="btn btn-primary"
+          disabled={a.status !== "valid"}
+          title={a.status === "valid" ? "Pick a target in Launch for this account" : "Only an account with a valid cookie can launch"}
+          onClick={onLaunch}
+        >
+          <Icon name="play" size={12} fill />
+          Launch
+        </button>
         <div className="grid grid-cols-2 gap-2">
           <ActionButton icon="external" label="Open profile" onClick={() => openLink(`https://www.roblox.com/users/${a.userId}/profile`)} />
           <ActionButton

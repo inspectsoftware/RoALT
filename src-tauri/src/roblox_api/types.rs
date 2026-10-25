@@ -48,6 +48,22 @@ pub struct UserPresence {
     pub universe_id: Option<i64>,
 }
 
+/// The `{data:[..]}` envelope of list answers.
+#[derive(Deserialize, Debug)]
+pub struct Data<T> {
+    pub data: Vec<T>,
+}
+
+/// A row of `games.roblox.com/v1/games?universeIds=`.
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Game {
+    pub id: i64,
+    pub root_place_id: i64,
+    #[serde(default)]
+    pub name: String,
+}
+
 /// `thumbnails.roblox.com/v1/users/avatar-headshot` (and `/v1/batch`).
 #[derive(Deserialize, Debug)]
 pub struct Thumbnails {

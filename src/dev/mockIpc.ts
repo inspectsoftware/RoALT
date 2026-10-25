@@ -1,9 +1,13 @@
 // Dev-only fake backend so the UI can be previewed in a normal browser (`npm run dev`).
 // main.tsx loads it only when import.meta.env.DEV and there is no Tauri runtime.
 // Master password for the fake vault: "password". A pasted cookie containing "bad" is rejected.
+// Launching as "AFK 1" fails with an expired cookie; "Builder" launches through a bootstrapper.
+// A username containing "nobody" doesn't exist.
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
-import type { AccountInfo, AccountStatus, AccountSummary, Group, Presence, Settings, VaultMode } from "../api";
+import type {
+  AccountInfo, AccountStatus, AccountSummary, Favourite, Group, JoinCandidate, LaunchTarget, ParsedInput, Presence, Settings, VaultMode,
+} from "../api";
 
 const MIN = 60_000;
 const DAY = 86_400_000;
@@ -128,6 +132,93 @@ function makeInfo(a: AccountSummary): AccountInfo {
   };
 }
 
+// ---------- M3: target parsing, launch, favourites, join ----------
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SHARE_TYPES = ["Server", "ExperienceInvite", "ExperienceDetails", "ExperienceAffiliate", "ExperienceEvent", "Profile"];
+const idOf = (v?: string) => (v && /^\d{1,15}$/.test(v) && Number(v) > 0 ? Number(v) : null);
+const target = (t: LaunchTarget): ParsedInput => ({ kind: "target", target: t });
+const bad = (reason: string): ParsedInput => ({ kind: "invalid", reason });
+const follow = (v?: string) => (idOf(v) ? target({ kind: "followUser", userId: Number(v) }) : bad("That user ID isn't valid."));
+
+/** A small stand-in for launcher::target::parse (the real rules: docs/research/ref_parse.py). */
+function parseTarget(raw: string): ParsedInput {
+  const s = raw.trim().replace(/^<|>$/g, "");
+  if (!s) return bad("Paste a game link, an ID or @username.");
+  if (idOf(s)) return target({ kind: "place", placeId: Number(s), launchData: null });
+  if (UUID.test(s)) return { kind: "jobIdOnly", jobId: s.toLowerCase() };
+  if (/^@?[A-Za-z0-9_]{3,20}$/.test(s)) return { kind: "username", name: s.replace(/^@/, "") };
+  if (/^roblox-(player|studio)/i.test(s)) return bad("That launch link carries a sign-in ticket. Paste the game link instead.");
+  let u: URL;
+  try {
+    u = new URL(/^[a-z][a-z0-9+.-]*:/i.test(s) ? s : `https://${s}`);
+  } catch {
+    return bad("That doesn't look like a link.");
+  }
+  // First occurrence of a key wins, as in the real parser.
+  const q = new Map([...u.searchParams].reverse().map(([k, v]) => [k.toLowerCase(), v]));
+  if (u.protocol === "roblox:") {
+    const route = `${u.host}${u.pathname}`.replace(/^\/+|\/+$/g, "").toLowerCase();
+    if (route === "" || route === "experiences/start") return fromQuery(q);
+    if (route === "navigation/share_links") return share(q);
+    if (route === "navigation/profile") return follow(q.get("userid"));
+    if (route === "navigation/game_details") {
+      const universeId = idOf(q.get("gameid"));
+      return universeId ? target({ kind: "universe", universeId }) : bad("That game ID isn't valid.");
+    }
+    return { kind: "unsupported", reason: "That Roblox app link doesn't open a game." };
+  }
+  if (!/^(www\.|web\.|m\.)?roblox\.com$/i.test(u.hostname)) return bad("Only roblox.com links work here.");
+  const seg = u.pathname.split("/").filter(Boolean);
+  if (seg.length > 1 && /^[a-z]{2}(-[a-z0-9]{2,4})?$/i.test(seg[0])) seg.shift();
+  const [a = "", b] = seg.map((x) => x.toLowerCase());
+  if (a === "games" && b === "start") return fromQuery(q);
+  if (a === "games") return idOf(b) ? fromQuery(new Map([...q, ["placeid", b]])) : bad("That place ID isn't valid.");
+  if (a === "share" || a === "share-links") return share(q);
+  if (a === "users") return follow(b);
+  return { kind: "unsupported", reason: "That roblox.com page isn't a game." };
+}
+
+function fromQuery(q: Map<string, string>): ParsedInput {
+  const placeId = idOf(q.get("placeid") ?? q.get("id"));
+  if (!placeId) return q.has("userid") ? follow(q.get("userid")) : bad("That place ID isn't valid.");
+  const link = q.get("linkcode") ?? q.get("privateserverlinkcode");
+  if (link !== undefined) return /^\d{1,64}$/.test(link) ? target({ kind: "privateLink", placeId, linkCode: link }) : bad("That private server link code isn't valid.");
+  const access = q.get("accesscode");
+  if (access !== undefined) return UUID.test(access) ? target({ kind: "privateAccess", placeId, accessCode: access.toLowerCase() }) : bad("That access code isn't valid.");
+  const job = q.get("gameinstanceid");
+  if (job !== undefined) return UUID.test(job) ? target({ kind: "server", placeId, jobId: job.toLowerCase() }) : bad("That job ID isn't valid.");
+  return target({ kind: "place", placeId, launchData: q.get("launchdata") || null });
+}
+
+function share(q: Map<string, string>): ParsedInput {
+  const code = q.get("code") ?? "";
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(code)) return bad("That share link's code isn't valid.");
+  if (q.get("v")?.toLowerCase() === "v2") return target({ kind: "shareLinkV2", code });
+  if (!q.has("type")) return bad("That share link is missing its type.");
+  const type = SHARE_TYPES.find((t) => t.toLowerCase() === q.get("type")?.toLowerCase());
+  return type ? target({ kind: "shareLink", code, linkType: type }) : { kind: "unsupported", reason: "That share link isn't for a game." };
+}
+
+const FRIENDS: JoinCandidate[] = [
+  { userId: 1203994411, username: "skyrunner_k", displayName: "Kai", accountId: null, presence: SKY },
+  // In a game, but Roblox hides which server: picking this one follows.
+  { userId: 998120347, username: "mossy_bricks", displayName: "Moss", accountId: null, presence: { ...OBBY, placeId: null, gameId: null } },
+  { userId: 3001772200, username: "lunatrades", displayName: "Luna", accountId: null, presence: plain("online", "Website") },
+];
+
+const favSeed: [string, LaunchTarget, number[]][] = [
+  ["Sky Islands", { kind: "place", placeId: 4410028153, launchData: null }, [1, 2, 3]],
+  ["Sky Islands · VIP", { kind: "shareLink", code: "7c1f0e9a2b4d4e61", linkType: "Server" }, [1]],
+  ["Mega Obby", { kind: "place", placeId: 7719004215, launchData: null }, [5]],
+  ["Follow @nova_builds", { kind: "followUser", userId: 2840197733 }, [2]],
+];
+let favourites: Favourite[] = favSeed.map(([name, t, accountIds], i) => ({
+  id: i + 1, name, target: t, accountIds, inTray: i === 0, sortOrder: i, lastUsedAt: null,
+}));
+
+const placeOfTarget = (t: LaunchTarget) => ("placeId" in t ? t.placeId : t.kind === "shareLink" ? SKY.placeId : null);
+
 function reauth(password?: string) {
   if (vault.mode === "master" && password !== vault.password) return fail("wrongPassword", "Wrong password.");
   return Promise.resolve();
@@ -223,6 +314,64 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "account_open_session":
       await sleep(500);
       return find(args.id) ? null : fail("notFound", "Not found.");
+
+    case "target_parse":
+      return parseTarget(String(args.input ?? ""));
+    case "user_lookup": {
+      await sleep(400);
+      const name = String(args.name ?? "").trim().replace(/^@/, "");
+      if (!name) return fail("invalid", "Type a Roblox username.");
+      if (/nobody/i.test(name)) return fail("invalid", `No Roblox user is called "${name}".`);
+      const known = [...accounts, ...FRIENDS].find((x) => x.username.toLowerCase() === name.toLowerCase());
+      return known
+        ? { userId: known.userId, username: known.username, displayName: known.displayName }
+        : { userId: 7000000000 + name.length * 7919, username: name, displayName: name.replace(/_/g, " ") };
+    }
+    case "launch": {
+      await sleep(1200);
+      const a = find(args.accountId);
+      if (!a) return fail("notFound", "Not found.");
+      if (a.username === "afk_unit_1") {
+        a.status = "invalid";
+        changed();
+        return fail("cookieInvalid", "This cookie is not valid or has expired. Sign in again.");
+      }
+      const f = favourites.find((x) => x.id === args.favouriteId);
+      if (f) f.lastUsedAt = Date.now();
+      return {
+        accountId: a.id, pid: 14000 + Math.floor(Math.random() * 9000), browserTrackerId: Math.floor(Math.random() * 1e12),
+        placeId: placeOfTarget(args.target), startedAt: Date.now(), viaBootstrapper: a.username === "studio_nova",
+        warning: args.target.kind === "shareLink" && args.target.code.startsWith("0") ? "This share link has expired, so Roblox may refuse the join." : null,
+      };
+    }
+    case "favourites_list":
+      return structuredClone(favourites);
+    case "favourite_save": {
+      const { id, name, target: t, accountIds, inTray } = args.input;
+      const old = favourites.find((x) => x.id === id);
+      const f: Favourite = old
+        ? Object.assign(old, { name, target: t, accountIds, inTray })
+        : { id: Math.max(0, ...favourites.map((x) => x.id)) + 1, name, target: t, accountIds, inTray, sortOrder: favourites.length, lastUsedAt: null };
+      if (!old) favourites.push(f);
+      return structuredClone(f);
+    }
+    case "favourite_remove":
+      favourites = favourites.filter((x) => x.id !== args.id);
+      return null;
+    case "favourites_reorder":
+      (args.ids as number[]).forEach((id, i) => {
+        const f = favourites.find((x) => x.id === id);
+        if (f) f.sortOrder = i;
+      });
+      return null;
+    case "join_candidates": {
+      await sleep(500);
+      if (!find(args.accountId)) return fail("notFound", "Not found.");
+      const mine = accounts
+        .filter((a) => a.id !== args.accountId && a.status === "valid")
+        .map((a): JoinCandidate => ({ userId: a.userId, username: a.username, displayName: a.displayName, accountId: a.id, presence: presenceOf(a) }));
+      return structuredClone([...FRIENDS, ...mine]);
+    }
 
     case "groups_list":
       return structuredClone(groups);

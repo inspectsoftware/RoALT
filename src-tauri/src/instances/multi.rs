@@ -29,7 +29,7 @@ pub struct Multi {
 /// The mutex handle and the locked files; dropping it releases everything.
 struct Held {
     _mutex: Singleton,
-    _files: Vec<File>,
+    files: Vec<File>,
 }
 
 /// Our handle to the named mutex; closed on drop.
@@ -64,6 +64,14 @@ impl Multi {
         self.take(SINGLETON_NAME, &files)
     }
 
+    /// Locks or releases the shared login files while keeping the mutex (no-op when not held,
+    /// so it works while clients run).
+    pub fn set_protect_shared_login(&self, on: bool) {
+        if let Some(h) = self.held().as_mut() {
+            h.files = if on { lock_files(&shared_files()) } else { Vec::new() };
+        }
+    }
+
     /// Releases the mutex and the files.
     pub fn disable(&self) {
         *self.held() = None;
@@ -90,7 +98,7 @@ impl Multi {
     fn take(&self, name: &str, files: &[PathBuf]) -> Result<()> {
         let mut held = self.held();
         if held.is_none() {
-            *held = Some(Held { _mutex: create_mutex(name)?, _files: lock_files(files) });
+            *held = Some(Held { _mutex: create_mutex(name)?, files: lock_files(files) });
         }
         Ok(())
     }
@@ -208,8 +216,11 @@ mod tests {
         other.take(&test_name(), &files).unwrap();
         assert!(other.is_active());
 
-        m.disable();
+        // Turning protection off frees the files but keeps the lock.
+        m.set_protect_shared_login(false);
         File::open(&file).unwrap();
+        assert!(m.is_active());
+        m.disable();
         other.disable();
         std::fs::remove_dir_all(&dir).unwrap();
     }

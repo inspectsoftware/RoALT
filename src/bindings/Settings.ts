@@ -14,4 +14,13 @@ autoLockMinutes: number, clipboardClearSeconds: number,
 /**
  * How long account info is reused before Roblox is asked again.
  */
-cacheMinutes: number, };
+cacheMinutes: number, 
+/**
+ * Hold Roblox's single-instance lock so several clients can run.
+ */
+multiInstance: boolean, 
+/**
+ * While multi-instance is on, lock Roblox's shared login files so clients can't
+ * overwrite each other's session (teleport error 773, wrong account shown).
+ */
+protectSharedLogin: boolean, };

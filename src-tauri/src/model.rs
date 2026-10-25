@@ -184,8 +184,6 @@ pub struct SettingsPatch {
     #[ts(optional)]
     pub cache_minutes: Option<u32>,
     #[ts(optional)]
-    pub multi_instance: Option<bool>,
-    #[ts(optional)]
     pub protect_shared_login: Option<bool>,
 }
 
@@ -408,6 +406,8 @@ pub struct LaunchInfo {
     pub started_at: i64,
     /// True when a bootstrapper (not RobloxPlayerBeta.exe) handled the launch.
     pub via_bootstrapper: bool,
+    /// Something the user should know (expired share link, launch data left out).
+    pub warning: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]

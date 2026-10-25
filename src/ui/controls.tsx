@@ -11,7 +11,7 @@ export function Switch({ checked, onChange, label }: { checked: boolean; onChang
 export function Segmented<T extends string | number>({ label, value, options, onChange, mono }: {
   label: string;
   value: T;
-  options: { value: T; label: string }[];
+  options: { value: T; label: string; disabled?: boolean; title?: string }[];
   onChange: (v: T) => void;
   mono?: boolean;
 }) {
@@ -22,6 +22,8 @@ export function Segmented<T extends string | number>({ label, value, options, on
           key={o.value}
           type="button"
           className={mono ? "seg mono" : "seg"}
+          disabled={o.disabled}
+          title={o.title}
           aria-pressed={o.value === value}
           onClick={() => o.value !== value && onChange(o.value)}
         >

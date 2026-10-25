@@ -16,6 +16,9 @@ export const qk = {
   instances: ["instances"],
   multi: ["multi"],
   bulk: ["bulk"],
+  game: (placeId: number | null) => ["game", placeId],
+  servers: ["servers"],
+  privateServers: ["privateServers"],
 } as const;
 
 export const queryClient = new QueryClient({

@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { api, asError, type AccountSummary, type ErrorPayload, type JoinCandidate, type LaunchTarget, type SameServer, type Settings } from "../../api";
+import {
+  api, asError, type AccountSummary, type BulkProgress, type ErrorPayload, type JoinCandidate, type LaunchInfo, type LaunchTarget,
+  type MultiInstanceStatus, type SameServer, type Settings,
+} from "../../api";
 import { qk, useBulk, useFavourites, useMultiStatus, usePresence, useSetSettings, useSettings } from "../../data";
 import { NumberField, Segmented, Switch } from "../../ui/controls";
 import { Icon } from "../../ui/Icon";
@@ -38,6 +41,24 @@ function remember(id: number) {
   } catch {
     // Only a convenience.
   }
+}
+
+/** Why several accounts can't launch right now, or null. */
+export function bulkBlocked(multi: MultiInstanceStatus | undefined, batch: BulkProgress | null | undefined) {
+  if (!multi?.active) return (multi?.enabled && multi.message) || "Turn on multi-instance to launch several accounts.";
+  return batch && !batch.done ? "A batch is still running." : null;
+}
+
+/** Toasts a started client and remembers its account for the next start. */
+export function launched(a: AccountSummary, info: LaunchInfo) {
+  remember(a.id);
+  toast(`Launched ${accountName(a)}${info.viaBootstrapper ? " via a bootstrapper" : ""}`);
+  if (info.warning) toast(info.warning, "error");
+}
+
+export function launchFailed(e: unknown) {
+  const err = asError(e);
+  if (err.kind !== "cancelled") toast(LAUNCH_ERRORS[err.kind] ?? friendly(err), "error");
 }
 
 export function LaunchView({ accounts, picked, setPicked, sameServer, setSameServer, draft, setDraft, step, setStep }: {
@@ -93,13 +114,7 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
   const fav = draft.favId === null ? undefined : favourites.data?.find((f) => f.id === draft.favId);
   // A parse that hasn't caught up yet is launchable: resolveTarget parses again.
   const pending = !!text.trim() && draft.parsed?.text !== text;
-  const blocked = !bulk
-    ? null
-    : !multi?.active
-      ? (multi?.enabled && multi.message) || "Turn on multi-instance to launch several accounts."
-      : batch && !batch.done
-        ? "A batch is still running."
-        : null;
+  const blocked = bulk ? bulkBlocked(multi, batch) : null;
   const canLaunch = !!account && (usableTarget || pending) && !step && !blocked;
 
   /** What the draft launches; parses again if the debounce hasn't caught up, looks a username up. */
@@ -146,15 +161,11 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
         await api.bulkLaunch({ accountIds: ids, target, delayMs: delay, sameServer, favouriteId: draft.favId });
       } else {
         timer = window.setTimeout(() => setStep("Starting Roblox…"), 800);
-        const info = await api.launch(a.id, target, draft.favId ?? undefined);
-        remember(a.id);
-        toast(`Launched ${accountName(a)}${info.viaBootstrapper ? " via a bootstrapper" : ""}`);
-        if (info.warning) toast(info.warning, "error");
+        launched(a, await api.launch(a.id, target, draft.favId ?? undefined));
       }
       if (draft.favId !== null) qc.invalidateQueries({ queryKey: qk.favourites });
     } catch (e) {
-      const err = asError(e);
-      if (err.kind !== "cancelled") toast(LAUNCH_ERRORS[err.kind] ?? friendly(err), "error");
+      launchFailed(e);
     } finally {
       clearTimeout(timer);
       busy = false;

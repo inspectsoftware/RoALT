@@ -5,6 +5,8 @@ import type { AccountInfo } from "./bindings/AccountInfo";
 import type { AccountPatch } from "./bindings/AccountPatch";
 import type { AccountPresence } from "./bindings/AccountPresence";
 import type { AccountSummary } from "./bindings/AccountSummary";
+import type { BulkProgress } from "./bindings/BulkProgress";
+import type { BulkRequest } from "./bindings/BulkRequest";
 import type { ConflictPolicy } from "./bindings/ConflictPolicy";
 import type { ErrorPayload } from "./bindings/ErrorPayload";
 import type { Favourite } from "./bindings/Favourite";
@@ -19,6 +21,8 @@ import type { LaunchInfo } from "./bindings/LaunchInfo";
 import type { LaunchTarget } from "./bindings/LaunchTarget";
 import type { MultiInstanceStatus } from "./bindings/MultiInstanceStatus";
 import type { ParsedInput } from "./bindings/ParsedInput";
+import type { ServerOrder } from "./bindings/ServerOrder";
+import type { ServerPage } from "./bindings/ServerPage";
 import type { Settings } from "./bindings/Settings";
 import type { SettingsPatch } from "./bindings/SettingsPatch";
 import type { UserRef } from "./bindings/UserRef";
@@ -28,12 +32,16 @@ import type { VaultStatus } from "./bindings/VaultStatus";
 export type {
   AccountInfo, AccountPresence, Headshot,
   Favourite, FavouriteInput, JoinCandidate, LaunchInfo, LaunchTarget, ParsedInput, UserRef,
-  Instance, MultiInstanceStatus,
+  Instance, MultiInstanceStatus, BulkProgress, BulkRequest, ServerOrder, ServerPage,
   AccountPatch, AccountSummary, ConflictPolicy, ErrorPayload, Group, GroupInput,
   ImportReport, Settings, SettingsPatch, VaultMode, VaultStatus,
 };
 export type { AccountStatus } from "./bindings/AccountStatus";
+export type { BulkItem } from "./bindings/BulkItem";
+export type { BulkStage } from "./bindings/BulkStage";
 export type { Density } from "./bindings/Density";
+export type { GameServer } from "./bindings/GameServer";
+export type { SameServer } from "./bindings/SameServer";
 export type { InstanceState } from "./bindings/InstanceState";
 export type { Presence } from "./bindings/Presence";
 export type { PresenceKind } from "./bindings/PresenceKind";
@@ -99,6 +107,13 @@ export const api = {
   /** Every Roblox client, tracked or not; then takes the multi-instance lock if enabled. */
   robloxCloseAll: (force: boolean) => invoke<MultiInstanceStatus>("roblox_close_all", { force }),
 
+  /** Starts a batch in the background; progress comes as bulk://progress. Returns its id. */
+  bulkLaunch: (request: BulkRequest) => invoke<string>("bulk_launch", { request }),
+  bulkCancel: (batchId: string) => invoke<void>("bulk_cancel", { batchId }),
+  bulkCurrent: () => invoke<BulkProgress | null>("bulk_current"),
+  serversList: (placeId: number, order: ServerOrder, excludeFull: boolean, limit: 10 | 25 | 50 | 100, cursor?: string, accountId?: number) =>
+    invoke<ServerPage>("servers_list", { placeId, order, excludeFull, limit, cursor, accountId }),
+
   groupsList: () => invoke<Group[]>("groups_list"),
   groupSave: (input: GroupInput) => invoke<Group>("group_save", { input }),
   groupRemove: (id: number) => invoke<void>("group_remove", { id }),
@@ -117,4 +132,5 @@ export const events = {
   onAccountsChanged: (f: () => void): Promise<UnlistenFn> => listen("accounts://changed", f),
   onVaultLocked: (f: () => void): Promise<UnlistenFn> => listen("vault://locked", f),
   onInstancesChanged: (f: () => void): Promise<UnlistenFn> => listen("instances://changed", f),
+  onBulkProgress: (f: (p: BulkProgress) => void): Promise<UnlistenFn> => listen<BulkProgress>("bulk://progress", (e) => f(e.payload)),
 };

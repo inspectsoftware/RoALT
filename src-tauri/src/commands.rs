@@ -484,21 +484,73 @@ pub async fn launch(
     target: LaunchTarget,
     favourite_id: Option<i64>,
 ) -> Result<LaunchInfo> {
-    // The lock has to be held before this client starts, or the next one replaces it.
-    retake_multi(&s, &s.db.settings()?);
-    let info = match crate::launcher::launch(&s, account_id, &target).await {
+    Ok(launch_tracked(&app, &s, account_id, target, favourite_id).await?.0)
+}
+
+/// One launch as every caller does it: the multi-instance lock first (it has to be held
+/// before this client starts, or the next one replaces it), a dead or challenged cookie
+/// recorded on the account, the client tracked, the favourite marked as used.
+pub(crate) async fn launch_tracked(
+    app: &AppHandle,
+    s: &App,
+    account_id: i64,
+    target: LaunchTarget,
+    favourite_id: Option<i64>,
+) -> Result<(LaunchInfo, Instance)> {
+    retake_multi(s, &s.db.settings()?);
+    let info = match crate::launcher::launch(s, account_id, &target).await {
         Ok(info) => info,
         Err(e) => {
-            record_cookie_error(&app, &s, account_id, &e)?;
+            record_cookie_error(app, s, account_id, &e)?;
             return Err(e);
         }
     };
-    s.tracker.register(&info, target);
-    instances_changed(&app);
+    let instance = s.tracker.register(&info, target);
+    instances_changed(app);
     if let Some(f) = favourite_id {
         let _ = s.db.touch_favourite(f, now_ms());
     }
-    Ok(info)
+    Ok((info, instance))
+}
+
+// ---------- bulk ----------
+
+/// Starts a batch in the background (see `launcher::bulk::start`); returns its id.
+#[tauri::command]
+pub fn bulk_launch(app: AppHandle, request: BulkRequest) -> Result<String> {
+    crate::launcher::bulk::start(app, request)
+}
+
+/// Stops the running batch after its current step.
+#[tauri::command]
+pub fn bulk_cancel(s: State<'_, App>, batch_id: String) -> Result<()> {
+    s.bulk.cancel(&batch_id)
+}
+
+/// The running or last batch (None before the first), for a view that opens later.
+#[tauri::command]
+pub fn bulk_current(s: State<'_, App>) -> Option<BulkProgress> {
+    s.bulk.current()
+}
+
+// ---------- servers ----------
+
+/// One page of a place's public servers (`cursor` from the previous page). With `account_id`,
+/// asked with that account's cookie (needed for Recommended / BestLatency; a guest gets 3
+/// requests a minute). `limit` is 10, 25, 50 or 100.
+#[tauri::command]
+pub async fn servers_list(
+    s: State<'_, App>,
+    place_id: i64,
+    order: ServerOrder,
+    exclude_full: bool,
+    limit: u8,
+    cursor: Option<String>,
+    account_id: Option<i64>,
+) -> Result<ServerPage> {
+    let cookie = account_id.map(|id| stored_cookie(&s, id)).transpose()?;
+    let id = account_id.unwrap_or(0);
+    s.api.servers_public(id, cookie.as_ref(), place_id, order, exclude_full, limit, cursor.as_deref()).await
 }
 
 // ---------- instances ----------
@@ -554,7 +606,7 @@ pub fn multi_instance_status(s: State<'_, App>) -> Result<MultiInstanceStatus> {
 }
 
 /// Takes the lock when it is wanted but not held and Roblox has since closed (no-op otherwise).
-fn retake_multi(s: &App, v: &Settings) {
+pub(crate) fn retake_multi(s: &App, v: &Settings) {
     if v.multi_instance && !s.multi.is_active() {
         let _ = s.multi.enable(v.protect_shared_login);
     }
@@ -846,6 +898,12 @@ pub fn settings_set(s: State<'_, App>, patch: SettingsPatch) -> Result<Settings>
             return Err(AppError::Invalid("Cache time must be between 1 minute and 24 hours.".into()));
         }
         v.cache_minutes = c;
+    }
+    if let Some(d) = patch.launch_delay_ms {
+        if !(2_000..=60_000).contains(&d) {
+            return Err(AppError::Invalid("The launch delay must be between 2 and 60 seconds.".into()));
+        }
+        v.launch_delay_ms = d;
     }
     // Multi-instance itself goes through multi_instance_set (it has to take or drop the lock).
     if let Some(p) = patch.protect_shared_login

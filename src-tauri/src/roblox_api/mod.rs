@@ -272,6 +272,26 @@ impl Client {
         Ok(self.get::<Data<FriendOnline>>(endpoints::FRIENDS_ONLINE, &url, account_id, Some(cookie)).await?.data)
     }
 
+    /// `GET games.roblox.com/v2/games/{placeId}/servers/Public?orderBy=..&excludeFullGames=..&limit=..&cursor=..`
+    /// (`endpoints::SERVERS_PUBLIC`; the website's own list). `limit` must be 10, 25, 50 or 100
+    /// (anything else → `Invalid` without a call). `cookie` optional; Recommended / BestLatency
+    /// without one get Roblox's 400 code 7 → `Invalid("Pick an account to sort by ...")`.
+    /// Parsing is lenient (only id / maxPlayers / playing required, unknown fields ignored,
+    /// rows with a missing id dropped); the cursor is URL-encoded and passed through opaque.
+    pub async fn servers_public(
+        &self,
+        account_id: i64,
+        cookie: Option<&Secret>,
+        place_id: i64,
+        order: crate::model::ServerOrder,
+        exclude_full: bool,
+        limit: u8,
+        cursor: Option<&str>,
+    ) -> Result<crate::model::ServerPage> {
+        let _ = (account_id, cookie, place_id, order, exclude_full, limit, cursor);
+        todo!()
+    }
+
     /// One API call with throttle, CSRF retry, 429 backoff and cookie rotation.
     /// `route` keys the throttle (one per endpoint, not per URL). No cookie: no `Cookie`
     /// header, CSRF cached as account 0, no rotation.

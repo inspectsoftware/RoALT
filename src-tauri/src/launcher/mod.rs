@@ -2,6 +2,7 @@
 //! resolve the target with that account's cookie, get an authentication ticket, build the
 //! `roblox-player:` URI and start the client. Tickets and URIs are secrets: never logged.
 
+pub mod bulk;
 pub mod client;
 pub mod target;
 pub mod uri;

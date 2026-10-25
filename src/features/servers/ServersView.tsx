@@ -1,4 +1,4 @@
-import { useState, type Dispatch, type FormEvent, type ReactNode, type SetStateAction } from "react";
+import { useEffect, useRef, useState, type Dispatch, type FormEvent, type ReactNode, type SetStateAction } from "react";
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { api, asError, type AccountSummary, type GameInfo, type LaunchTarget, type ServerOrder } from "../../api";
 import { qk, useBulk, useMultiStatus, useSettings } from "../../data";
@@ -51,7 +51,13 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
   // Recommended and Best ping need an account: without one, nothing is asked for.
   const needsAccount = asker === undefined && SIGNED_IN.includes(order);
 
-  const game = useQuery({ queryKey: qk.game(place), queryFn: () => api.gameInfo(place!), enabled: place !== null });
+  // A game without its icon (failed or still being made) is asked for again next time.
+  const game = useQuery({
+    queryKey: qk.game(place),
+    queryFn: () => api.gameInfo(place!),
+    enabled: place !== null,
+    staleTime: (q) => (q.state.data?.iconUrl ? Infinity : 0),
+  });
   const g = game.data;
   // Not gated on g.privateServers: that guest hint is false for games whose servers exist anyway.
   const view = tab;
@@ -59,7 +65,12 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
   const pub = useInfiniteQuery({
     queryKey: pubKey,
     // The asking account isn't in the key: picking other accounts doesn't reload the list.
-    queryFn: ({ pageParam }) => api.serversList(place!, order, hideFull, PAGE, pageParam ?? undefined, asker),
+    // Every fetch path (Load next, Try again, refetch) goes through here: no guest request for a
+    // signed-in sort.
+    queryFn: ({ pageParam }) =>
+      needsAccount
+        ? Promise.reject({ kind: "invalid", message: "Pick an account: Roblox sorts this way only for a signed-in account." })
+        : api.serversList(place!, order, hideFull, PAGE, pageParam ?? undefined, asker),
     initialPageParam: null as string | null,
     getNextPageParam: (p) => p.nextCursor,
     enabled: !!g && view === "public" && !needsAccount,
@@ -97,15 +108,24 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
   const noJoin = `Roblox doesn't let ${askerName} join servers of this game.`;
   const blocked = launchBlocked(n > 1, multi, batch) ?? (restricted && n === 1 ? noJoin : null);
   const warning =
-    blocked ??
-    (restricted ? noJoin : null) ??
-    (privPick && n > 1 ? `Access was checked for ${askerName} only; accounts without access can't join.` : null) ??
-    (free !== null && n > free ? `Only ${plural(free, "free slot")} for ${plural(n, "account")}.` : null);
+    [
+      blocked ?? (restricted ? noJoin : null),
+      privPick && n > 1 ? `Access was checked for ${askerName} only; accounts without access can't join.` : null,
+      free !== null && n > free ? `Only ${plural(free, "free slot")} for ${plural(n, "account")}.` : null,
+    ]
+      .filter(Boolean)
+      .join(" ") || null;
   const canJoin = !!target && n > 0 && !step && !blocked;
+
+  // A lookup that finishes after a newer Load (or after leaving the view) is dropped.
+  const loads = useRef(0);
+  useEffect(() => () => void loads.current++, []);
 
   async function load(e: FormEvent) {
     e.preventDefault();
+    const mine = ++loads.current;
     const p = await api.targetParse(text).catch(() => null);
+    if (mine !== loads.current) return;
     const t = p?.kind === "target" ? p.target : null;
     if (!t || t.kind === "followUser") {
       setTextError(p && "reason" in p ? p.reason : "Paste a game link or place ID.");
@@ -114,14 +134,18 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
     // Universe and share links need a lookup (share links with the first picked account).
     setLoading(true);
     try {
-      setPlace("placeId" in t ? t.placeId : await api.targetPlace(t, asker));
+      const id = "placeId" in t ? t.placeId : await api.targetPlace(t, asker);
+      if (mine !== loads.current) return;
+      // Loading the game already shown asks for its icon again if it was missing.
+      if (id === place && g && !g.iconUrl) void game.refetch();
+      setPlace(id);
       setTextError(null);
       setTab("public");
       setPick(t.kind === "server" ? { kind: "public", id: t.jobId } : null);
     } catch (e) {
-      setTextError(friendly(asError(e)));
+      if (mine === loads.current) setTextError(friendly(asError(e)));
     } finally {
-      setLoading(false);
+      if (mine === loads.current) setLoading(false);
     }
   }
 
@@ -260,7 +284,7 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
               {list.isError ? (
                 <>
                   <p role="alert" className="alert">{friendly(asError(list.error))}</p>
-                  <button className="btn" disabled={list.isFetching} onClick={() => void (list.isFetchNextPageError ? list.fetchNextPage() : refresh())}>
+                  <button className="btn" disabled={list.isFetching || (view === "public" && needsAccount)} onClick={() => void (list.isFetchNextPageError ? list.fetchNextPage() : refresh())}>
                     Try again
                   </button>
                 </>
@@ -270,7 +294,7 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
                 view === "private" ? `No private servers ${askerName} can see.` : hideFull ? "No servers with room right now." : "No servers right now."
               ) : (
                 list.hasNextPage && (
-                  <button className="btn" disabled={list.isFetching} onClick={() => void list.fetchNextPage()}>
+                  <button className="btn" disabled={list.isFetching || (view === "public" && needsAccount)} onClick={() => void list.fetchNextPage()}>
                     {list.isFetchingNextPage ? "Loading…" : `Load next ${PAGE}`}
                   </button>
                 )

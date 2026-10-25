@@ -44,19 +44,20 @@ export function RunningPanel({ accounts }: { accounts: AccountSummary[] }) {
   const running = list.filter(isRunning);
   const rows = [...list].sort((a, b) => Number(isRunning(b)) - Number(isRunning(a)) || b.startedAt - a.startedAt);
 
+  // Keyed by pid too: a close that reached only a bootstrapper ends with the client adopted
+  // under a new pid, which can then be closed again.
+  const closeKey = (i: Instance) => `${i.id}:${i.pid}`;
   const close = (i: Instance) => {
-    setClosing((s) => new Set(s).add(i.id));
-    // Settled either way: a failed close, or one that reached only a bootstrapper, can be retried.
-    api
-      .instanceClose(i.id, false)
-      .catch(toastError)
-      .finally(() =>
-        setClosing((s) => {
-          const next = new Set(s);
-          next.delete(i.id);
-          return next;
-        }),
-      );
+    const key = closeKey(i);
+    setClosing((s) => new Set(s).add(key));
+    api.instanceClose(i.id, false).catch((e) => {
+      setClosing((s) => {
+        const next = new Set(s);
+        next.delete(key);
+        return next;
+      });
+      toastError(e);
+    });
   };
   const closeAll = () => {
     setBusyAll(true);
@@ -119,7 +120,7 @@ export function RunningPanel({ accounts }: { accounts: AccountSummary[] }) {
                       <span className="flex items-baseline gap-1.5">
                         <span aria-hidden="true" className={`w-1.5 h-1.5 flex-none ${i.state === "starting" || i.state === "joining" ? "pulse" : ""}`} style={{ background: color }} />
                         <span>
-                          {live ? (closing.has(i.id) ? "Closing…" : label) : i.note ?? label}
+                          {live ? (closing.has(closeKey(i)) ? "Closing…" : label) : i.note ?? label}
                           {live && i.note && <span className="text-orange"> · {i.note}</span>}
                         </span>
                       </span>
@@ -132,7 +133,7 @@ export function RunningPanel({ accounts }: { accounts: AccountSummary[] }) {
                           className="wc w-9 h-8"
                           aria-label={`Close ${name}'s client`}
                           title="Close this client"
-                          disabled={closing.has(i.id)}
+                          disabled={closing.has(closeKey(i))}
                           onClick={() => close(i)}
                         >
                           <Icon name="x" size={10} />

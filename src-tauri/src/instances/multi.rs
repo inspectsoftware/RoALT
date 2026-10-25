@@ -7,6 +7,7 @@
 use std::fs::{File, OpenOptions};
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use windows::Win32::Foundation::{ERROR_INVALID_HANDLE, GENERIC_READ, HANDLE};
@@ -23,6 +24,9 @@ const RUNNING: &str = "Roblox is already running. Close it (including its tray i
 
 pub struct Multi {
     inner: Mutex<Option<Held>>,
+    /// Launches between `launching` and the client being tracked; outside `Held` so turning
+    /// multi-instance off and on during a launch doesn't forget it.
+    launches: AtomicUsize,
 }
 
 /// The mutex handle and the locked files; dropping it releases everything.
@@ -30,8 +34,6 @@ struct Held {
     _mutex: Singleton,
     /// Empty unless RoALT's clients run with protection on.
     files: Vec<File>,
-    /// Launches between `launching` and the client being tracked.
-    launches: usize,
     /// Clients (pid, start time) already running when the lock was taken: started under an
     /// earlier lock (a normal Roblox would have made `take` fail), e.g. before RoALT restarted.
     survivors: Vec<(u32, u64)>,
@@ -42,9 +44,7 @@ pub struct Launching<'a>(&'a Multi);
 
 impl Drop for Launching<'_> {
     fn drop(&mut self) {
-        if let Some(h) = self.0.held().as_mut() {
-            h.launches = h.launches.saturating_sub(1);
-        }
+        self.0.launches.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -61,7 +61,7 @@ unsafe impl Sync for Singleton {}
 
 impl Multi {
     pub fn new() -> Multi {
-        Multi { inner: Mutex::new(None) }
+        Multi { inner: Mutex::new(None), launches: AtomicUsize::new(0) }
     }
 
     /// Takes the lock (no-op when held). The name decides: if it already belongs to an event
@@ -109,12 +109,17 @@ impl Multi {
     pub fn release_if(&self, idle: impl FnOnce() -> bool) {
         if let Some(h) = self.held().as_mut()
             && !h.files.is_empty()
-            && h.launches == 0
+            && !self.in_flight()
             && !survivors_alive(h)
             && idle()
         {
             h.files.clear();
         }
+    }
+
+    /// A launch hasn't got its client tracked yet.
+    pub fn in_flight(&self) -> bool {
+        self.launches.load(Ordering::SeqCst) > 0
     }
 
     /// Clients from before the lock still run.
@@ -123,11 +128,11 @@ impl Multi {
     }
 
     fn launching_at(&self, protect: bool, paths: &[PathBuf]) -> Launching<'_> {
-        if let Some(h) = self.held().as_mut() {
-            h.launches += 1;
-            if protect {
-                relock(h, paths);
-            }
+        // Counted before locking: a `release_if` racing with this either sees the count or
+        // runs before the relock below.
+        self.launches.fetch_add(1, Ordering::SeqCst);
+        if protect && let Some(h) = self.held().as_mut() {
+            relock(h, paths);
         }
         Launching(self)
     }
@@ -156,7 +161,7 @@ impl Multi {
         let mut held = self.held();
         if held.is_none() {
             let survivors = process::roblox_processes().iter().map(|p| (p.pid, p.start_time)).collect();
-            *held = Some(Held { _mutex: create_mutex(name)?, files: Vec::new(), launches: 0, survivors });
+            *held = Some(Held { _mutex: create_mutex(name)?, files: Vec::new(), survivors });
         }
         Ok(())
     }
@@ -310,7 +315,9 @@ mod tests {
         let m = Multi::new();
         m.lock_shared_at(&files); // not held: nothing
         File::open(&file).unwrap();
-        m.take(&test_name()).unwrap();
+        let name = test_name();
+        m.take(&name).unwrap();
+        m.held().as_mut().unwrap().survivors.clear(); // a real Roblox on this machine must not count
         m.lock_shared_at(&files);
         assert!(locked(&file) && locked(&missing));
         m.lock_shared_at(&files); // both held: kept, not reopened
@@ -330,6 +337,14 @@ mod tests {
         assert!(locked(&file));
         m.release_if(|| true);
         File::open(&file).unwrap();
+        // Turning multi-instance off and on during a launch keeps it counted.
+        let launch = m.launching_at(false, &files);
+        m.disable();
+        m.take(&name).unwrap();
+        m.held().as_mut().unwrap().survivors.clear();
+        assert!(m.in_flight());
+        drop(launch);
+        assert!(!m.in_flight());
         m.lock_shared_at(&files);
 
         // Releasing frees the files but keeps the lock; contents are untouched.

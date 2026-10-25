@@ -585,7 +585,7 @@ fn retake_multi(s: &App, v: &Settings) {
 /// Locks the shared login files at once when protection is on and clients already run
 /// (RoALT's, or ones from before a restart).
 fn protect_running(s: &App, v: &Settings) {
-    if v.protect_shared_login && (s.tracker.any_running() || s.multi.has_survivors()) {
+    if v.protect_shared_login && (s.multi.in_flight() || s.tracker.any_running() || s.multi.has_survivors()) {
         s.multi.lock_shared();
     }
 }

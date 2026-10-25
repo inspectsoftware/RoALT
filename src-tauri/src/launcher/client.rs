@@ -127,7 +127,8 @@ mod tests {
         let system = std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
         let exe = ClientExe { path: system.join(r"System32\cmd.exe"), bootstrapper: true };
         let out = std::env::temp_dir().join(format!("roalt-test-{}.txt", uuid::Uuid::new_v4()));
-        let arg = Secret::new(format!("/c cd > \"{}\"", out.display()));
+        // Kept alive a second so its start time is read before it exits.
+        let arg = Secret::new(format!("/c cd > \"{}\" & ping -n 2 127.0.0.1 >nul", out.display()));
 
         let (pid, started) = start(&exe, &arg).unwrap();
         assert!(pid > 0 && started > 0);

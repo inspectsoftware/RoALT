@@ -13,6 +13,8 @@ export const qk = {
   info: (id: number) => ["info", id],
   favourites: ["favourites"],
   join: ["join"],
+  instances: ["instances"],
+  multi: ["multi"],
 } as const;
 
 export const queryClient = new QueryClient({
@@ -33,6 +35,17 @@ export const useSettings = () => useQuery({ queryKey: qk.settings, queryFn: api.
 export const useAccounts = () => useQuery({ queryKey: qk.accounts, queryFn: api.accountsList, select: bySortOrder });
 export const useGroups = () => useQuery({ queryKey: qk.groups, queryFn: api.groupsList, select: bySortOrder });
 export const useFavourites = () => useQuery({ queryKey: qk.favourites, queryFn: api.favouritesList, select: bySortOrder });
+
+/** Refreshed by instances://changed. */
+export const useInstances = () => useQuery({ queryKey: qk.instances, queryFn: api.instancesList });
+/** While the lock is wanted but not held, asks again every 5 s (Roblox may have been closed). */
+export const useMultiStatus = () =>
+  useQuery({
+    queryKey: qk.multi,
+    queryFn: api.multiInstanceStatus,
+    refetchInterval: (q) => (q.state.data?.enabled && !q.state.data.active ? 5000 : false),
+    refetchIntervalInBackground: false,
+  });
 
 const headshots = queryOptions({ queryKey: qk.headshots, queryFn: () => api.accountsHeadshots(), staleTime: 6 * 3_600_000 });
 /** One shared query; each avatar picks its own URL out of it. */

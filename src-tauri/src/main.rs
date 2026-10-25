@@ -2,6 +2,7 @@
 
 mod commands;
 mod error;
+mod instances;
 mod launcher;
 mod model;
 mod roblox_api;
@@ -28,6 +29,8 @@ pub struct App {
     pub data_dir: PathBuf,
     /// Last cookie put on the clipboard, until it is cleared.
     pub copied: Mutex<Option<Secret>>,
+    pub tracker: instances::Tracker,
+    pub multi: instances::multi::Multi,
 }
 
 impl App {
@@ -130,8 +133,24 @@ fn init(app: &TauriApp, data_dir: &Path) -> std::result::Result<(), String> {
     };
     let handle = app.handle().clone();
     let api = roblox_api::Client::new(Arc::new(move |id, cookie| handle.state::<App>().store_rotated(id, cookie)));
-    let theme = db.settings().map_err(|e| e.to_string())?.theme;
-    app.manage(App { db, vault, api, data_dir: data_dir.to_owned(), copied: Mutex::new(None) });
+    let settings = db.settings().map_err(|e| e.to_string())?;
+    let theme = settings.theme;
+    let multi = instances::multi::Multi::new();
+    if settings.multi_instance
+        && let Err(e) = multi.enable(settings.protect_shared_login)
+    {
+        // Roblox was already running: the UI shows why multi-instance is not active.
+        log::info!("multi-instance not active at start: {e}");
+    }
+    app.manage(App {
+        db,
+        vault,
+        api,
+        data_dir: data_dir.to_owned(),
+        copied: Mutex::new(None),
+        tracker: instances::Tracker::new(),
+        multi,
+    });
     main_window(app, data_dir, theme).map_err(|e| {
         format!(
             "RoALT can't open its window ({e}).\n\nIt needs the Microsoft Edge WebView2 Runtime: \
@@ -139,6 +158,7 @@ fn init(app: &TauriApp, data_dir: &Path) -> std::result::Result<(), String> {
         )
     })?;
     spawn_auto_lock(app.handle().clone());
+    instances::Tracker::spawn(app.handle().clone());
     Ok(())
 }
 
@@ -202,6 +222,13 @@ fn main() {
             commands::favourite_remove,
             commands::favourites_reorder,
             commands::join_candidates,
+            commands::instances_list,
+            commands::instance_close,
+            commands::instances_close_all,
+            commands::instances_clear_ended,
+            commands::multi_instance_status,
+            commands::multi_instance_set,
+            commands::roblox_close_all,
             commands::groups_list,
             commands::group_save,
             commands::group_remove,

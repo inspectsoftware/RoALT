@@ -2,4 +2,4 @@
 import type { Density } from "./Density";
 import type { Theme } from "./Theme";
 
-export type SettingsPatch = { theme?: Theme, density?: Density, autoLockMinutes?: number, clipboardClearSeconds?: number, cacheMinutes?: number, };
+export type SettingsPatch = { theme?: Theme, density?: Density, autoLockMinutes?: number, clipboardClearSeconds?: number, cacheMinutes?: number, protectSharedLogin?: boolean, };

@@ -13,9 +13,11 @@ import type { Group } from "./bindings/Group";
 import type { GroupInput } from "./bindings/GroupInput";
 import type { Headshot } from "./bindings/Headshot";
 import type { ImportReport } from "./bindings/ImportReport";
+import type { Instance } from "./bindings/Instance";
 import type { JoinCandidate } from "./bindings/JoinCandidate";
 import type { LaunchInfo } from "./bindings/LaunchInfo";
 import type { LaunchTarget } from "./bindings/LaunchTarget";
+import type { MultiInstanceStatus } from "./bindings/MultiInstanceStatus";
 import type { ParsedInput } from "./bindings/ParsedInput";
 import type { Settings } from "./bindings/Settings";
 import type { SettingsPatch } from "./bindings/SettingsPatch";
@@ -26,11 +28,13 @@ import type { VaultStatus } from "./bindings/VaultStatus";
 export type {
   AccountInfo, AccountPresence, Headshot,
   Favourite, FavouriteInput, JoinCandidate, LaunchInfo, LaunchTarget, ParsedInput, UserRef,
+  Instance, MultiInstanceStatus,
   AccountPatch, AccountSummary, ConflictPolicy, ErrorPayload, Group, GroupInput,
   ImportReport, Settings, SettingsPatch, VaultMode, VaultStatus,
 };
 export type { AccountStatus } from "./bindings/AccountStatus";
 export type { Density } from "./bindings/Density";
+export type { InstanceState } from "./bindings/InstanceState";
 export type { Presence } from "./bindings/Presence";
 export type { PresenceKind } from "./bindings/PresenceKind";
 export type { Subscription } from "./bindings/Subscription";
@@ -85,6 +89,16 @@ export const api = {
   /** Friends online plus the other stored accounts, for "Join user". */
   joinCandidates: (accountId: number) => invoke<JoinCandidate[]>("join_candidates", { accountId }),
 
+  instancesList: () => invoke<Instance[]>("instances_list"),
+  /** Graceful unless `force`; not counted as an unexpected exit. */
+  instanceClose: (id: string, force: boolean) => invoke<void>("instance_close", { id, force }),
+  instancesCloseAll: (force: boolean) => invoke<void>("instances_close_all", { force }),
+  instancesClearEnded: () => invoke<void>("instances_clear_ended"),
+  multiInstanceStatus: () => invoke<MultiInstanceStatus>("multi_instance_status"),
+  multiInstanceSet: (enabled: boolean) => invoke<MultiInstanceStatus>("multi_instance_set", { enabled }),
+  /** Every Roblox client, tracked or not; then takes the multi-instance lock if enabled. */
+  robloxCloseAll: (force: boolean) => invoke<MultiInstanceStatus>("roblox_close_all", { force }),
+
   groupsList: () => invoke<Group[]>("groups_list"),
   groupSave: (input: GroupInput) => invoke<Group>("group_save", { input }),
   groupRemove: (id: number) => invoke<void>("group_remove", { id }),
@@ -102,4 +116,5 @@ export const api = {
 export const events = {
   onAccountsChanged: (f: () => void): Promise<UnlistenFn> => listen("accounts://changed", f),
   onVaultLocked: (f: () => void): Promise<UnlistenFn> => listen("vault://locked", f),
+  onInstancesChanged: (f: () => void): Promise<UnlistenFn> => listen("instances://changed", f),
 };

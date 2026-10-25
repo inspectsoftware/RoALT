@@ -3,10 +3,13 @@
 // Master password for the fake vault: "password". A pasted cookie containing "bad" is rejected.
 // Launching as "AFK 1" fails with an expired cookie; "Builder" launches through a bootstrapper.
 // A username containing "nobody" doesn't exist.
+// Launched clients start, join and play on timers; one fake Roblox client is already running,
+// so turning multi-instance on first asks to close it.
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type {
-  AccountInfo, AccountStatus, AccountSummary, Favourite, Group, JoinCandidate, LaunchTarget, ParsedInput, Presence, Settings, VaultMode,
+  AccountInfo, AccountStatus, AccountSummary, Favourite, Group, Instance, JoinCandidate, LaunchTarget, MultiInstanceStatus, ParsedInput,
+  Presence, Settings, VaultMode,
 } from "../api";
 
 const MIN = 60_000;
@@ -49,7 +52,46 @@ let accounts: AccountSummary[] = seed.map(([alias, displayName, username, userId
   createdAt: now - (40 - i * 3) * DAY,
 }));
 
-let settings: Settings = { theme: "dark", density: "detailed", autoLockMinutes: 15, clipboardClearSeconds: 30, cacheMinutes: 10 };
+let settings: Settings = {
+  theme: "dark", density: "detailed", autoLockMinutes: 15, clipboardClearSeconds: 30, cacheMinutes: 10,
+  multiInstance: false, protectSharedLogin: true,
+};
+// Instances: a stranger client blocks multi-instance until "Close Roblox".
+let strangerRunning = true;
+let lockHeld = false;
+let instances: Instance[] = [];
+const instancesChanged = () => void emit("instances://changed");
+const multiStatus = (): MultiInstanceStatus => {
+  const blockedBy = lockHeld ? [] : [...(strangerRunning ? [9120] : []), ...instances.filter((i) => i.state !== "exited").map((i) => i.pid)];
+  const message = !settings.multiInstance || lockHeld ? null
+    : blockedBy.length ? "Roblox is already running. Close it (including its tray icon) to run several clients."
+    : "Multi-instance isn't active yet. Turn it off and on again to retry.";
+  return { enabled: settings.multiInstance, active: lockHeld, protectSharedLogin: settings.protectSharedLogin, blockedBy, message };
+};
+const retakeLock = () => {
+  if (settings.multiInstance && !lockHeld && multiStatus().blockedBy.length === 0) lockHeld = true;
+};
+function endInstance(id: string, note: string) {
+  const i = instances.find((x) => x.id === id);
+  if (!i || i.state === "exited") return;
+  i.state = "exited";
+  i.endedAt = Date.now();
+  i.note = note;
+  instancesChanged();
+}
+function track(accountId: number, pid: number, target: LaunchTarget, placeId: number | null, viaBootstrapper: boolean) {
+  // Without the lock a new client replaces the running one, as Roblox does.
+  if (!lockHeld) for (const old of instances) endInstance(old.id, "Replaced by another Roblox client");
+  const i: Instance = {
+    id: crypto.randomUUID(), accountId, pid, state: "starting", target, placeId, jobId: null,
+    startedAt: Date.now(), endedAt: null, viaBootstrapper, note: null,
+  };
+  instances.push(i);
+  instancesChanged();
+  const step = (ms: number, f: () => void) => setTimeout(() => { if (i.state !== "exited") { f(); instancesChanged(); } }, ms);
+  step(1500, () => { i.state = "joining"; });
+  step(4000, () => { i.state = "inGame"; i.jobId = crypto.randomUUID(); i.placeId ??= 1818; });
+}
 const vault = { mode: "master" as VaultMode, locked: false, password: "password" };
 const FAKE_COOKIE = "_|WARNING:-DO-NOT-SHARE-THIS.--DEV-PREVIEW-FAKE-VALUE|_" + "0F1E2D3C4B5A69788796A5B4C3D2E1F0".repeat(6);
 
@@ -338,8 +380,11 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       }
       const f = favourites.find((x) => x.id === args.favouriteId);
       if (f) f.lastUsedAt = Date.now();
+      retakeLock();
+      const pid = 14000 + Math.floor(Math.random() * 9000);
+      track(a.id, pid, args.target, placeOfTarget(args.target), a.username === "studio_nova");
       return {
-        accountId: a.id, pid: 14000 + Math.floor(Math.random() * 9000), browserTrackerId: Math.floor(Math.random() * 1e12),
+        accountId: a.id, pid, browserTrackerId: Math.floor(Math.random() * 1e12),
         placeId: placeOfTarget(args.target), startedAt: Date.now(), viaBootstrapper: a.username === "studio_nova",
         warning: args.target.kind === "shareLink" && args.target.code.startsWith("0") ? "This share link has expired, so Roblox may refuse the join." : null,
       };
@@ -397,6 +442,35 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       await sleep(800);
       if (args.password !== "password") return fail("wrongPassword", "Wrong password.");
       return { added: 2, updated: args.onConflict === "replace" ? 7 : 0, skipped: args.onConflict === "skip" ? 7 : 0 };
+
+    case "instances_list":
+      return structuredClone(instances);
+    case "instance_close":
+      await sleep(600);
+      endInstance(args.id, "Closed");
+      return null;
+    case "instances_close_all":
+      await sleep(900);
+      instances.forEach((i) => endInstance(i.id, "Closed"));
+      return null;
+    case "instances_clear_ended":
+      instances = instances.filter((i) => i.state !== "exited");
+      instancesChanged();
+      return null;
+    case "multi_instance_status":
+      retakeLock();
+      return multiStatus();
+    case "multi_instance_set":
+      settings.multiInstance = args.enabled;
+      if (args.enabled) retakeLock();
+      else lockHeld = false;
+      return multiStatus();
+    case "roblox_close_all":
+      await sleep(1200);
+      strangerRunning = false;
+      instances.forEach((i) => endInstance(i.id, "Closed"));
+      retakeLock();
+      return multiStatus();
 
     case "settings_get":
       return { ...settings };

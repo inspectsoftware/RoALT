@@ -148,6 +148,11 @@ pub struct Settings {
     pub clipboard_clear_seconds: u32,
     /// How long account info is reused before Roblox is asked again.
     pub cache_minutes: u32,
+    /// Hold Roblox's single-instance lock so several clients can run.
+    pub multi_instance: bool,
+    /// While multi-instance is on, lock Roblox's shared login files so clients can't
+    /// overwrite each other's session (teleport error 773, wrong account shown).
+    pub protect_shared_login: bool,
 }
 
 impl Default for Settings {
@@ -158,6 +163,8 @@ impl Default for Settings {
             auto_lock_minutes: 15,
             clipboard_clear_seconds: 30,
             cache_minutes: 10,
+            multi_instance: false,
+            protect_shared_login: true,
         }
     }
 }
@@ -176,6 +183,8 @@ pub struct SettingsPatch {
     pub clipboard_clear_seconds: Option<u32>,
     #[ts(optional)]
     pub cache_minutes: Option<u32>,
+    #[ts(optional)]
+    pub protect_shared_login: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
@@ -399,4 +408,53 @@ pub struct LaunchInfo {
     pub via_bootstrapper: bool,
     /// Something the user should know (expired share link, launch data left out).
     pub warning: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum InstanceState {
+    /// Process started, its log not found yet.
+    Starting,
+    /// Log found; joining a server.
+    Joining,
+    InGame,
+    /// Lost the server (kick, shutdown, network); the client may still be open.
+    Disconnected,
+    Exited,
+}
+
+/// A Roblox client RoALT started and is following.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Instance {
+    pub id: String,
+    pub account_id: i64,
+    pub pid: u32,
+    pub state: InstanceState,
+    pub target: LaunchTarget,
+    pub place_id: Option<i64>,
+    pub job_id: Option<String>,
+    /// Unix ms.
+    pub started_at: i64,
+    pub ended_at: Option<i64>,
+    pub via_bootstrapper: bool,
+    /// Why it ended or what went wrong: "Closed", "Replaced by another Roblox client",
+    /// "Signed in as another account", "Roblox wants a human check", ...
+    pub note: Option<String>,
+}
+
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MultiInstanceStatus {
+    /// The setting.
+    pub enabled: bool,
+    /// The lock is actually held.
+    pub active: bool,
+    pub protect_shared_login: bool,
+    /// PIDs of Roblox processes that stop the lock from being taken.
+    pub blocked_by: Vec<u32>,
+    pub message: Option<String>,
 }

@@ -4,7 +4,7 @@ import { open as openFile, save as saveFile } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, asError, type ConflictPolicy, type ImportReport, type Settings, type VaultStatus } from "../../api";
 import { qk, useMultiStatus, useSetSettings } from "../../data";
-import { Segmented, Switch } from "../../ui/controls";
+import { NumberField, Segmented, Switch } from "../../ui/controls";
 import { Dialog } from "../../ui/Dialog";
 import { Icon } from "../../ui/Icon";
 import { friendly, toast, toastError } from "../../ui/Toast";
@@ -108,6 +108,17 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
             label="Protect each client's sign-in"
             checked={settings.protectSharedLogin}
             onChange={(protectSharedLogin) => set.mutate({ protectSharedLogin }, { onSuccess: () => qc.invalidateQueries({ queryKey: qk.multi }) })}
+          />
+        </Row>
+        <Row title="Launch delay" hint="Wait between two launches when several accounts launch at once. About a second either way is added.">
+          <NumberField
+            unit="seconds"
+            short="s"
+            min={2}
+            max={60}
+            step={0.5}
+            value={settings.launchDelayMs / 1000}
+            onCommit={(s) => set.mutate({ launchDelayMs: Math.round(s * 1000) })}
           />
         </Row>
 
@@ -337,44 +348,6 @@ function ImportDialog({ open, path, onClose }: { open: boolean; path: string; on
         </form>
       )}
     </Dialog>
-  );
-}
-
-/** Whole-number input that saves on blur or Enter and snaps back when out of range. */
-function NumberField({ unit, short, min, max, value, onCommit }: {
-  unit: string;
-  short: string;
-  min: number;
-  max: number;
-  value: number;
-  onCommit: (n: number) => void;
-}) {
-  const [text, setText] = useState(String(value));
-  useEffect(() => setText(String(value)), [value]);
-  const commit = () => {
-    const n = Number(text);
-    if (n === value) return;
-    if (Number.isInteger(n) && n >= min && n <= max) onCommit(n);
-    else {
-      toast(`Use a whole number of ${unit} from ${min} to ${max}.`, "error");
-      setText(String(value));
-    }
-  };
-  return (
-    <label className="flex items-center gap-2">
-      <span className="sr-only">{unit}</span>
-      <input
-        className="field mono w-20"
-        type="number"
-        min={min}
-        max={max}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
-      />
-      <span className="text-dim">{short}</span>
-    </label>
   );
 }
 

@@ -411,6 +411,17 @@
   .swatch[aria-pressed="true"] {
     outline: 2px solid var(--text);
   }
+  /* One of a batch row's four steps (ticket, run, join, in game); .pulse marks the live one. */
+  .step {
+    height: 4px;
+    background: var(--line);
+  }
+  .step-done {
+    background: var(--accent-text);
+  }
+  .step-fail {
+    background: var(--orange);
+  }
   .alert {
     display: flex;
     align-items: flex-start;

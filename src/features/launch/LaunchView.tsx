@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { api, asError, type AccountSummary, type ErrorPayload, type JoinCandidate, type LaunchTarget } from "../../api";
-import { qk, useFavourites, usePresence } from "../../data";
+import { api, asError, type AccountSummary, type ErrorPayload, type JoinCandidate, type LaunchTarget, type SameServer, type Settings } from "../../api";
+import { qk, useBulk, useFavourites, useMultiStatus, usePresence, useSetSettings, useSettings } from "../../data";
+import { NumberField, Segmented, Switch } from "../../ui/controls";
 import { Icon } from "../../ui/Icon";
 import { friendly, toast } from "../../ui/Toast";
 import { accountName, Avatar, Status } from "../accounts/shared";
@@ -24,7 +25,7 @@ const invalid = (message: string): ErrorPayload => ({ kind: "invalid", message }
 /** One launch at a time, also across remounts of the view. */
 let busy = false;
 
-function lastUsed() {
+export function lastLaunchAccount() {
   try {
     return Number(localStorage.getItem(LAST_KEY)) || null;
   } catch {
@@ -39,10 +40,12 @@ function remember(id: number) {
   }
 }
 
-export function LaunchView({ accounts, selected, setSelected, draft, setDraft, step, setStep }: {
+export function LaunchView({ accounts, picked, setPicked, sameServer, setSameServer, draft, setDraft, step, setStep }: {
   accounts: AccountSummary[];
-  selected: number | null;
-  setSelected: (id: number) => void;
+  picked: number[];
+  setPicked: Dispatch<SetStateAction<number[]>>;
+  sameServer: SameServer;
+  setSameServer: (s: SameServer) => void;
   draft: Draft;
   setDraft: Dispatch<SetStateAction<Draft>>;
   step: string | null;
@@ -50,13 +53,18 @@ export function LaunchView({ accounts, selected, setSelected, draft, setDraft, s
 }) {
   const qc = useQueryClient();
   const favourites = useFavourites();
-  const [last] = useState(lastUsed);
+  const multi = useMultiStatus().data;
+  const batch = useBulk().data;
+  const delayMs = useSettings().data?.launchDelayMs ?? 6000;
+  const setSettings = useSetSettings();
   const pasted = useRef(false);
   const [joinOpen, setJoinOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
 
-  const usable = (id: number | null) => accounts.find((a) => a.id === id && a.status === "valid") ?? null;
-  const account = usable(selected) ?? usable(last);
+  // In list order, which is also the bulk launch order.
+  const chosen = accounts.filter((a) => a.status === "valid" && picked.includes(a.id));
+  const account = chosen[0] ?? null;
+  const bulk = chosen.length > 1;
   const validIds = useMemo(
     () => accounts.filter((a) => a.status === "valid").map((a) => a.id).sort((x, y) => x - y),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -85,7 +93,14 @@ export function LaunchView({ accounts, selected, setSelected, draft, setDraft, s
   const fav = draft.favId === null ? undefined : favourites.data?.find((f) => f.id === draft.favId);
   // A parse that hasn't caught up yet is launchable: resolveTarget parses again.
   const pending = !!text.trim() && draft.parsed?.text !== text;
-  const canLaunch = !!account && (usableTarget || pending) && !step;
+  const blocked = !bulk
+    ? null
+    : !multi?.active
+      ? (multi?.enabled && multi.message) || "Turn on multi-instance to launch several accounts."
+      : batch && !batch.done
+        ? "A batch is still running."
+        : null;
+  const canLaunch = !!account && (usableTarget || pending) && !step && !blocked;
 
   /** What the draft launches; parses again if the debounce hasn't caught up, looks a username up. */
   async function resolveTarget(onLookup?: (name: string) => void): Promise<LaunchTarget> {
@@ -117,18 +132,26 @@ export function LaunchView({ accounts, selected, setSelected, draft, setDraft, s
   async function launch() {
     if (!canLaunch || !account || busy) return;
     const a = account;
+    const ids = chosen.map((x) => x.id);
+    const first = ids.length > 1 ? "Starting the batch…" : "Getting a ticket…";
     busy = true;
-    setStep("Getting a ticket…");
+    setStep(first);
     let timer = 0;
     try {
       const target = await resolveTarget((name) => setStep(`Looking up @${name}…`));
-      setStep("Getting a ticket…");
-      timer = window.setTimeout(() => setStep("Starting Roblox…"), 800);
-      const info = await api.launch(a.id, target, draft.favId ?? undefined);
-      remember(a.id);
+      setStep(first);
+      if (ids.length > 1) {
+        // From the cache: a stagger committed by this click's blur hasn't re-rendered yet.
+        const delay = qc.getQueryData<Settings>(qk.settings)?.launchDelayMs ?? delayMs;
+        await api.bulkLaunch({ accountIds: ids, target, delayMs: delay, sameServer, favouriteId: draft.favId });
+      } else {
+        timer = window.setTimeout(() => setStep("Starting Roblox…"), 800);
+        const info = await api.launch(a.id, target, draft.favId ?? undefined);
+        remember(a.id);
+        toast(`Launched ${accountName(a)}${info.viaBootstrapper ? " via a bootstrapper" : ""}`);
+        if (info.warning) toast(info.warning, "error");
+      }
       if (draft.favId !== null) qc.invalidateQueries({ queryKey: qk.favourites });
-      toast(`Launched ${accountName(a)}${info.viaBootstrapper ? " via a bootstrapper" : ""}`);
-      if (info.warning) toast(info.warning, "error");
     } catch (e) {
       const err = asError(e);
       if (err.kind !== "cancelled") toast(LAUNCH_ERRORS[err.kind] ?? friendly(err), "error");
@@ -260,13 +283,13 @@ export function LaunchView({ accounts, selected, setSelected, draft, setDraft, s
 
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between">
-              <span className="label" id="launch-account-label">Account</span>
-              <span className="mono text-xs text-dim">{validIds.length} of {accounts.length} valid</span>
+              <span className="label" id="launch-account-label">Accounts</span>
+              <span className="mono text-xs text-dim">{chosen.length} of {validIds.length} valid</span>
             </div>
             {accounts.length === 0 ? (
               <p className="text-dim">No accounts yet. Add one in Accounts.</p>
             ) : (
-              <div role="radiogroup" aria-labelledby="launch-account-label" className="grid grid-cols-1 @xl:grid-cols-2 border-t border-l border-line">
+              <div role="group" aria-labelledby="launch-account-label" className="grid grid-cols-1 @xl:grid-cols-2 border-t border-l border-line">
                 {accounts.map((a) => {
                   const valid = a.status === "valid";
                   return (
@@ -276,12 +299,14 @@ export function LaunchView({ accounts, selected, setSelected, draft, setDraft, s
                       className={`flex items-center gap-2.5 h-[42px] px-3 border-r border-b border-line has-[:checked]:bg-sel ${valid ? "cursor-pointer hover:bg-hover" : "opacity-55"}`}
                     >
                       <input
-                        type="radio"
-                        name="launch-account"
+                        type="checkbox"
                         className="cb"
-                        checked={account?.id === a.id}
+                        checked={valid && picked.includes(a.id)}
                         disabled={!valid}
-                        onChange={() => setSelected(a.id)}
+                        onChange={(e) => {
+                          const on = e.target.checked;
+                          setPicked((p) => (on ? [...p, a.id] : p.filter((id) => id !== a.id)));
+                        }}
                       />
                       <Avatar account={a} size={22} />
                       <span className="flex-1 min-w-0 truncate">{accountName(a)}</span>
@@ -299,6 +324,32 @@ export function LaunchView({ accounts, selected, setSelected, draft, setDraft, s
 
       <div className="flex-none border-t border-line">
         <div className={step ? "live-bar" : "h-0.5"} />
+        {bulk && (
+          <div className="enter flex flex-wrap items-center gap-x-6 gap-y-2 px-6 pt-3.5">
+            <NumberField
+              label="Stagger"
+              unit="seconds"
+              short="s"
+              min={2}
+              max={60}
+              step={0.5}
+              value={delayMs / 1000}
+              onCommit={(s) => setSettings.mutate({ launchDelayMs: Math.round(s * 1000) })}
+            />
+            <span className="flex items-center gap-2.5">
+              <Switch label="Same server" checked={sameServer !== "off"} onChange={(on) => setSameServer(on ? "pickFirst" : "off")} />
+              <span aria-hidden="true">Same server</span>
+            </span>
+            {sameServer !== "off" && (
+              <Segmented
+                label="How to find the server"
+                value={sameServer}
+                options={[{ value: "pickFirst", label: "Pick a server" }, { value: "followFirst", label: "Follow the first" }]}
+                onChange={setSameServer}
+              />
+            )}
+          </div>
+        )}
         <div className="flex flex-wrap items-center gap-3 px-6 py-3.5">
           <span className="flex items-center gap-2 min-w-0 text-dim" aria-live="polite">
             {step ? (
@@ -306,9 +357,11 @@ export function LaunchView({ accounts, selected, setSelected, draft, setDraft, s
                 <span aria-hidden="true" className="w-2 h-2 flex-none bg-accent-text pulse" />
                 <span className="text-text">{step}</span>
               </>
+            ) : blocked ? (
+              <span className="alert">{blocked}</span>
             ) : account ? (
               <span className="truncate">
-                As <span className="text-text font-medium">{accountName(account)}</span> · <span className="kbd">Ctrl Enter</span>
+                As <span className="text-text font-medium">{chosen.map(accountName).join(", ")}</span> · <span className="kbd">Ctrl Enter</span>
               </span>
             ) : (
               "Pick an account with a valid cookie."
@@ -316,7 +369,9 @@ export function LaunchView({ accounts, selected, setSelected, draft, setDraft, s
           </span>
           <button className="btn btn-primary h-10 px-5 ml-auto max-w-full" disabled={!canLaunch} title="Launch (Ctrl+Enter)" onClick={() => void launch()}>
             <Icon name="play" size={12} fill />
-            <span className="truncate">{step ? "Launching…" : account ? `Launch ${accountName(account)}` : "Launch"}</span>
+            <span className="truncate">
+              {step ? "Launching…" : bulk ? `Launch ${chosen.length} accounts` : account ? `Launch ${accountName(account)}` : "Launch"}
+            </span>
           </button>
         </div>
       </div>
@@ -329,7 +384,7 @@ export function LaunchView({ accounts, selected, setSelected, draft, setDraft, s
         initial={
           fav ?? {
             name: look ? `${look.kind} · ${look.detail}`.replace(/ · \w+ code ••••/, "").slice(0, 60) : "",
-            accountIds: account ? [account.id] : [],
+            accountIds: chosen.map((a) => a.id),
             inTray: false,
           }
         }

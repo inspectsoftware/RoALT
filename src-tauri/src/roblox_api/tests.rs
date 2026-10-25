@@ -355,7 +355,7 @@ fn user_details_fixture() {
 fn headshot_fixtures() {
     let sort = |name: &str| {
         let mut out = HashMap::new();
-        let pending = sort_headshots(json(&fixture_body(name)).unwrap(), &mut out);
+        let pending = sort_thumbnails(json(&fixture_body(name)).unwrap(), &mut out);
         let mut ids: Vec<i64> = out.keys().copied().collect();
         ids.sort_unstable();
         (ids, pending, out)
@@ -1009,4 +1009,142 @@ async fn servers_public_drops_rows_without_id_or_counts() {
     assert_eq!(page, ServerPage { servers: vec![full, bare], next_cursor: None });
     let empty = c.servers_public(0, None, 920587237, ServerOrder::OccupancyDesc, false, 10, None).await.unwrap();
     assert_eq!(empty, ServerPage { servers: vec![], next_cursor: None });
+}
+
+// Game info and private servers.
+
+#[tokio::test]
+async fn place_universe_reads_the_id_or_null() {
+    let (base, reqs) = serve(vec![
+        ok(&fixture("servers-games-fc-universe-2753.json")),
+        ok(&fixture("servers-games-fc-universe-invalid.json")),
+    ]);
+    let (c, _) = client(&base);
+    assert_eq!(c.place_universe(2753915549).await.unwrap(), Some(994732206));
+    let req = reqs.recv().unwrap();
+    assert_eq!(first_line(&req), "GET /universes/v1/places/2753915549/universe HTTP/1.1");
+    assert!(!has(&req, "\r\ncookie:"));
+    assert_eq!(c.place_universe(1).await.unwrap(), None);
+    // No such place id at all: no call (a third would fail as Network).
+    assert_eq!(c.place_universe(0).await.unwrap(), None);
+    assert_eq!(c.place_universe(-5).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn games_read_the_browser_fields_leniently() {
+    let partial = r#"{"data":[{"id":7,"rootPlaceId":70,"name":null,"creator":null,"playing":null,
+        "createVipServersAllowed":true,"universeAvatarType":3},
+        {"rootPlaceId":80,"name":"no id"},{"id":9,"name":"no root place"}]}"#;
+    let (base, reqs) = serve(vec![ok(&fixture("servers-games-fc-games-2u.json")), ok(partial)]);
+    let (c, _) = client(&base);
+
+    let games = c.games(&[994732206, 383310974, 994732206, 0]).await.unwrap();
+    let blox = GameDetails {
+        universe_id: 994732206,
+        root_place_id: 2753915549,
+        name: "Blox Fruits".into(),
+        creator: "Gamer Robot Inc".into(),
+        playing: 193096,
+        visits: 65079604670,
+        max_players: 12,
+        private_servers: false,
+    };
+    assert_eq!(games[0], blox);
+    assert_eq!((games[1].root_place_id, games[1].creator.as_str(), games[1].max_players), (920587237, "Uplift Games", 35));
+    let req = reqs.recv().unwrap();
+    assert_eq!(first_line(&req), "GET /v1/games?universeIds=383310974,994732206 HTTP/1.1");
+    assert!(!has(&req, "\r\ncookie:"));
+
+    // Nulls default, rows without id or root place are dropped.
+    let bare = GameDetails { universe_id: 7, root_place_id: 70, private_servers: true, ..Default::default() };
+    assert_eq!(c.games(&[7, 8, 9]).await.unwrap(), [bare]);
+    assert!(c.games(&[]).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn games_chunk_at_50_and_root_places_build_on_them() {
+    let (base, reqs) = serve(vec![ok(r#"{"data":[{"id":1,"rootPlaceId":10,"name":"One"}]}"#), ok(r#"{"data":[]}"#)]);
+    let (c, _) = client(&base);
+    let ids: Vec<i64> = (1..=51).collect();
+    assert_eq!(c.universe_root_places(&ids).await.unwrap(), HashMap::from([(1, (10, "One".to_string()))]));
+    let want = |r: std::ops::RangeInclusive<i64>| format!("GET /v1/games?universeIds={} HTTP/1.1", csv(&r.collect::<Vec<_>>()));
+    assert_eq!(first_line(&reqs.recv().unwrap()), want(1..=50));
+    assert_eq!(first_line(&reqs.recv().unwrap()), want(51..=51));
+}
+
+#[tokio::test]
+async fn place_icons_match_by_target_id_and_keep_only_completed() {
+    let mixed = r#"{"data":[{"targetId":30,"state":"Completed","imageUrl":"https://tr.rbxcdn.com/c"},
+        {"targetId":10,"state":"Pending","imageUrl":""},{"targetId":20,"state":"Blocked","imageUrl":"https://tr.rbxcdn.com/p"},
+        {"targetId":40,"state":"Completed","imageUrl":""},{"targetId":50,"state":"Error","imageUrl":null}]}"#;
+    let (base, reqs) = serve(vec![ok(&fixture("servers-games-fc-place-gameicons.json")), ok(mixed)]);
+    let (c, _) = client(&base);
+
+    let icons = c.place_icons(&[920587237, 2753915549]).await.unwrap();
+    assert_eq!(icons.len(), 2);
+    assert!(icons[&2753915549].starts_with("https://tr.rbxcdn.com/180DAY-774ec145"));
+    assert!(icons[&920587237].starts_with("https://tr.rbxcdn.com/180DAY-4dd71502"));
+    let req = reqs.recv().unwrap();
+    let query = "returnPolicy=PlaceHolder&size=150x150&format=Png&isCircular=false";
+    assert_eq!(first_line(&req), format!("GET /v1/places/gameicons?placeIds=920587237,2753915549&{query} HTTP/1.1"));
+    assert!(!has(&req, "\r\ncookie:"));
+
+    // Pending is not retried here: no icon is shown instead.
+    let icons = c.place_icons(&[10, 20, 30, 40, 50]).await.unwrap();
+    assert_eq!(icons, HashMap::from([(30, "https://tr.rbxcdn.com/c".to_string())]));
+}
+
+const ACCESS: &str = "0f1e2d3c-4b5a-4968-8776-655443322110";
+
+#[tokio::test]
+async fn private_servers_send_the_cookie_and_keep_only_guid_secrets() {
+    use crate::model::{PrivateServer, PrivateServerPage};
+    let body = format!(
+        r#"{{"previousPageCursor":null,"nextPageCursor":"NEXT+/=","gameJoinRestricted":true,"data":[
+        {{"id":"{JOB}","maxPlayers":12,"playing":3,"playerTokens":["t"],"players":[],"fps":59.9,"ping":40,
+          "name":"Mine","vipServerId":111,"accessCode":"{ACCESS}","owner":{{"id":5,"name":"me","displayName":"Me"}}}},
+        {{"maxPlayers":12,"playing":0,"name":"Closed","vipServerId":222,"owner":{{"id":6,"name":"friend"}}}},
+        {{"id":"not-a-guid","name":"Odd","vipServerId":333,"accessCode":"1+placelauncherurl:x"}},
+        {{"name":"No vip id","accessCode":"{ACCESS}"}}]}}"#
+    );
+    let last = r#"{"nextPageCursor":"","data":null}"#;
+    let (base, reqs) = serve(vec![ok(&body), ok(last)]);
+    let (c, _) = client(&base);
+    let cookie = Secret::new("OLD");
+
+    let page = c.private_servers(4, &cookie, 920587237, Some("abc+/=")).await.unwrap();
+    let server = |vip_server_id, name: &str, owner: Option<(i64, &str)>, (playing, max_players), job: Option<&str>, code: Option<&str>| {
+        PrivateServer {
+            vip_server_id,
+            name: name.into(),
+            owner_id: owner.map(|o| o.0),
+            owner_name: owner.map(|o| o.1.into()),
+            playing,
+            max_players,
+            job_id: job.map(Into::into),
+            access_code: code.map(Into::into),
+        }
+    };
+    let want = vec![
+        server(111, "Mine", Some((5, "me")), (3, 12), Some(JOB), Some(ACCESS)),
+        server(222, "Closed", Some((6, "friend")), (0, 12), None, None),
+        server(333, "Odd", None, (0, 0), None, None),
+    ];
+    assert_eq!(page, PrivateServerPage { servers: want, next_cursor: Some("NEXT+/=".into()), join_restricted: true });
+    let req = reqs.recv().unwrap();
+    assert_eq!(first_line(&req), "GET /v1/games/920587237/private-servers?cursor=abc%2B%2F%3D HTTP/1.1");
+    assert!(has(&req, "\r\ncookie: .ROBLOSECURITY=OLD\r\n"));
+
+    // First page: no query at all; an empty next cursor is the last page.
+    let page = c.private_servers(4, &cookie, 920587237, Some("")).await.unwrap();
+    assert_eq!(page, PrivateServerPage { servers: vec![], next_cursor: None, join_restricted: false });
+    assert_eq!(first_line(&reqs.recv().unwrap()), "GET /v1/games/920587237/private-servers HTTP/1.1");
+}
+
+#[tokio::test]
+async fn private_servers_without_a_valid_cookie_is_cookie_invalid() {
+    let (base, _reqs) = serve(vec![reply("401 Unauthorized", &[], &fixture("private-servers-unauth.json"))]);
+    let (c, _) = client(&base);
+    let r = c.private_servers(4, &Secret::new("OLD"), 920587237, None).await;
+    assert!(matches!(r, Err(AppError::CookieInvalid)));
 }

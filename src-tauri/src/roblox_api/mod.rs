@@ -28,8 +28,8 @@ use zeroize::Zeroizing;
 use crate::error::{AppError, Result};
 use crate::vault::Secret;
 use types::{
-    AuthenticatedUser, Data, FriendOnline, Game, GameDetails, Presences, Profiles, ServerList, ShareLinkResolution, ShareLinkV2,
-    SocialCounts, Thumbnails, TwoStepConfig, UserDetails, UserPresence,
+    AuthenticatedUser, Data, FriendOnline, Game, GameDetails, Presences, PrivateServerList, Profiles, ServerList,
+    ShareLinkResolution, ShareLinkV2, SocialCounts, Thumbnails, TwoStepConfig, UserDetails, UserPresence,
 };
 
 /// Called with `(account_id, new cookie)` when Roblox rotates a stored account's cookie.
@@ -122,7 +122,7 @@ impl Client {
                     Err(_) if retry > 0 => break,
                     Err(e) => return Err(e),
                 };
-                pending = sort_headshots(page, &mut out);
+                pending = sort_thumbnails(page, &mut out);
                 if pending.is_empty() {
                     break;
                 }
@@ -245,13 +245,7 @@ impl Client {
     /// `GET games.roblox.com/v1/games?universeIds=<csv ≤50>` (no cookie) → universe id →
     /// (root place id, game name). Unknown universes are absent.
     pub async fn universe_root_places(&self, universe_ids: &[i64]) -> Result<HashMap<i64, (i64, String)>> {
-        let mut out = HashMap::new();
-        for chunk in valid_ids(universe_ids).chunks(50) {
-            let url = endpoints::fill(endpoints::GAMES, csv(chunk));
-            let page: Data<Game> = self.get(endpoints::GAMES, &url, 0, None).await?;
-            out.extend(page.data.into_iter().map(|g| (g.id, (g.root_place_id, g.name))));
-        }
-        Ok(out)
+        Ok(self.games(universe_ids).await?.into_iter().map(|g| (g.universe_id, (g.root_place_id, g.name))).collect())
     }
 
     /// `POST users.roblox.com/v1/usernames/users {usernames ≤200, excludeBannedUsers:true}`
@@ -325,26 +319,49 @@ impl Client {
     }
 
     /// `GET apis.roblox.com/universes/v1/places/{placeId}/universe` (no cookie): the place's
-    /// universe; `{"universeId": null}` (unknown place) → None.
+    /// universe; `{"universeId": null}` (unknown place) → None, as is an id ≤ 0 (no call).
     pub async fn place_universe(&self, place_id: i64) -> Result<Option<i64>> {
-        let _ = place_id;
-        todo!()
+        if place_id <= 0 {
+            return Ok(None);
+        }
+        let route = endpoints::PLACE_UNIVERSE;
+        field(self.get(route, &endpoints::fill(route, place_id), 0, None).await?, "universeId")
     }
 
     /// `GET games.roblox.com/v1/games?universeIds=` (no cookie, ≤50 per call, the existing
     /// `GAMES` endpoint) with everything `GameInfo` needs: id, rootPlaceId, name, creator.name,
-    /// playing, visits, maxPlayers, createVipServersAllowed. Lenient: missing fields default;
-    /// unknown universes are absent. (`universe_root_places` may be rebuilt on top of it.)
+    /// playing, visits, maxPlayers, createVipServersAllowed. Lenient: missing or null fields
+    /// default; unknown universes, and rows without id or rootPlaceId, are absent.
     pub async fn games(&self, universe_ids: &[i64]) -> Result<Vec<GameDetails>> {
-        let _ = universe_ids;
-        todo!()
+        let mut out = Vec::new();
+        for chunk in valid_ids(universe_ids).chunks(50) {
+            let url = endpoints::fill(endpoints::GAMES, csv(chunk));
+            let page: Data<Game> = self.get(endpoints::GAMES, &url, 0, None).await?;
+            out.extend(page.data.into_iter().filter_map(|g| {
+                Some(GameDetails {
+                    universe_id: g.id?,
+                    root_place_id: g.root_place_id?,
+                    name: g.name.unwrap_or_default(),
+                    creator: g.creator.and_then(|c| c.name).unwrap_or_default(),
+                    playing: g.playing.unwrap_or_default(),
+                    visits: g.visits.unwrap_or_default(),
+                    max_players: g.max_players.unwrap_or_default(),
+                    private_servers: g.create_vip_servers_allowed.unwrap_or_default(),
+                })
+            }));
+        }
+        Ok(out)
     }
 
     /// `GET thumbnails.roblox.com/v1/places/gameicons?placeIds=..` (no cookie, `PLACE_ICONS`):
     /// place id → image URL for `Completed` icons (matched by `targetId`, not by order).
     pub async fn place_icons(&self, place_ids: &[i64]) -> Result<HashMap<i64, String>> {
-        let _ = place_ids;
-        todo!()
+        let mut out = HashMap::new();
+        for chunk in valid_ids(place_ids).chunks(100) {
+            let url = endpoints::fill(endpoints::PLACE_ICONS, csv(chunk));
+            sort_thumbnails(self.get(endpoints::PLACE_ICONS, &url, 0, None).await?, &mut out);
+        }
+        Ok(out)
     }
 
     /// `GET games.roblox.com/v1/games/{placeId}/private-servers?cursor=..` with the account's
@@ -359,8 +376,33 @@ impl Client {
         place_id: i64,
         cursor: Option<&str>,
     ) -> Result<crate::model::PrivateServerPage> {
-        let _ = (account_id, cookie, place_id, cursor);
-        todo!()
+        use crate::launcher::target::is_uuid;
+        use crate::model::{PrivateServer, PrivateServerPage};
+        let route = endpoints::SERVERS_PRIVATE;
+        let mut url = endpoints::fill(route, place_id);
+        if let Some(c) = cursor.filter(|c| !c.is_empty()) {
+            url.push_str("?cursor=");
+            url.push_str(&crate::launcher::uri::encode(c));
+        }
+        let list: PrivateServerList = self.get(route, &url, account_id, Some(cookie)).await?;
+        let servers = list.data.unwrap_or_default().into_iter().filter_map(|r| {
+            let (owner_id, owner_name) = r.owner.map_or((None, None), |o| (o.id, o.name));
+            Some(PrivateServer {
+                vip_server_id: r.vip_server_id?,
+                name: r.name.unwrap_or_default(),
+                owner_id,
+                owner_name,
+                playing: r.playing.unwrap_or_default(),
+                max_players: r.max_players.unwrap_or_default(),
+                job_id: r.id.filter(|id| is_uuid(id)),
+                access_code: r.access_code.filter(|code| is_uuid(code)),
+            })
+        });
+        Ok(PrivateServerPage {
+            servers: servers.collect(),
+            next_cursor: list.next_page_cursor.filter(|c| !c.is_empty()),
+            join_restricted: list.game_join_restricted.unwrap_or_default(),
+        })
     }
 
     /// One API call with throttle, CSRF retry, 429 backoff and cookie rotation.
@@ -599,8 +641,8 @@ fn csv(ids: &[i64]) -> String {
     ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
 }
 
-/// Keeps Completed rows with a URL in `out`; returns the ids still Pending.
-fn sort_headshots(page: Thumbnails, out: &mut HashMap<i64, String>) -> Vec<i64> {
+/// Keeps Completed rows with a URL in `out` (by `targetId`); returns the ids still Pending.
+fn sort_thumbnails(page: Thumbnails, out: &mut HashMap<i64, String>) -> Vec<i64> {
     let mut pending = Vec::new();
     for t in page.data {
         match (t.state.as_str(), t.image_url) {

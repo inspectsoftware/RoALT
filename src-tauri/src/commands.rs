@@ -11,7 +11,7 @@ use crate::model::*;
 use crate::storage::{AccountMeta, NewAccount};
 use crate::vault::backup::{self, BackupAccount, BackupGroup, BackupPayload};
 use crate::vault::{Secret, cookie_aad};
-use crate::roblox_api::types::{AuthenticatedUser, UserPresence};
+use crate::roblox_api::types::{AuthenticatedUser, GameDetails, UserPresence};
 use crate::{App, webview};
 
 pub fn now_ms() -> i64 {
@@ -545,8 +545,36 @@ pub fn bulk_current(s: State<'_, App>) -> Option<BulkProgress> {
 /// `NotFound` when Roblox knows no such place (no universe) or no such game.
 #[tauri::command]
 pub async fn game_info(s: State<'_, App>, place_id: i64) -> Result<GameInfo> {
-    let _ = (s, place_id);
-    todo!()
+    let key = format!("game:{place_id}");
+    let ttl = s.db.settings()?.cache_minutes as i64 * 60_000;
+    if let Some((json, _)) = s.db.cache_get(&key, ttl, now_ms())?
+        && let Ok(info) = serde_json::from_str::<GameInfo>(&json)
+    {
+        return Ok(info);
+    }
+    // The place icon needs no universe, so it is asked alongside; it is optional.
+    let (universe, icons) = tokio::join!(s.api.place_universe(place_id), s.api.place_icons(std::slice::from_ref(&place_id)));
+    let universe = universe?.ok_or(AppError::NotFound)?;
+    let game = s.api.games(&[universe]).await?.into_iter().find(|g| g.universe_id == universe).ok_or(AppError::NotFound)?;
+    let info = game_info_of(place_id, game, icons.ok().and_then(|mut i| i.remove(&place_id)));
+    let json = serde_json::to_string(&info).map_err(|e| AppError::Internal(e.to_string()))?;
+    s.db.cache_put(&key, &json, now_ms())?;
+    Ok(info)
+}
+
+fn game_info_of(place_id: i64, g: GameDetails, icon_url: Option<String>) -> GameInfo {
+    GameInfo {
+        place_id,
+        universe_id: g.universe_id,
+        root_place_id: g.root_place_id,
+        name: g.name,
+        creator: g.creator,
+        playing: g.playing,
+        visits: g.visits,
+        max_players: g.max_players,
+        icon_url,
+        private_servers: g.private_servers,
+    }
 }
 
 /// One page of the place's private servers as `account_id` sees them (its cookie; joinable ones
@@ -559,8 +587,12 @@ pub async fn private_servers_list(
     account_id: i64,
     cursor: Option<String>,
 ) -> Result<PrivateServerPage> {
-    let _ = (app, s, place_id, account_id, cursor);
-    todo!()
+    let cookie = stored_cookie(&s, account_id)?;
+    let page = s.api.private_servers(account_id, &cookie, place_id, cursor.as_deref()).await;
+    if let Err(e) = &page {
+        record_cookie_error(&app, &s, account_id, e)?;
+    }
+    page
 }
 
 /// One page of a place's public servers (`cursor` from the previous page). With `account_id`,
@@ -969,7 +1001,37 @@ pub fn settings_set(s: State<'_, App>, patch: SettingsPatch) -> Result<Settings>
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_cookie;
+    use super::{GameDetails, GameInfo, game_info_of, normalize_cookie};
+
+    #[test]
+    fn game_info_keeps_the_asked_place() {
+        let g = GameDetails {
+            universe_id: 994732206,
+            root_place_id: 2753915549,
+            name: "Blox Fruits".into(),
+            creator: "Gamer Robot Inc".into(),
+            playing: 193096,
+            visits: 65079604670,
+            max_players: 12,
+            private_servers: true,
+        };
+        let info = game_info_of(7449423635, g, Some("https://tr.rbxcdn.com/i".into()));
+        let want = GameInfo {
+            place_id: 7449423635,
+            universe_id: 994732206,
+            root_place_id: 2753915549,
+            name: "Blox Fruits".into(),
+            creator: "Gamer Robot Inc".into(),
+            playing: 193096,
+            visits: 65079604670,
+            max_players: 12,
+            icon_url: Some("https://tr.rbxcdn.com/i".into()),
+            private_servers: true,
+        };
+        assert_eq!(info, want);
+        // What the cache stores reads back the same.
+        assert_eq!(serde_json::from_str::<GameInfo>(&serde_json::to_string(&info).unwrap()).unwrap(), want);
+    }
 
     #[test]
     fn cookie_input_forms() {

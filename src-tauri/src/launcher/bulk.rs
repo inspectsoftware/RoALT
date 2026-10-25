@@ -6,7 +6,8 @@
 //!    private server, a user) already is one server: same-server is ignored. A target that
 //!    can't be resolved here: ignored, with a note.
 //!    `PickFirst`: `pick_server` reads one page of the place's servers (Recommended, 100, full
-//!    ones left out, first account's cookie) and `choose_server` picks one; every account is
+//!    ones left out, first account's cookie; OccupancyDesc if Roblox refuses Recommended) and
+//!    `choose_server` picks one; every account is
 //!    sent there as `LaunchTarget::Server { place_id, job_id }` (launch data is dropped,
 //!    RequestGameJob has none). No server with room, or no list → `FollowFirst`, with a note.
 //!    `FollowFirst`: the first account that starts a client launches with the target as given;
@@ -20,8 +21,9 @@
 //!    `starting`, at most 30 s), then `delay_ms` ± 1 s (`jittered`). After the last launch,
 //!    keep mirroring until every started client is in game or ended (at most 120 s), then
 //!    `done = true`.
-//! 4. Stops: `AppError::Challenge`, or an instance note saying it signed in as another
-//!    account → that item `Failed`, the rest `Cancelled`, `stopped` says why and what to do.
+//! 4. Stops: `AppError::Challenge`, `AppError::Locked` (the vault locked mid-batch), or an
+//!    instance note saying it signed in as another account → that item `Failed`, the rest
+//!    `Cancelled`, `stopped` says why and what to do.
 //!    `CookieInvalid` and other errors fail only that item; the batch goes on. Cancel stops
 //!    after the current step (never mid-launch): the rest `Cancelled`, `stopped = "Cancelled"`.
 //!    A stopped batch is done at once (its started clients stay in the instances list).
@@ -407,7 +409,8 @@ impl Run {
     }
 }
 
-/// One page of the place's servers (Recommended, full ones left out) and `choose_server`.
+/// One page of the place's servers (Recommended, full ones left out; the fullest first if
+/// Roblox refuses Recommended for this account) and `choose_server`.
 async fn pick_server(
     api: &crate::roblox_api::Client,
     account_id: i64,
@@ -415,7 +418,11 @@ async fn pick_server(
     place_id: i64,
     n: usize,
 ) -> Result<Option<String>> {
-    let page = api.servers_public(account_id, Some(cookie), place_id, ServerOrder::Recommended, true, 100, None).await?;
+    let list = |order| api.servers_public(account_id, Some(cookie), place_id, order, true, 100, None);
+    let page = match list(ServerOrder::Recommended).await {
+        Err(AppError::Invalid(_)) => list(ServerOrder::OccupancyDesc).await?,
+        r => r?,
+    };
     Ok(choose_server(&page.servers, n))
 }
 
@@ -452,9 +459,13 @@ fn cant_launch(status: AccountStatus) -> Option<&'static str> {
 
 /// A launch error that stops the batch (why and what to do); None when only that item fails.
 fn stop_reason(e: &AppError, name: &str) -> Option<String> {
-    matches!(e, AppError::Challenge).then(|| {
-        format!("Roblox wants a human check for {name}. Sign in to it again with Add account > Sign in, then launch the rest.")
-    })
+    match e {
+        AppError::Challenge => Some(format!(
+            "Roblox wants a human check for {name}. Sign in to it again with Add account > Sign in, then launch the rest."
+        )),
+        AppError::Locked => Some("The vault locked. Unlock it, then launch the rest.".into()),
+        _ => None,
+    }
 }
 
 /// Mirrors one started client into its item; `Some(why)` when it signed in as another account.
@@ -591,10 +602,11 @@ mod tests {
     }
 
     #[test]
-    fn only_a_challenge_or_a_wrong_account_stops_the_batch() {
+    fn only_a_challenge_a_locked_vault_or_a_wrong_account_stops_the_batch() {
         let why = stop_reason(&AppError::Challenge, "Alt 1").unwrap();
         assert!(why.contains("Alt 1") && why.contains("Sign in"), "{why}");
-        for e in [AppError::CookieInvalid, AppError::Network("x".into()), AppError::Roblox("HTTP 500".into()), AppError::Locked] {
+        assert!(stop_reason(&AppError::Locked, "Alt 1").unwrap().contains("Unlock"));
+        for e in [AppError::CookieInvalid, AppError::Network("x".into()), AppError::Roblox("HTTP 500".into())] {
             assert_eq!(stop_reason(&e, "Alt 1"), None, "{e}");
         }
 

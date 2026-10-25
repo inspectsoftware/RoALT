@@ -9,6 +9,7 @@ import { FavouritesNav } from "./features/launch/Favourites";
 import { lastLaunchAccount, LaunchView } from "./features/launch/LaunchView";
 import { isRunning, MultiInstanceSwitch, RunningPanel } from "./features/launch/Running";
 import { draftFor, EMPTY_DRAFT, type Draft } from "./features/launch/target";
+import { ServersView } from "./features/servers/ServersView";
 import { SettingsView, SETTINGS_SECTIONS } from "./features/settings/SettingsView";
 import { UnlockScreen, type LockReason } from "./features/vault/UnlockScreen";
 import { Icon } from "./ui/Icon";
@@ -41,7 +42,7 @@ function Root() {
 
   const markLocked = () => {
     qc.setQueryData<VaultStatus>(qk.vault, (old) => old && { ...old, locked: true });
-    for (const queryKey of [qk.accounts, qk.presence, ["info"], qk.favourites, qk.join]) qc.removeQueries({ queryKey });
+    for (const queryKey of [qk.accounts, qk.presence, ["info"], qk.favourites, qk.join, qk.privateServers]) qc.removeQueries({ queryKey });
   };
 
   const lock = () => {
@@ -124,7 +125,7 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
   const accounts = useAccounts();
   const groups = useGroups();
   const running = useInstances().data?.filter(isRunning).length ?? 0;
-  const [view, setView] = useState<"accounts" | "launch" | "settings">("accounts");
+  const [view, setView] = useState<"accounts" | "launch" | "servers" | "settings">("accounts");
   const [group, setGroup] = useState<number | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   // The Launch view's accounts; the last one launched until something else is picked.
@@ -136,6 +137,8 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   // Kept here so a launch in flight survives leaving the view.
   const [launchStep, setLaunchStep] = useState<string | null>(null);
+  // The game the Servers view shows.
+  const [serversPlace, setServersPlace] = useState<number | null>(null);
   const [adding, setAdding] = useState(false);
   const known = useRef<Set<number> | null>(null);
 
@@ -190,6 +193,13 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
     if (valid.length) setPicked(valid);
     setView("launch");
   };
+  // Opens on the Launch target's game until a game is loaded here.
+  const openServers = () => {
+    const p = draft.parsed?.text === draft.text ? draft.parsed.value : null;
+    const t = p?.kind === "target" ? p.target : null;
+    if (serversPlace === null && t && "placeId" in t) setServersPlace(t.placeId);
+    setView("servers");
+  };
 
   return (
     <div className="flex-1 flex min-h-0">
@@ -208,6 +218,10 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
                 {running}
               </span>
             )}
+          </button>
+          <button className="nav-item" aria-current={view === "servers" ? "page" : undefined} onClick={openServers}>
+            <Icon name="servers" />
+            <span className="flex-1">Servers</span>
           </button>
           <button className="nav-item" aria-current={view === "settings" ? "page" : undefined} onClick={() => setView("settings")}>
             <Icon name="settings" />
@@ -273,6 +287,15 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
           />
           <RunningPanel accounts={accounts.data} />
         </>
+      ) : view === "servers" ? (
+        <ServersView
+          accounts={accounts.data}
+          picked={picked}
+          setPicked={setPicked}
+          place={serversPlace}
+          setPlace={setServersPlace}
+          onBatch={() => setView("launch")}
+        />
       ) : (
         <SettingsView vault={vault} settings={settings} />
       )}

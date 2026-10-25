@@ -22,6 +22,7 @@ const paths = {
   signin: <path d="M9 2h5v12H9M2 8h8M7 5l3 3-3 3" />,
   key: <><rect x="1.5" y="5.5" width="5" height="5" /><path d="M6.5 8h8M11.5 8v3M14 8v2" /></>,
   chevron: <path d="M4 6l4 4 4-4" />,
+  play: <path d="M4 2.5l9 5.5-9 5.5z" strokeLinejoin="round" />,
   grip: (
     <g fill="currentColor" stroke="none">
       <rect x="5" y="3" width="2" height="2" /><rect x="9" y="3" width="2" height="2" />

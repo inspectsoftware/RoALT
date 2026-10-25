@@ -37,7 +37,7 @@ const isTyping = (t: EventTarget | null) =>
 let validatedThisSession = false;
 const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-export function AccountsView({ accounts, groups, density, vaultMode, clipboardSeconds, group, setGroup, selected, setSelected, onAdd }: {
+export function AccountsView({ accounts, groups, density, vaultMode, clipboardSeconds, group, setGroup, selected, setSelected, onAdd, onLaunch }: {
   accounts: AccountSummary[];
   groups: Group[];
   density: Density;
@@ -48,6 +48,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
   selected: number | null;
   setSelected: (id: number | null) => void;
   onAdd: () => void;
+  onLaunch: (id: number) => void;
 }) {
   const qc = useQueryClient();
   const update = useUpdateAccount();
@@ -572,6 +573,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
             checking={isChecking(current.id)}
             onValidate={() => validate.mutate([current.id])}
             onRemove={() => askRemove([current.id])}
+            onLaunch={() => onLaunch(current.id)}
           />
         </aside>
       )}

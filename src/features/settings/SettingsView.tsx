@@ -25,6 +25,7 @@ const SHORTCUTS = [
   ["Select all shown", "Ctrl A"],
   ["Validate selected, or all", "Ctrl R"],
   ["Remove selected", "Delete"],
+  ["Launch (Launch view)", "Ctrl Enter"],
   ["Lock vault (master password)", "Ctrl L"],
   ["Close dialog, clear selection", "Esc"],
 ];

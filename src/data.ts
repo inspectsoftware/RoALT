@@ -11,6 +11,8 @@ export const qk = {
   headshots: ["headshots"],
   presence: ["presence"],
   info: (id: number) => ["info", id],
+  favourites: ["favourites"],
+  join: ["join"],
 } as const;
 
 export const queryClient = new QueryClient({
@@ -30,6 +32,7 @@ export const useVault = () => useQuery({ queryKey: qk.vault, queryFn: api.vaultS
 export const useSettings = () => useQuery({ queryKey: qk.settings, queryFn: api.settingsGet });
 export const useAccounts = () => useQuery({ queryKey: qk.accounts, queryFn: api.accountsList, select: bySortOrder });
 export const useGroups = () => useQuery({ queryKey: qk.groups, queryFn: api.groupsList, select: bySortOrder });
+export const useFavourites = () => useQuery({ queryKey: qk.favourites, queryFn: api.favouritesList, select: bySortOrder });
 
 const headshots = queryOptions({ queryKey: qk.headshots, queryFn: () => api.accountsHeadshots(), staleTime: 6 * 3_600_000 });
 /** One shared query; each avatar picks its own URL out of it. */

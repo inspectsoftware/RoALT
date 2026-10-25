@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
-import { api, asError, events, type Settings, type Theme, type VaultStatus } from "./api";
+import { api, asError, events, type Favourite, type Settings, type Theme, type VaultStatus } from "./api";
 import { qk, queryClient, useAccounts, useGroups, useSetSettings, useSettings, useVault } from "./data";
 import { AccountsView } from "./features/accounts/AccountsView";
 import { AddAccountDialog } from "./features/accounts/AddAccountDialog";
 import { GroupsNav } from "./features/accounts/GroupsNav";
+import { FavouritesNav } from "./features/launch/Favourites";
+import { LaunchView } from "./features/launch/LaunchView";
+import { draftFor, EMPTY_DRAFT, type Draft } from "./features/launch/target";
 import { SettingsView, SETTINGS_SECTIONS } from "./features/settings/SettingsView";
 import { UnlockScreen, type LockReason } from "./features/vault/UnlockScreen";
 import { Icon } from "./ui/Icon";
@@ -37,7 +40,7 @@ function Root() {
 
   const markLocked = () => {
     qc.setQueryData<VaultStatus>(qk.vault, (old) => old && { ...old, locked: true });
-    for (const queryKey of [qk.accounts, qk.presence, ["info"]]) qc.removeQueries({ queryKey });
+    for (const queryKey of [qk.accounts, qk.presence, ["info"], qk.favourites, qk.join]) qc.removeQueries({ queryKey });
   };
 
   const lock = () => {
@@ -115,9 +118,11 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
   const qc = useQueryClient();
   const accounts = useAccounts();
   const groups = useGroups();
-  const [view, setView] = useState<"accounts" | "settings">("accounts");
+  const [view, setView] = useState<"accounts" | "launch" | "settings">("accounts");
   const [group, setGroup] = useState<number | null>(null);
+  // Shared by the Accounts and Launch views: the account picked in one is picked in the other.
   const [selected, setSelected] = useState<number | null>(null);
+  const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [adding, setAdding] = useState(false);
   const known = useRef<Set<number> | null>(null);
 
@@ -162,6 +167,16 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
     setView("accounts");
     setGroup(null);
   };
+  const launchAs = (id: number) => {
+    setSelected(id);
+    setView("launch");
+  };
+  const pickFavourite = (f: Favourite) => {
+    setDraft(draftFor(f.target, f.id, f.name));
+    const first = f.accountIds.find((id) => accounts.data?.some((a) => a.id === id && a.status === "valid"));
+    if (first !== undefined) setSelected(first);
+    setView("launch");
+  };
 
   return (
     <div className="flex-1 flex min-h-0">
@@ -171,6 +186,10 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
             <Icon name="accounts" />
             <span className="flex-1">Accounts</span>
             <span className="mono text-xs text-dim">{accounts.data.length}</span>
+          </button>
+          <button className="nav-item" aria-current={view === "launch" ? "page" : undefined} onClick={() => setView("launch")}>
+            <Icon name="play" fill />
+            <span className="flex-1">Launch</span>
           </button>
           <button className="nav-item" aria-current={view === "settings" ? "page" : undefined} onClick={() => setView("settings")}>
             <Icon name="settings" />
@@ -187,6 +206,7 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
           )}
         </div>
         <div className="scroll flex-1 min-h-0">
+          <FavouritesNav accounts={accounts.data} active={view === "launch" ? draft.favId : null} onPick={pickFavourite} />
           <GroupsNav
             groups={groups.data}
             accounts={accounts.data}
@@ -215,7 +235,10 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
           selected={selected}
           setSelected={setSelected}
           onAdd={() => setAdding(true)}
+          onLaunch={launchAs}
         />
+      ) : view === "launch" ? (
+        <LaunchView accounts={accounts.data} selected={selected} setSelected={setSelected} draft={draft} setDraft={setDraft} />
       ) : (
         <SettingsView vault={vault} settings={settings} />
       )}

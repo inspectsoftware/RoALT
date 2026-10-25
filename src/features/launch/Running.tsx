@@ -60,9 +60,9 @@ export function RunningPanel({ accounts }: { accounts: AccountSummary[] }) {
   };
 
   return (
-    <aside aria-label="Running clients" className="flex-[1_1_380px] min-w-0 max-w-[560px] flex flex-col bg-panel border-l border-line">
+    <aside aria-label="Running clients" className="flex-[1_1_400px] min-w-0 max-w-[560px] flex flex-col bg-panel border-l border-line">
       <div className="flex items-center gap-2.5 px-5 pt-[18px] pb-2.5">
-        <span className="label">Running clients</span>
+        <span className="label whitespace-nowrap">Running clients</span>
         <span className="mono text-xs text-dim">{running.length}</span>
         <span className="ml-auto flex gap-2">
           {running.length < list.length && (

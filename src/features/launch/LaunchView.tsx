@@ -161,7 +161,7 @@ export function LaunchView({ accounts, selected, setSelected, draft, setDraft, s
   };
 
   return (
-    <main className="@container flex-1 min-w-0 flex flex-col">
+    <main className="@container flex-[999_1_520px] min-w-0 flex flex-col">
       <div className="flex flex-wrap items-baseline gap-3 px-6 pt-[18px] pb-3">
         <h1 className="text-xl font-semibold tracking-[-0.01em]">Launch</h1>
         <span className="text-dim">Paste anything — the target type is detected.</span>

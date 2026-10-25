@@ -24,8 +24,8 @@
 //! 4. Stops: `AppError::Challenge`, `AppError::Locked` (the vault locked mid-batch),
 //!    multi-instance turned off mid-batch, or an instance note saying it signed in as another
 //!    account or that Roblox wants a human check → that item `Failed`, the rest `Cancelled`,
-//!    `stopped` says why and what to do. An account removed or replaced (same id, another user)
-//!    mid-batch fails only its item.
+//!    `stopped` says why and what to do. An account removed, replaced (same id, another user) or
+//!    signed out (Invalid) mid-batch fails only its item; one found Challenged stops the batch.
 //!    `CookieInvalid` and other errors fail only that item; the batch goes on. Cancel stops
 //!    after the current step (never mid-launch): the rest `Cancelled`, `stopped = "Cancelled"`.
 //!    A stopped batch is done at once (its started clients stay in the instances list).
@@ -152,7 +152,7 @@ pub fn start(app: AppHandle, req: BulkRequest) -> Result<String> {
         s.multi.enable()?;
     }
 
-    let progress = new_progress(Uuid::new_v4().to_string(), &req);
+    let progress = new_progress(Uuid::new_v4().to_string(), &req, &accounts);
     let cancel = Arc::new(AtomicBool::new(false));
     {
         let mut batch = s.bulk.batch();
@@ -263,12 +263,23 @@ impl Run {
             }
             let s = self.app.state::<App>();
             if i > 0 && !s.multi.is_active() {
-                return Some("Multi-instance was turned off. Turn it on, then launch the accounts that were cancelled.".into());
+                return Some("Multi-instance was turned off. Turn it on.".into());
             }
             // Ids are reused: the account picked must still be this one, with a valid cookie.
-            if !s.db.account(a.id).is_ok_and(|x| x.user_id == a.user_id && x.status == AccountStatus::Valid) {
-                self.set_stage(i, BulkStage::Failed { message: "Removed or signed out during the batch".into() });
-                continue;
+            match s.db.account(a.id) {
+                Ok(x) if x.user_id == a.user_id => {
+                    if let Some(why) = cant_launch(x.status) {
+                        self.set_stage(i, BulkStage::Failed { message: why.into() });
+                        if x.status == AccountStatus::Challenged {
+                            return stop_reason(&AppError::Challenge, &a.name);
+                        }
+                        continue;
+                    }
+                }
+                _ => {
+                    self.set_stage(i, BulkStage::Failed { message: "Removed during the batch".into() });
+                    continue;
+                }
             }
 
             self.set_stage(i, BulkStage::Ticket);
@@ -456,15 +467,16 @@ async fn pick_server(
 }
 
 /// A new batch: every account `Queued`, the delay clamped.
-fn new_progress(batch_id: String, req: &BulkRequest) -> BulkProgress {
-    let queued = |&account_id| BulkItem { account_id, stage: BulkStage::Queued, instance_id: None };
+fn new_progress(batch_id: String, req: &BulkRequest, accounts: &[Account]) -> BulkProgress {
+    let queued =
+        |a: &Account| BulkItem { account_id: a.id, user_id: a.user_id, stage: BulkStage::Queued, instance_id: None };
     BulkProgress {
         batch_id,
         target: req.target.clone(),
         same_server: req.same_server,
         delay_ms: req.delay_ms.clamp(MIN_DELAY, MAX_DELAY),
         job_id: None,
-        items: req.account_ids.iter().map(queued).collect(),
+        items: accounts.iter().map(queued).collect(),
         stopped: None,
         done: false,
         note: None,
@@ -489,11 +501,10 @@ fn cant_launch(status: AccountStatus) -> Option<&'static str> {
 /// A launch error that stops the batch (why and what to do); None when only that item fails.
 fn stop_reason(e: &AppError, name: &str) -> Option<String> {
     match e {
-        AppError::Challenge => Some(format!(
-            "Roblox wants a human check for {name}. Sign in to it again with Add account > Sign in, then launch the \
-             accounts that were cancelled."
-        )),
-        AppError::Locked => Some("The vault locked. Unlock it, then launch the accounts that were cancelled.".into()),
+        AppError::Challenge => {
+            Some(format!("Roblox wants a human check for {name}. Sign in to it again with Add account > Sign in."))
+        }
+        AppError::Locked => Some("The vault locked. Unlock it.".into()),
         _ => None,
     }
 }
@@ -503,13 +514,10 @@ fn stop_reason(e: &AppError, name: &str) -> Option<String> {
 fn mirror_item(item: &mut BulkItem, inst: &Instance, name: &str) -> Option<String> {
     let why = match inst.note.as_deref() {
         Some(WRONG_ACCOUNT) => format!(
-            "{name}'s client signed in as another account. Close that client, turn on Settings > Protect each \
-             client's sign-in, then launch the accounts that were cancelled."
+            "{name}'s client signed in as another account. Close that client and turn on Settings > Protect \
+             each client's sign-in."
         ),
-        Some(CHALLENGED) => format!(
-            "Roblox wants a human check for {name}. Finish it in that client or close it, then launch the accounts \
-             that were cancelled."
-        ),
+        Some(CHALLENGED) => format!("Roblox wants a human check for {name}. Finish it in that client or close it."),
         _ => {
             item.stage = stage_of(inst);
             return None;
@@ -547,14 +555,20 @@ fn target_for(given: &LaunchTarget, server: Option<&(i64, String)>) -> LaunchTar
     }
 }
 
-/// Ends the batch early: what hasn't launched is `Cancelled`, `stopped` says why.
+/// Ends the batch early: what hasn't launched is `Cancelled`, `stopped` says why (and, when
+/// something was cancelled for a reason, what to do next).
 fn halt(p: &mut BulkProgress, why: String) {
+    let mut cancelled = false;
     for item in &mut p.items {
         if matches!(item.stage, BulkStage::Queued | BulkStage::Ticket) {
             item.stage = BulkStage::Cancelled;
+            cancelled = true;
         }
     }
-    p.stopped = Some(why);
+    p.stopped = Some(match why.strip_suffix('.') {
+        Some(s) if cancelled && why != CANCELLED => format!("{s}, then launch the accounts that were cancelled."),
+        _ => why,
+    });
 }
 
 /// Every started client is in game or ended.
@@ -593,8 +607,12 @@ mod tests {
         }
     }
 
+    fn accounts(ids: &[i64]) -> Vec<Account> {
+        ids.iter().map(|&id| Account { id, user_id: id * 1_000, name: format!("A{id}") }).collect()
+    }
+
     fn item(stage: BulkStage, started: bool) -> BulkItem {
-        BulkItem { account_id: 1, stage, instance_id: started.then(|| "i1".into()) }
+        BulkItem { account_id: 1, user_id: 1, stage, instance_id: started.then(|| "i1".into()) }
     }
 
     fn failed(message: &str) -> BulkStage {
@@ -713,15 +731,26 @@ mod tests {
             same_server: SameServer::Off,
             favourite_id: None,
         };
-        let mut p = new_progress("b".into(), &req);
+        let mut p = new_progress("b".into(), &req, &accounts(&req.account_ids));
+        assert_eq!(p.items[4].user_id, 5_000);
         p.items[0] = item(BulkStage::InGame, true);
         p.items[1] = item(failed("HTTP 500"), false);
         p.items[2] = item(BulkStage::Ticket, false);
+        let fresh = p.clone();
         halt(&mut p, CANCELLED.into());
         let stages: Vec<_> = p.items.iter().map(|i| i.stage.clone()).collect();
         let cancelled = BulkStage::Cancelled;
         assert_eq!(stages, [BulkStage::InGame, failed("HTTP 500"), cancelled.clone(), cancelled.clone(), cancelled]);
         assert_eq!((p.stopped.as_deref(), p.done), (Some("Cancelled"), false));
+
+        // A reason says what to do only when something was cancelled.
+        let mut stopped = fresh.clone();
+        halt(&mut stopped, "The vault locked. Unlock it.".into());
+        assert_eq!(stopped.stopped.as_deref(), Some("The vault locked. Unlock it, then launch the accounts that were cancelled."));
+        let mut settled = fresh;
+        settled.items.iter_mut().for_each(|i| i.stage = BulkStage::InGame);
+        halt(&mut settled, "The vault locked. Unlock it.".into());
+        assert_eq!(settled.stopped.as_deref(), Some("The vault locked. Unlock it."));
     }
 
     #[test]
@@ -733,9 +762,10 @@ mod tests {
             same_server: SameServer::PickFirst,
             favourite_id: Some(3),
         };
-        let mut p = new_progress("b".into(), &req);
+        let accounts = accounts(&req.account_ids);
+        let mut p = new_progress("b".into(), &req, &accounts);
         assert_eq!(p.delay_ms, 2_000);
-        assert_eq!(new_progress("b".into(), &BulkRequest { delay_ms: 90_000, ..req.clone() }).delay_ms, 60_000);
+        assert_eq!(new_progress("b".into(), &BulkRequest { delay_ms: 90_000, ..req.clone() }, &accounts).delay_ms, 60_000);
         assert!(p.items.iter().all(|i| i.stage == BulkStage::Queued && i.instance_id.is_none()));
         assert!(settled(&p), "nothing started");
         p.items = vec![item(BulkStage::InGame, true), item(BulkStage::Joining, true)];

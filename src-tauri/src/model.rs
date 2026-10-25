@@ -522,6 +522,8 @@ pub enum BulkStage {
 #[ts(export)]
 pub struct BulkItem {
     pub account_id: i64,
+    /// The Roblox user the account was when the batch started (account ids are reused).
+    pub user_id: i64,
     pub stage: BulkStage,
     /// The tracked client, once started.
     pub instance_id: Option<String>,

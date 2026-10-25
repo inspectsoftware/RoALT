@@ -30,6 +30,8 @@ function steps(stage: BulkStage, started: boolean, done: boolean) {
 /** A started client's stage from its tracked instance (as the backend mirrors it), so rows keep
  * moving after the batch itself stopped. */
 function stageOf(i: Instance): BulkStage {
+  // As the backend's mirror_item: these notes fail the item whatever the state.
+  if (i.note === "Signed in as another account" || i.note === "Roblox wants a human check") return { kind: "failed", message: i.note };
   switch (i.state) {
     case "starting":
     case "joining":
@@ -51,16 +53,28 @@ export function BatchSection({ accounts, onPick }: { accounts: AccountSummary[];
   if (!p) return null;
 
   const byId = new Map(accounts.map((a) => [a.id, a]));
+  // The account an item was started as (ids are reused once an account is removed).
+  const own = (i: { accountId: number; userId: number }) => {
+    const a = byId.get(i.accountId);
+    return a && a.userId === i.userId ? a : undefined;
+  };
   const live = new Map(instances?.map((i) => [i.id, i]));
+  const closed: BulkStage = { kind: "failed", message: "Closed" };
   const items = p.items.map((item) => {
     const inst = item.instanceId ? live.get(item.instanceId) : undefined;
     const running = item.stage.kind === "starting" || item.stage.kind === "joining" || item.stage.kind === "inGame";
-    return { ...item, stage: inst && running ? stageOf(inst) : item.stage, job: inst?.jobId ?? null };
+    // Only ended clients leave the tracker; while the batch runs the backend already says so,
+    // and a progress event may arrive before the instance list catches up.
+    const stage = inst ? stageOf(inst) : running && p.done && instances && item.instanceId ? closed : item.stage;
+    return { ...item, stage, job: inst?.jobId ?? null };
   });
   const n = items.length;
   const inGame = items.filter((i) => i.stage.kind === "inGame").length;
   const failed = items.filter((i) => i.stage.kind === "failed").length;
-  const rest = items.filter((i) => i.stage.kind === "cancelled" || (i.stage.kind === "failed" && !i.instanceId)).map((i) => i.accountId);
+  const rest = items
+    .filter((i) => i.stage.kind === "cancelled" || (i.stage.kind === "failed" && !i.instanceId))
+    .filter((i) => own(i)?.status === "valid")
+    .map((i) => i.accountId);
   const target = describeTarget(p.target);
   const summary = [target.kind, p.sameServer === "pickFirst" ? "same server" : p.sameServer === "followFirst" ? "following the first" : null, `${p.delayMs / 1000} s`]
     .filter(Boolean)
@@ -119,7 +133,7 @@ export function BatchSection({ accounts, onPick }: { accounts: AccountSummary[];
       </div>
       <ol className="scroll max-h-[40vh]">
         {items.map((item) => {
-          const a = byId.get(item.accountId);
+          const a = own(item);
           const st = item.stage;
           const job = item.job;
           const note = st.kind === "failed" ? `failed · ${st.message}` : `${NOTE[st.kind]}${st.kind === "inGame" && job ? ` · job ${job.slice(0, 8)}` : ""}`;

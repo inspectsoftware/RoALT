@@ -367,7 +367,8 @@ async function runBatch(b: BulkProgress, favouriteId: number | null) {
       if (f) f.lastUsedAt = Date.now();
     }
     if (!prev && follow && target.kind === "place") {
-      await until(() => i.jobId !== null || i.state === "exited", 10_000);
+      await until(() => batchCancel || i.jobId !== null || i.state === "exited", 10_000);
+      if (batchCancel) break;
       if (i.jobId) {
         b.jobId = i.jobId;
         target = { kind: "server", placeId: target.placeId, jobId: i.jobId };
@@ -403,7 +404,7 @@ function startBatch(r: BulkRequest) {
   batchCancel = false;
   batch = {
     batchId: crypto.randomUUID(), target: r.target, sameServer: r.sameServer, delayMs: Math.min(60_000, Math.max(2000, r.delayMs)),
-    jobId: null, items: ids.map((accountId) => ({ accountId, stage: { kind: "queued" }, instanceId: null })), stopped: null, done: false, note: null,
+    jobId: null, items: ids.map((accountId) => ({ accountId, userId: find(accountId)?.userId ?? 0, stage: { kind: "queued" }, instanceId: null })), stopped: null, done: false, note: null,
   };
   bulkChanged();
   void runBatch(batch, r.favouriteId);

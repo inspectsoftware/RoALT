@@ -47,7 +47,14 @@ export function RunningPanel({ accounts }: { accounts: AccountSummary[] }) {
 
   const close = (i: Instance) => {
     setClosing((s) => new Set(s).add(i.id));
-    api.instanceClose(i.id, false).catch(toastError);
+    api.instanceClose(i.id, false).catch((e) => {
+      setClosing((s) => {
+        const next = new Set(s);
+        next.delete(i.id);
+        return next;
+      });
+      toastError(e);
+    });
   };
   const closeAll = () => {
     setBusyAll(true);
@@ -63,7 +70,7 @@ export function RunningPanel({ accounts }: { accounts: AccountSummary[] }) {
   return (
     <aside aria-label="Running clients" className="flex-[1_1_400px] min-w-0 max-w-[560px] flex flex-col bg-panel border-l border-line">
       <BatchSection accounts={accounts} />
-      <div className="flex items-center gap-2.5 px-5 pt-[18px] pb-2.5">
+      <div className="flex flex-wrap items-center gap-2.5 px-5 pt-[18px] pb-2.5">
         <span className="label whitespace-nowrap">Running clients</span>
         <span className="mono text-xs text-dim">{running.length}</span>
         <span className="ml-auto flex gap-2">
@@ -100,17 +107,20 @@ export function RunningPanel({ accounts }: { accounts: AccountSummary[] }) {
                 const [label, color] = STATES[i.state];
                 const live = isRunning(i);
                 return (
-                  <tr key={i.id} className={`enter h-10 border-b border-line ${live ? "" : "text-dim"}`} title={i.note ?? `PID ${i.pid}`}>
+                  <tr key={i.id} className={`enter h-10 border-b border-line ${live ? "" : "text-dim"}`} title={`PID ${i.pid}`}>
                     <td className="pl-5 pr-2 max-w-0 w-[40%]">
                       <span className="flex items-center gap-2 min-w-0 font-sans">
                         {a && <Avatar account={a} size={20} />}
                         <span className="truncate">{name}</span>
                       </span>
                     </td>
-                    <td className="pr-2 whitespace-nowrap">
-                      <span className="inline-flex items-center gap-1.5">
+                    <td className="pr-2 py-1.5">
+                      <span className="flex items-baseline gap-1.5">
                         <span aria-hidden="true" className={`w-1.5 h-1.5 flex-none ${i.state === "starting" || i.state === "joining" ? "pulse" : ""}`} style={{ background: color }} />
-                        {live ? label : i.note ?? label}
+                        <span>
+                          {live ? label : i.note ?? label}
+                          {live && i.note && <span className="text-orange"> · {i.note}</span>}
+                        </span>
                       </span>
                     </td>
                     <td className="pr-2 text-dim" title={i.jobId ?? undefined}>{i.jobId ? i.jobId.slice(0, 8) : "—"}</td>
@@ -149,19 +159,63 @@ export function RunningPanel({ accounts }: { accounts: AccountSummary[] }) {
 }
 
 /** Sidebar switch for multi-instance, with a way out when Roblox already runs. */
+const NOTICE_KEY = "roalt.multiInstanceNotice";
+
+function noticeSeen() {
+  try {
+    return localStorage.getItem(NOTICE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Turns multi-instance on or off. The first time it is turned on, Roblox's stance on several
+ * clients is shown first (DESIGN §2); render `dialog` next to the switch. */
+export function useMultiToggle(onStatus?: (s: MultiInstanceStatus) => void) {
+  const qc = useQueryClient();
+  const [asking, setAsking] = useState(false);
+  const set = (enabled: boolean) =>
+    api.multiInstanceSet(enabled).then((s) => {
+      qc.setQueryData(qk.multi, s);
+      qc.invalidateQueries({ queryKey: qk.settings });
+      onStatus?.(s);
+    }, toastError);
+  const toggle = (enabled: boolean) => (enabled && !noticeSeen() ? setAsking(true) : void set(enabled));
+  const dialog = (
+    <ConfirmDialog
+      open={asking}
+      onClose={() => setAsking(false)}
+      onConfirm={() => {
+        try {
+          localStorage.setItem(NOTICE_KEY, "1");
+        } catch {
+          // Shown again next time; harmless.
+        }
+        setAsking(false);
+        void set(true);
+      }}
+      title="Turn on multi-instance?"
+      text={
+        <>
+          Roblox says it doesn't officially support running several clients at once. RoALT only holds the name Roblox's
+          client checks when it starts and never touches the client itself, which Roblox says its enforcement against
+          modified clients doesn't cover. Roblox has broken multi-instance before and may again.
+        </>
+      }
+      confirmLabel="Turn on"
+      safe
+    />
+  );
+  return { toggle, dialog };
+}
+
 export function MultiInstanceSwitch() {
   const qc = useQueryClient();
   const status = useMultiStatus().data;
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const apply = (s: MultiInstanceStatus) => qc.setQueryData(qk.multi, s);
-
-  const toggle = (enabled: boolean) => {
-    api.multiInstanceSet(enabled).then((s) => {
-      apply(s);
-      qc.invalidateQueries({ queryKey: qk.settings });
-    }, toastError);
-  };
+  const { toggle, dialog } = useMultiToggle();
   const closeRoblox = () => {
     setBusy(true);
     api
@@ -183,7 +237,7 @@ export function MultiInstanceSwitch() {
       </div>
       {blocked && (
         <div className="enter flex flex-col items-start gap-2 font-sans text-xs">
-          <span className="alert">{status.message}</span>
+          <span role="alert" className="alert">{status.message}</span>
           {status.blockedBy.length > 0 && (
             <button className="btn btn-sm" onClick={() => setConfirm(true)}>
               Close Roblox…
@@ -200,6 +254,7 @@ export function MultiInstanceSwitch() {
         text={<>Every running Roblox client closes ({status.blockedBy.length} process{status.blockedBy.length === 1 ? "" : "es"}), including ones RoALT didn't start. Unsaved progress in those games is lost.</>}
         confirmLabel="Close Roblox"
       />
+      {dialog}
     </>
   );
 }

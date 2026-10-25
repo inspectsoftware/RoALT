@@ -54,7 +54,7 @@ export function Dialog({ open, onClose, title, width = 420, children }: {
   );
 }
 
-export function ConfirmDialog({ open, onClose, onConfirm, title, text, confirmLabel, busy }: {
+export function ConfirmDialog({ open, onClose, onConfirm, title, text, confirmLabel, busy, safe }: {
   open: boolean;
   onClose: () => void;
   onConfirm: () => void;
@@ -62,13 +62,15 @@ export function ConfirmDialog({ open, onClose, onConfirm, title, text, confirmLa
   text: ReactNode;
   confirmLabel: string;
   busy?: boolean;
+  /** Not destructive: the confirm button is the primary one, not the red one. */
+  safe?: boolean;
 }) {
   return (
     <Dialog open={open} onClose={onClose} title={title} width={400}>
       <div className="p-5 text-dim">{text}</div>
       <div className="flex justify-end gap-2 px-5 pb-5">
         <button type="button" className="btn" onClick={onClose} data-autofocus>Cancel</button>
-        <button type="button" className="btn btn-danger" onClick={onConfirm} disabled={busy}>
+        <button type="button" className={`btn ${safe ? "btn-primary" : "btn-danger"}`} onClick={onConfirm} disabled={busy}>
           {confirmLabel}
         </button>
       </div>

@@ -9,6 +9,7 @@ import { Dialog } from "../../ui/Dialog";
 import { Icon } from "../../ui/Icon";
 import { friendly, toast, toastError } from "../../ui/Toast";
 import { plural } from "../accounts/shared";
+import { useMultiToggle } from "../launch/Running";
 import { PasswordDialog } from "../vault/PasswordDialog";
 
 export const SETTINGS_SECTIONS = [
@@ -45,12 +46,7 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
   const [importPath, setImportPath] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const multi = useMultiStatus().data;
-  const setMulti = (enabled: boolean) =>
-    api.multiInstanceSet(enabled).then((st) => {
-      qc.setQueryData(qk.multi, st);
-      qc.invalidateQueries({ queryKey: qk.settings });
-      if (st.message) toast(st.message, "error");
-    }, toastError);
+  const multiToggle = useMultiToggle((st) => st.message && toast(st.message, "error"));
 
   const setMode = async (mode: "dpapi" | "master", current?: string, next?: string, done?: string) => {
     await api.vaultSetMode(mode, current || undefined, next || undefined);
@@ -98,11 +94,12 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
           title="Multi-instance"
           hint="RoALT holds Roblox's single-instance lock while it runs, so each account gets its own client. Turn it on before the first client starts."
         >
-          <Switch label="Multi-instance" checked={multi?.enabled ?? settings.multiInstance} onChange={setMulti} />
+          <Switch label="Multi-instance" checked={multi?.enabled ?? settings.multiInstance} onChange={multiToggle.toggle} />
+          {multiToggle.dialog}
         </Row>
         <Row
           title="Protect each client's sign-in"
-          hint="While multi-instance is on, lock Roblox's shared sign-in files so clients can't overwrite each other's session (error 773, wrong account in game)."
+          hint="While RoALT's clients run, lock Roblox's shared sign-in files so clients can't overwrite each other's session (error 773, wrong account in game). Meanwhile Roblox's own app can't save its sign-in."
         >
           <Switch
             label="Protect each client's sign-in"

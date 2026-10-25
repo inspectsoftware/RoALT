@@ -108,6 +108,28 @@ impl Tracker {
         }
     }
 
+    /// The process to close for `id`: its pid and the start time it was first seen with (None
+    /// before the first poll). None once it ended or its process is gone, so a reused pid is
+    /// never closed; the next poll ends the entry.
+    pub fn close_target(&self, id: &str) -> Option<(u32, Option<u64>)> {
+        self.entries()
+            .iter()
+            .find(|e| e.inst.id == id && e.inst.state != InstanceState::Exited && e.alive)
+            .map(|e| (e.inst.pid, e.start_time))
+    }
+
+    /// A close that didn't land: its exit counts as unexpected again.
+    pub fn clear_closing(&self, id: &str) {
+        if let Some(e) = self.entries().iter_mut().find(|e| e.inst.id == id) {
+            e.closing = false;
+        }
+    }
+
+    /// True while a client RoALT started hasn't ended.
+    pub fn any_running(&self) -> bool {
+        self.entries().iter().any(|e| e.inst.state != InstanceState::Exited)
+    }
+
     /// Forgets ended entries.
     pub fn clear_ended(&self) {
         self.entries().retain(|e| e.inst.state != InstanceState::Exited);
@@ -131,7 +153,12 @@ impl Tracker {
                 let changed = tauri::async_runtime::spawn_blocking(move || {
                     let s = handle.state::<crate::App>();
                     let user_of = |account_id| s.db.account(account_id).ok().map(|a| a.user_id);
-                    s.tracker.poll(logwatch::logs_dir().as_deref(), &Live, &user_of, crate::commands::now_ms())
+                    let changed = s.tracker.poll(logwatch::logs_dir().as_deref(), &Live, &user_of, crate::commands::now_ms());
+                    // The shared login files are held only while RoALT's clients run.
+                    if !s.tracker.any_running() {
+                        s.multi.release_shared();
+                    }
+                    changed
                 })
                 .await
                 .unwrap_or(false);
@@ -163,7 +190,8 @@ impl Tracker {
         for w in work {
             // Only this loop ends entries, so a running one is still there.
             let Some(e) = entries.iter_mut().find(|e| e.inst.id == w.inst.id) else { continue };
-            let closing = e.closing;
+            // A close that reached only the bootstrapper doesn't cover the client it started.
+            let closing = e.closing && (e.adopted || !w.adopted);
             let before = std::mem::replace(e, w).inst;
             e.closing = closing;
             settle(e, now);

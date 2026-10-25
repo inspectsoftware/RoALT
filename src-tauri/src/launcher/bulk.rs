@@ -138,7 +138,7 @@ pub fn start(app: AppHandle, req: BulkRequest) -> Result<String> {
         if !v.multi_instance {
             return Err(AppError::Invalid("Turn on multi-instance to launch several accounts.".into()));
         }
-        s.multi.enable(v.protect_shared_login)?;
+        s.multi.enable()?;
     }
 
     let progress = new_progress(Uuid::new_v4().to_string(), &req);

@@ -105,3 +105,23 @@ cancelled. Try Follow the first.
 **Roblox differences:** the server list (v2, `orderBy`) is the website's; Recommended and Best
 ping need a signed-in account, and a guest gets 3 list calls a minute. Picking the server before
 launching avoids detecting it afterwards; presence alone is too slow to follow reliably.
+
+## M6 — server browser
+
+**Built:** a Servers view. Paste a game link, place ID, game ID link or share link (share links
+open as the first picked account); the header shows the game's icon, name, creator, place and
+universe IDs and how many play. Public servers: Most full, Most empty, Recommended and Best
+ping (the last two only with an account picked), Hide full, 25 per page with Load next
+(duplicates across pages removed), Refresh, copy a job ID. Private servers the first picked
+account can see (joinable ones carry an access code that is never shown). Pick a server, choose
+the accounts in the bottom bar, Join: one account launches directly, several as a batch. It warns
+when the server lacks room and refuses accounts Roblox restricts.
+
+**Test:** load a popular game, sort and page through servers, pick one and join with two
+accounts: both land in that job ID. Open the Private tab with an account that owns or was
+invited to a private server.
+
+**Roblox differences:** the guest flag for selling private servers is false for games that
+still have them, so the Private tab is always offered and the account's own list decides; game
+info, icons and the place → universe lookup work without a cookie; icons are only accepted from
+https *.rbxcdn.com.

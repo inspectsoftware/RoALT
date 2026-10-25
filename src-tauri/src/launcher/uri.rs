@@ -75,7 +75,7 @@ pub fn new_browser_tracker_id() -> i64 {
 }
 
 /// JavaScript's `encodeURIComponent`.
-fn encode(s: &str) -> String {
+pub(crate) fn encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     encode_into(&mut out, s);
     out

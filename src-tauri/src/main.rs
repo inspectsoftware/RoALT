@@ -31,6 +31,7 @@ pub struct App {
     pub copied: Mutex<Option<Secret>>,
     pub tracker: instances::Tracker,
     pub multi: instances::multi::Multi,
+    pub bulk: launcher::bulk::Bulk,
 }
 
 impl App {
@@ -155,6 +156,7 @@ fn init(app: &TauriApp, data_dir: &Path) -> std::result::Result<(), String> {
         copied: Mutex::new(None),
         tracker: instances::Tracker::new(),
         multi,
+        bulk: launcher::bulk::Bulk::new(),
     });
     main_window(app, data_dir, theme).map_err(|e| {
         format!(
@@ -234,6 +236,10 @@ fn main() {
             commands::multi_instance_status,
             commands::multi_instance_set,
             commands::roblox_close_all,
+            commands::bulk_launch,
+            commands::bulk_cancel,
+            commands::bulk_current,
+            commands::servers_list,
             commands::groups_list,
             commands::group_save,
             commands::group_remove,

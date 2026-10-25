@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
-import { api, asError, events, type Favourite, type Settings, type Theme, type VaultStatus } from "./api";
+import { api, asError, events, type Favourite, type SameServer, type Settings, type Theme, type VaultStatus } from "./api";
 import { qk, queryClient, useAccounts, useGroups, useInstances, useSetSettings, useSettings, useVault } from "./data";
 import { AccountsView } from "./features/accounts/AccountsView";
 import { AddAccountDialog } from "./features/accounts/AddAccountDialog";
 import { GroupsNav } from "./features/accounts/GroupsNav";
 import { FavouritesNav } from "./features/launch/Favourites";
-import { LaunchView } from "./features/launch/LaunchView";
+import { lastLaunchAccount, LaunchView } from "./features/launch/LaunchView";
 import { isRunning, MultiInstanceSwitch, RunningPanel } from "./features/launch/Running";
 import { draftFor, EMPTY_DRAFT, type Draft } from "./features/launch/target";
 import { SettingsView, SETTINGS_SECTIONS } from "./features/settings/SettingsView";
@@ -58,6 +58,7 @@ function Root() {
       events.onInstancesChanged(() => {
         for (const queryKey of [qk.instances, qk.multi]) qc.invalidateQueries({ queryKey });
       }),
+      events.onBulkProgress((p) => qc.setQueryData(qk.bulk, p)),
       events.onVaultLocked(() => {
         if (Date.now() - manualLockAt.current > 3000) setLockReason("idle");
         markLocked();
@@ -125,8 +126,13 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
   const running = useInstances().data?.filter(isRunning).length ?? 0;
   const [view, setView] = useState<"accounts" | "launch" | "settings">("accounts");
   const [group, setGroup] = useState<number | null>(null);
-  // Shared by the Accounts and Launch views: the account picked in one is picked in the other.
   const [selected, setSelected] = useState<number | null>(null);
+  // The Launch view's accounts; the last one launched until something else is picked.
+  const [picked, setPicked] = useState<number[]>(() => {
+    const id = lastLaunchAccount();
+    return id === null ? [] : [id];
+  });
+  const [sameServer, setSameServer] = useState<SameServer>("off");
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   // Kept here so a launch in flight survives leaving the view.
   const [launchStep, setLaunchStep] = useState<string | null>(null);
@@ -175,13 +181,13 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
     setGroup(null);
   };
   const launchAs = (id: number) => {
-    setSelected(id);
+    setPicked([id]);
     setView("launch");
   };
   const pickFavourite = (f: Favourite) => {
     setDraft(draftFor(f.target, f.id, f.name));
-    const first = f.accountIds.find((id) => accounts.data?.some((a) => a.id === id && a.status === "valid"));
-    if (first !== undefined) setSelected(first);
+    const valid = f.accountIds.filter((id) => accounts.data?.some((a) => a.id === id && a.status === "valid"));
+    if (valid.length) setPicked(valid);
     setView("launch");
   };
 
@@ -256,14 +262,16 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
         <>
           <LaunchView
             accounts={accounts.data}
-            selected={selected}
-            setSelected={setSelected}
+            picked={picked}
+            setPicked={setPicked}
+            sameServer={sameServer}
+            setSameServer={setSameServer}
             draft={draft}
             setDraft={setDraft}
             step={launchStep}
             setStep={setLaunchStep}
           />
-          <RunningPanel accounts={accounts.data} />
+          <RunningPanel accounts={accounts.data} onPick={setPicked} />
         </>
       ) : (
         <SettingsView vault={vault} settings={settings} />

@@ -7,6 +7,7 @@ import { ConfirmDialog } from "../../ui/Dialog";
 import { Icon } from "../../ui/Icon";
 import { toastError } from "../../ui/Toast";
 import { accountName, Avatar, plural } from "../accounts/shared";
+import { BatchSection } from "./Batch";
 
 const STATES: Record<InstanceState, [label: string, color: string]> = {
   starting: ["Starting", "var(--dim)"],
@@ -33,8 +34,8 @@ function useNow(ms: number) {
   return now;
 }
 
-/** The Launch view's right column: clients RoALT started, newest first. */
-export function RunningPanel({ accounts }: { accounts: AccountSummary[] }) {
+/** The Launch view's right column: the bulk launch, then clients RoALT started, newest first. */
+export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[]; onPick: (ids: number[]) => void }) {
   const list = useInstances().data ?? [];
   const now = useNow(30_000);
   const [closing, setClosing] = useState<ReadonlySet<string>>(new Set());
@@ -72,6 +73,7 @@ export function RunningPanel({ accounts }: { accounts: AccountSummary[] }) {
 
   return (
     <aside aria-label="Running clients" className="@container flex-[1_1_400px] min-w-0 max-w-[560px] flex flex-col bg-panel border-l border-line">
+      <BatchSection accounts={accounts} onPick={onPick} />
       <div className="flex flex-wrap items-center gap-2.5 px-5 pt-[18px] pb-2.5">
         <span className="label whitespace-nowrap">Running clients</span>
         <span className="mono text-xs text-dim">{running.length}</span>

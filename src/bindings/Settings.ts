@@ -23,4 +23,8 @@ multiInstance: boolean,
  * While multi-instance is on, lock Roblox's shared login files so clients can't
  * overwrite each other's session (teleport error 773, wrong account shown).
  */
-protectSharedLogin: boolean, };
+protectSharedLogin: boolean, 
+/**
+ * Bulk launch: wait between two launches (±1 s jitter is added), 2 000..=60 000.
+ */
+launchDelayMs: number, };

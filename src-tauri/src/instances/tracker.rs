@@ -17,6 +17,9 @@ const REBIND_MS: i64 = 120_000;
 const MAX_ENDED: usize = 30;
 /// How far a client's start may be from its log file's creation, in seconds.
 const LOG_SKEW_SECS: u64 = 3;
+/// The note of a client whose log signed in as a different user than its account.
+pub const WRONG_ACCOUNT: &str = "Signed in as another account";
+pub const CHALLENGED: &str = "Roblox wants a human check";
 
 pub struct Tracker {
     inner: Mutex<Vec<Entry>>,
@@ -329,9 +332,9 @@ fn state_of(facts: &LogFacts, bound: bool, ended: bool, closing: bool, expected_
     let problem = if facts.replaced {
         Some("Replaced by another Roblox client")
     } else if matches!((facts.user_id, expected_user), (Some(got), Some(want)) if got != want) {
-        Some("Signed in as another account")
+        Some(WRONG_ACCOUNT)
     } else if facts.challenged {
-        Some("Roblox wants a human check")
+        Some(CHALLENGED)
     } else {
         None
     };

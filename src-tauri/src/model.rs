@@ -153,6 +153,8 @@ pub struct Settings {
     /// While multi-instance is on, lock Roblox's shared login files so clients can't
     /// overwrite each other's session (teleport error 773, wrong account shown).
     pub protect_shared_login: bool,
+    /// Bulk launch: wait between two launches (±1 s jitter is added), 2 000..=60 000.
+    pub launch_delay_ms: u32,
 }
 
 impl Default for Settings {
@@ -165,6 +167,7 @@ impl Default for Settings {
             cache_minutes: 10,
             multi_instance: false,
             protect_shared_login: true,
+            launch_delay_ms: 6_000,
         }
     }
 }
@@ -185,6 +188,8 @@ pub struct SettingsPatch {
     pub cache_minutes: Option<u32>,
     #[ts(optional)]
     pub protect_shared_login: Option<bool>,
+    #[ts(optional)]
+    pub launch_delay_ms: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
@@ -461,4 +466,124 @@ pub struct MultiInstanceStatus {
     /// PIDs of Roblox processes that stop the lock from being taken.
     pub blocked_by: Vec<u32>,
     pub message: Option<String>,
+}
+
+// ---------- M5: bulk launch ----------
+
+/// How a bulk launch puts everyone in one server (public-game targets only; targets that
+/// already name one server ignore it).
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum SameServer {
+    /// Each account is matched by Roblox on its own.
+    #[default]
+    Off,
+    /// Choose one server with room for everyone from the server list, then send each account
+    /// to it (`RequestGameJob`).
+    PickFirst,
+    /// Launch the first account normally, read its server from its client log (presence as a
+    /// fallback), send the rest there.
+    FollowFirst,
+}
+
+#[derive(Deserialize, TS, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct BulkRequest {
+    /// Launch order.
+    pub account_ids: Vec<i64>,
+    pub target: LaunchTarget,
+    /// Wait between launches; clamped to 2 000..=60 000, ±1 s jitter is added.
+    pub delay_ms: u32,
+    pub same_server: SameServer,
+    /// Marked as used once the first client starts.
+    pub favourite_id: Option<i64>,
+}
+
+/// One account's progress. After `Starting` it mirrors its client (`Instance`).
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+#[ts(export)]
+pub enum BulkStage {
+    Queued,
+    /// Resolving the target / getting the ticket.
+    Ticket,
+    /// The client was started; its log isn't bound yet.
+    Starting,
+    Joining,
+    InGame,
+    Failed { message: String },
+    Cancelled,
+}
+
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct BulkItem {
+    pub account_id: i64,
+    /// The Roblox user the account was when the batch started (account ids are reused).
+    pub user_id: i64,
+    pub stage: BulkStage,
+    /// The tracked client, once started.
+    pub instance_id: Option<String>,
+}
+
+/// The whole batch; `bulk://progress` carries it on every change.
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct BulkProgress {
+    pub batch_id: String,
+    pub target: LaunchTarget,
+    pub same_server: SameServer,
+    pub delay_ms: u32,
+    /// The server everyone is sent to, once known.
+    pub job_id: Option<String>,
+    pub items: Vec<BulkItem>,
+    /// Why the batch stopped early ("Cancelled", a challenge, a wrong account); None while it
+    /// runs and after a normal finish.
+    pub stopped: Option<String>,
+    /// No more launches or stage changes will come.
+    pub done: bool,
+    /// Something the user should know (no server had room, the first account's server
+    /// couldn't be read, ...).
+    pub note: Option<String>,
+}
+
+// ---------- M5/M6: servers ----------
+
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ServerOrder {
+    OccupancyDesc,
+    OccupancyAsc,
+    /// Needs a cookie.
+    Recommended,
+    /// Needs a cookie.
+    BestLatency,
+}
+
+/// One public server. Roblox may leave anything but id / maxPlayers / playing out.
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct GameServer {
+    /// The job id (a GUID).
+    pub id: String,
+    pub playing: i32,
+    pub max_players: i32,
+    pub fps: Option<f64>,
+    pub ping: Option<i64>,
+    pub friend_count: Option<i32>,
+}
+
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ServerPage {
+    pub servers: Vec<GameServer>,
+    /// Opaque; None on the last page.
+    pub next_cursor: Option<String>,
 }

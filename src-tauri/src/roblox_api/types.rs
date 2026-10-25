@@ -187,3 +187,24 @@ pub struct FriendPresence {
     #[serde(rename = "universeId")]
     pub universe_id: Option<i64>,
 }
+
+/// `games.roblox.com/v2/games/{placeId}/servers/Public`. `data` may be null.
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerList {
+    pub data: Option<Vec<ServerRow>>,
+    pub next_page_cursor: Option<String>,
+}
+
+/// A row of the server list. Roblox may leave anything out; rows without id / maxPlayers /
+/// playing are dropped by the caller.
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerRow {
+    pub id: Option<String>,
+    pub max_players: Option<i32>,
+    pub playing: Option<i32>,
+    pub fps: Option<f64>,
+    pub ping: Option<i64>,
+    pub friend_count: Option<i32>,
+}

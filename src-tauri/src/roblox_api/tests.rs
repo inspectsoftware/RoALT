@@ -6,7 +6,7 @@ use reqwest::header::HeaderName;
 
 use super::*;
 use crate::launcher::{Join, resolve};
-use crate::model::LaunchTarget;
+use crate::model::{GameServer, LaunchTarget, ServerOrder, ServerPage};
 
 fn fixture(name: &str) -> String {
     let path = format!("{}/../docs/research/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
@@ -893,4 +893,120 @@ async fn live_public_endpoints() {
     let found = c.users_by_name(&["Roblox".to_owned()]).await.unwrap();
     assert_eq!(found.first().map(|u| u.id), Some(1));
     println!("user={user:?}\nheads={heads:?}\nplus={plus:?}\ncounts={counts:?}\ngames={games:?}");
+}
+
+// Server list.
+
+const SERVERS: &str = "GET /v2/games/920587237/servers/Public";
+
+#[tokio::test]
+async fn servers_public_sends_the_website_query_and_the_cookie() {
+    let (base, reqs) = serve(vec![ok(&fixture("servers-v2-public-limit25.json"))]);
+    let (c, _) = client(&base);
+    let cookie = Secret::new("OLD");
+    let cursor = "GioKKAgj+/x==";
+    let page = c.servers_public(3, Some(&cookie), 920587237, ServerOrder::OccupancyDesc, true, 25, Some(cursor)).await.unwrap();
+    assert_eq!(page.servers.len(), 25);
+    assert_eq!(page.next_cursor.as_deref(), Some("GioKKAgjEiQ4YzBlNzgyYi05ZjlhLTQ0MjItOGZmMC03MTcwNjEzOTg1YWJwAQ=="));
+
+    let req = reqs.recv().unwrap();
+    let want = format!("{SERVERS}?orderBy=OccupancyDesc&excludeFullGames=true&limit=25&cursor=GioKKAgj%2B%2Fx%3D%3D HTTP/1.1");
+    assert_eq!(first_line(&req), want);
+    assert!(has(&req, "\r\ncookie: .ROBLOSECURITY=OLD\r\n"));
+}
+
+#[tokio::test]
+async fn servers_public_maps_each_order_and_sends_no_cookie_for_guests() {
+    let empty = ok(r#"{"previousPageCursor":null,"nextPageCursor":null,"data":[]}"#);
+    let (base, reqs) = serve(vec![empty.clone(), empty.clone(), empty]);
+    let (c, _) = client(&base);
+    let cookie = Secret::new("OLD");
+    let asks = [
+        (ServerOrder::OccupancyAsc, None, false, 10, "OccupancyAsc&excludeFullGames=false&limit=10"),
+        (ServerOrder::Recommended, Some(&cookie), true, 50, "Recommended&excludeFullGames=true&limit=50"),
+        (ServerOrder::BestLatency, Some(&cookie), false, 100, "BestLatency&excludeFullGames=false&limit=100"),
+    ];
+    for (order, cookie, exclude_full, limit, query) in asks {
+        // An empty cursor is no cursor.
+        let page = c.servers_public(3, cookie, 920587237, order, exclude_full, limit, Some("")).await.unwrap();
+        assert_eq!(page, ServerPage { servers: vec![], next_cursor: None });
+        let req = reqs.recv().unwrap();
+        assert_eq!(first_line(&req), format!("{SERVERS}?orderBy={query} HTTP/1.1"));
+        assert_eq!(has(&req, "\r\ncookie:"), cookie.is_some(), "{req}");
+    }
+}
+
+#[tokio::test]
+async fn servers_public_rejects_other_page_sizes_without_a_call() {
+    let (base, reqs) = serve(vec![]);
+    let (c, _) = client(&base);
+    for limit in [0, 1, 20, 99, 200] {
+        let r = c.servers_public(0, None, 920587237, ServerOrder::OccupancyDesc, true, limit, None).await;
+        assert!(matches!(r, Err(AppError::Invalid(_))), "{limit}");
+    }
+    assert!(reqs.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn servers_public_guest_sorts_say_to_pick_an_account() {
+    let guest = fixture("servers-v2-public-bestlatency-unauth.json");
+    let bad_limit = fixture("servers-v1-invalid-limit20.json");
+    let (base, _reqs) = serve(vec![reply("400 Bad Request", &[], &guest), reply("400 Bad Request", &[], &bad_limit)]);
+    let (c, _) = client(&base);
+    let r = c.servers_public(0, None, 920587237, ServerOrder::BestLatency, true, 100, None).await;
+    assert!(matches!(r, Err(AppError::Invalid(m)) if m.starts_with("Pick an account to sort by")));
+    // Any other 400 stays a plain Roblox error.
+    let r = c.servers_public(0, None, 920587237, ServerOrder::OccupancyDesc, true, 100, None).await;
+    assert!(is_http(r.unwrap_err(), "400"));
+
+    // Code 7 means "guest" only on the server list.
+    let (base, _reqs) = serve(vec![reply("400 Bad Request", &[], &guest)]);
+    let (c, _) = client(&base);
+    assert!(is_http(c.presence(1, &Secret::new("OLD"), &[1]).await.unwrap_err(), "400"));
+}
+
+#[test]
+fn server_list_parsing_is_lenient() {
+    // A real page: guests get fps and friendCount but no ping; players / playerTokens ignored.
+    let list: ServerList = json(fixture("servers-v2-public-occupancyasc-limit100.json").as_bytes()).unwrap();
+    let rows = list.data.unwrap();
+    assert_eq!(rows.len(), 100);
+    let first = &rows[0];
+    assert_eq!((first.id.as_deref(), first.playing, first.max_players), (Some("037b10e2-cec9-45cd-a836-2929124af417"), Some(1), Some(35)));
+    assert_eq!((first.fps, first.ping, first.friend_count), (Some(60.008926), None, Some(0)));
+}
+
+#[tokio::test]
+async fn servers_public_drops_rows_without_id_or_counts() {
+    let body = r#"{"nextPageCursor":"","gameJoinRestricted":false,"data":[
+        {"id":"aaaaaaaa-0000-4000-8000-000000000001","maxPlayers":20,"playing":3,"fps":null,"ping":87,
+         "friendCount":2,"pingSignalLevel":"Low","isOfficiallyLicensed":true,"players":[{"id":1}]},
+        {"maxPlayers":20,"playing":3},
+        {"id":null,"maxPlayers":20,"playing":3},
+        {"id":"","maxPlayers":20,"playing":3},
+        {"id":"aaaaaaaa-0000-4000-8000-000000000002","playing":3},
+        {"id":"aaaaaaaa-0000-4000-8000-000000000003","maxPlayers":20},
+        {"id":"aaaaaaaa-0000-4000-8000-000000000004","maxPlayers":8,"playing":0}]}"#;
+    let (base, _reqs) = serve(vec![ok(body), ok(r#"{"data":null}"#)]);
+    let (c, _) = client(&base);
+    let page = c.servers_public(0, None, 920587237, ServerOrder::OccupancyDesc, false, 10, None).await.unwrap();
+    let full = GameServer {
+        id: "aaaaaaaa-0000-4000-8000-000000000001".into(),
+        playing: 3,
+        max_players: 20,
+        fps: None,
+        ping: Some(87),
+        friend_count: Some(2),
+    };
+    let bare = GameServer {
+        id: "aaaaaaaa-0000-4000-8000-000000000004".into(),
+        playing: 0,
+        max_players: 8,
+        fps: None,
+        ping: None,
+        friend_count: None,
+    };
+    assert_eq!(page, ServerPage { servers: vec![full, bare], next_cursor: None });
+    let empty = c.servers_public(0, None, 920587237, ServerOrder::OccupancyDesc, false, 10, None).await.unwrap();
+    assert_eq!(empty, ServerPage { servers: vec![], next_cursor: None });
 }

@@ -13,6 +13,7 @@ import { ServersView } from "./features/servers/ServersView";
 import { SettingsView, SETTINGS_SECTIONS } from "./features/settings/SettingsView";
 import { UnlockScreen, type LockReason } from "./features/vault/UnlockScreen";
 import { Icon } from "./ui/Icon";
+import { Divider, usePanelWidth } from "./ui/Resizer";
 import { TitleBar } from "./ui/TitleBar";
 import { friendly, toast, toastError, Toaster } from "./ui/Toast";
 
@@ -128,6 +129,7 @@ function Root() {
 }
 
 function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) {
+  const nav = usePanelWidth("nav", 208, 168, 320);
   const qc = useQueryClient();
   const accounts = useAccounts();
   const groups = useGroups();
@@ -222,7 +224,7 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
   };
   return (
     <div className="flex-1 flex min-h-0">
-      <nav aria-label="Sections" className="w-52 flex-none flex flex-col px-2 py-3 bg-panel border-r border-line">
+      <nav aria-label="Sections" style={{ width: nav.width }} className="flex-none flex flex-col px-2 py-3 bg-panel border-r border-line">
         <div className="flex flex-col gap-0.5">
           <button className="nav-item" aria-current={view === "accounts" ? "page" : undefined} onClick={showAll}>
             <Icon name="accounts" />
@@ -276,6 +278,7 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
           </div>
         </div>
       </nav>
+      <Divider panel={nav} side="left" label="Sidebar width" />
 
       {view === "accounts" ? (
         <AccountsView

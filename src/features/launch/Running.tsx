@@ -4,6 +4,7 @@ import { api, type AccountSummary, type Instance, type InstanceState, type Multi
 import { qk, useInstances, useMultiStatus } from "../../data";
 import { Switch } from "../../ui/controls";
 import { ConfirmDialog } from "../../ui/Dialog";
+import { Divider, usePanelWidth } from "../../ui/Resizer";
 import { Icon } from "../../ui/Icon";
 import { toastError } from "../../ui/Toast";
 import { accountName, Avatar, plural } from "../accounts/shared";
@@ -36,6 +37,7 @@ export function useNow(ms: number) {
 
 /** The Launch view's right column: the bulk launch, then clients RoALT started, newest first. */
 export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[]; onPick: (ids: number[]) => void }) {
+  const width = usePanelWidth("running", 400, 300, 720);
   const list = useInstances().data ?? [];
   const now = useNow(30_000);
   const [closing, setClosing] = useState<ReadonlySet<string>>(new Set());
@@ -72,7 +74,9 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
   };
 
   return (
-    <aside aria-label="Running clients" className="@container flex-[1_1_400px] min-w-0 max-w-[560px] flex flex-col bg-panel border-l border-line">
+    <>
+    <Divider panel={width} side="right" label="Running clients width" />
+    <aside aria-label="Running clients" style={{ width: width.width }} className="@container flex-none min-w-0 flex flex-col bg-panel border-l border-line">
       <BatchSection accounts={accounts} onPick={onPick} />
       <div className="flex flex-wrap items-center gap-2.5 px-5 pt-[18px] pb-2.5">
         <span className="label whitespace-nowrap">Running clients</span>
@@ -165,6 +169,7 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
         confirmLabel="Close all"
       />
     </aside>
+    </>
   );
 }
 

@@ -8,6 +8,7 @@ import { Icon } from "../../ui/Icon";
 import { toast } from "../../ui/Toast";
 import { DetailPanel } from "./DetailPanel";
 import { accountName, ago, Avatar, plural, Status } from "./shared";
+import { Divider, usePanelWidth } from "../../ui/Resizer";
 
 type Filter = "all" | "inGame" | "online" | "offline" | Exclude<AccountStatus, "valid"> | "fav";
 // The chips match what the Status column shows.
@@ -50,6 +51,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
   onAdd: () => void;
   onLaunch: (id: number) => void;
 }) {
+  const detail = usePanelWidth("detail", 340, 280, 560);
   const qc = useQueryClient();
   const update = useUpdateAccount();
   const setSettings = useSetSettings();
@@ -557,6 +559,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
         </footer>
       </main>
 
+      {current && <Divider panel={detail} side="right" label="Details width" />}
       {current && (
         <aside
           key={current.id}
@@ -564,7 +567,8 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
           // filtered list can't swap the panel to another account under the next click.
           onFocusCapture={() => setSelected(current.id)}
           aria-label="Account details"
-          className="scroll w-[clamp(280px,30vw,360px)] flex-none bg-panel border-l border-line">
+          style={{ width: detail.width }}
+          className="scroll flex-none bg-panel border-l border-line">
           <DetailPanel
             account={current}
             groups={groups}

@@ -299,7 +299,17 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between">
               <span className="label" id="launch-account-label">Accounts</span>
-              <span className="mono text-xs text-dim">{chosen.length} of {validIds.length} valid</span>
+              <span className="flex items-center gap-3">
+                <span className="mono text-xs text-dim">{chosen.length} of {validIds.length} valid</span>
+                {validIds.length > 1 && (
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => setPicked(chosen.length === validIds.length ? [] : validIds)}
+                  >
+                    {chosen.length === validIds.length ? "Clear" : "Select all"}
+                  </button>
+                )}
+              </span>
             </div>
             {accounts.length === 0 ? (
               <p className="text-dim">No accounts yet. Add one in Accounts.</p>

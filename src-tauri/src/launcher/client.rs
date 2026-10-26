@@ -99,9 +99,9 @@ mod tests {
     #[test]
     fn handler_command_lines() {
         let exe = |c: &str| handler_exe(c).map(|p| p.to_string_lossy().into_owned());
-        let roblox = r"C:\Users\n\AppData\Local\Roblox\Versions\version-9ac8595712b447a7\RobloxPlayerBeta.exe";
+        let roblox = r"C:\Users\you\AppData\Local\Roblox\Versions\version-9ac8595712b447a7\RobloxPlayerBeta.exe";
         assert_eq!(exe(&format!("\"{roblox}\" %1")).as_deref(), Some(roblox));
-        let bloxstrap = r"C:\Users\n\AppData\Local\Bloxstrap\Bloxstrap.exe";
+        let bloxstrap = r"C:\Users\you\AppData\Local\Bloxstrap\Bloxstrap.exe";
         assert_eq!(exe(&format!("  \"{bloxstrap}\" -player \"%1\"")).as_deref(), Some(bloxstrap));
         let fishstrap = r"C:\Program Files\Fishstrap\Fishstrap.EXE";
         assert_eq!(exe(&format!("{fishstrap} -player %1")).as_deref(), Some(fishstrap));

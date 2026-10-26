@@ -192,7 +192,7 @@ fn remove_old_db(data_dir: &Path, old: &Path) -> bool {
 fn main_window(app: &TauriApp, data_dir: &Path, theme: Theme) -> tauri::Result<()> {
     let bg = match theme {
         Theme::Light => Color(242, 243, 240, 255),
-        _ => Color(10, 11, 13, 255),
+        _ => Color(5, 5, 6, 255),
     };
     #[allow(unused_mut)]
     let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))

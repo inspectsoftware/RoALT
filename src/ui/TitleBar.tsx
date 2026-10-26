@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
+import { useIsFetching } from "@tanstack/react-query";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Icon, Logo } from "./Icon";
 
 /** Custom title bar (window decorations are off). Empty space drags; double-click maximizes. */
-export function TitleBar({ dark, onToggleTheme, onLock }: {
+export function TitleBar({ dark, onToggleTheme, onLock, onRefresh }: {
   dark: boolean;
   onToggleTheme?: () => void;
   onLock?: () => void;
+  onRefresh?: () => void;
 }) {
   const win = useMemo(() => getCurrentWindow(), []);
+  const fetching = useIsFetching() > 0;
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
@@ -23,6 +26,11 @@ export function TitleBar({ dark, onToggleTheme, onLock }: {
       <Logo />
       <span className="font-bold tracking-[0.02em]">RoALT</span>
       <div className="ml-auto flex items-center">
+        {onRefresh && (
+          <button className="wc" aria-label="Refresh" title="Refresh (F5)" onClick={onRefresh}>
+            <Icon name="refresh" className={fetching ? "spin" : ""} />
+          </button>
+        )}
         {onToggleTheme && (
           <button className="wc" aria-label={dark ? "Switch to light theme" : "Switch to dark theme"} title="Theme" onClick={onToggleTheme}>
             <span key={dark ? "d" : "l"} className="pop grid">

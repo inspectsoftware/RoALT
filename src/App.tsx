@@ -45,6 +45,9 @@ function Root() {
     for (const queryKey of [qk.accounts, qk.presence, ["info"], qk.favourites, qk.join, qk.privateServers]) qc.removeQueries({ queryKey });
   };
 
+  // Everything on screen asks again; the webview itself is never reloaded.
+  const refresh = () => void qc.invalidateQueries();
+
   const lock = () => {
     manualLockAt.current = Date.now();
     setLockReason("manual");
@@ -78,6 +81,7 @@ function Root() {
       const ctrl = e.ctrlKey || e.metaKey;
       const k = e.key.toLowerCase();
       if ((ctrl && k === "r") || e.key === "F5") e.preventDefault(); // never reload the webview
+      if (e.key === "F5" && unlocked) refresh();
       if (ctrl && k === "l" && unlocked && v?.mode === "master") {
         e.preventDefault();
         lock();
@@ -102,6 +106,7 @@ function Root() {
         dark={dark}
         onToggleTheme={s ? () => setSettings.mutate({ theme: dark ? "light" : "dark" }) : undefined}
         onLock={unlocked && v.mode === "master" ? lock : undefined}
+        onRefresh={unlocked ? refresh : undefined}
       />
       {failed ? (
         <div className="flex-1 grid place-items-center p-8">

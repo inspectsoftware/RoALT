@@ -23,13 +23,13 @@
 
 @layer base {
   :root {
-    --bg: #0a0b0d;
-    --panel: #111316;
-    --raised: #16191d;
-    --hover: #1a1e23;
-    --sel: #1e242c;
-    --line: #23272e;
-    --line-strong: #363c45;
+    --bg: #050506;
+    --panel: #0a0b0d;
+    --raised: #0f1114;
+    --hover: #14171b;
+    --sel: #191e25;
+    --line: #1b1e23;
+    --line-strong: #2b3038;
     --text: #eceef1;
     --dim: #9ba3ae;
     --accent: #c6f432;
@@ -44,7 +44,7 @@
     --on-ink: #0a0b0d;
     --focus: var(--accent);
     --shadow: 0 16px 40px rgb(0 0 0 / 0.45);
-    --backdrop: rgb(4 5 7 / 0.62);
+    --backdrop: rgb(0 0 0 / 0.7);
     --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
     color-scheme: dark;
   }

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type PointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type PointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type AccountStatus, type AccountSummary, type Density, type Group, type Presence, type VaultMode } from "../../api";
 import { groupColor, qk, setAccounts, usePresence, useSetSettings, useUpdateAccount } from "../../data";
@@ -6,6 +6,7 @@ import { Segmented } from "../../ui/controls";
 import { ConfirmDialog } from "../../ui/Dialog";
 import { Icon } from "../../ui/Icon";
 import { toast } from "../../ui/Toast";
+import { AccountMenu, type MenuAt } from "./AccountMenu";
 import { DetailPanel } from "./DetailPanel";
 import { accountName, ago, Avatar, plural, Status } from "./shared";
 import { Divider, usePanelWidth } from "../../ui/Resizer";
@@ -52,6 +53,8 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
   onLaunch: (id: number) => void;
 }) {
   const detail = usePanelWidth("detail", 340, 280, 560);
+  const [menu, setMenu] = useState<MenuAt | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
   const qc = useQueryClient();
   const update = useUpdateAccount();
   const setSettings = useSetSettings();
@@ -423,6 +426,11 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
                         data-selected={current?.id === a.id || undefined}
                         className={cls.filter(Boolean).join(" ")}
                         onClick={() => setSelected(a.id)}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          setSelected(a.id);
+                          setMenu({ account: a, x: e.clientX, y: e.clientY });
+                        }}
                       >
                         <td className="pl-3">
                           <div className="flex items-center gap-[5px]">
@@ -559,6 +567,14 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
         </footer>
       </main>
 
+      <AccountMenu
+        at={menu}
+        onClose={closeMenu}
+        selection={checkedIds}
+        onLaunch={onLaunch}
+        onValidate={(ids) => validate.mutate(ids)}
+        onRemove={askRemove}
+      />
       {current && <Divider panel={detail} side="right" label="Details width" />}
       {current && (
         <aside

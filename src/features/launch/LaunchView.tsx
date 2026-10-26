@@ -79,7 +79,8 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
   const favourites = useFavourites();
   const multi = useMultiStatus().data;
   const batch = useBulk().data;
-  const delayMs = useSettings().data?.launchDelayMs ?? 6000;
+  const settings = useSettings().data;
+  const delayMs = settings?.launchDelayMs ?? 6000;
   const setSettings = useSetSettings();
   const pasted = useRef(false);
   const [joinOpen, setJoinOpen] = useState(false);
@@ -362,6 +363,14 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
                 onChange={setSameServer}
               />
             )}
+            <span className="flex items-center gap-2.5" title="Relaunch a client Roblox disconnects (kicked, server shut down, connection lost) into the same target. Up to 3 tries.">
+              <Switch
+                label="Auto-rejoin"
+                checked={settings?.autoRejoin ?? false}
+                onChange={(autoRejoin) => setSettings.mutate({ autoRejoin })}
+              />
+              <span aria-hidden="true">Auto-rejoin</span>
+            </span>
           </div>
         )}
         <div className="flex flex-wrap items-center gap-3 px-6 py-3.5">

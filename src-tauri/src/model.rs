@@ -155,6 +155,11 @@ pub struct Settings {
     pub protect_shared_login: bool,
     /// Bulk launch: wait between two launches (±1 s jitter is added), 2 000..=60 000.
     pub launch_delay_ms: u32,
+    /// Relaunch a client Roblox disconnects (kicked, server shut down, connection lost; not the
+    /// player's own Leave or a sign-in elsewhere) into the same target, at most 3 tries in a row.
+    pub auto_rejoin: bool,
+    /// Closing the window hides it; the tray icon brings it back or quits.
+    pub close_to_tray: bool,
 }
 
 impl Default for Settings {
@@ -168,6 +173,8 @@ impl Default for Settings {
             multi_instance: false,
             protect_shared_login: true,
             launch_delay_ms: 6_000,
+            auto_rejoin: false,
+            close_to_tray: false,
         }
     }
 }
@@ -190,6 +197,10 @@ pub struct SettingsPatch {
     pub protect_shared_login: Option<bool>,
     #[ts(optional)]
     pub launch_delay_ms: Option<u32>,
+    #[ts(optional)]
+    pub auto_rejoin: Option<bool>,
+    #[ts(optional)]
+    pub close_to_tray: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
@@ -452,6 +463,8 @@ pub struct Instance {
     /// Why it ended or what went wrong: "Closed", "Replaced by another Roblox client",
     /// "Signed in as another account", "Roblox wants a human check", ...
     pub note: Option<String>,
+    /// How many auto-rejoins led to this client (0: launched by the user).
+    pub rejoins: u32,
 }
 
 #[derive(Serialize, TS, Clone, Debug, PartialEq)]
@@ -636,4 +649,38 @@ pub struct PrivateServerPage {
     pub next_cursor: Option<String>,
     /// Roblox says this account may not join servers of this game (`gameJoinRestricted`).
     pub join_restricted: bool,
+}
+
+// ---------- M7 ----------
+
+/// The Roblox client RoALT would start.
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RobloxClient {
+    /// None when Roblox isn't installed.
+    pub path: Option<String>,
+    /// A bootstrapper (e.g. Bloxstrap) handles launches.
+    pub bootstrapper: bool,
+}
+
+/// Where RoALT keeps its data.
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DataDir {
+    pub path: String,
+    /// `%LOCALAPPDATA%\RoALT` (not moved).
+    pub default: bool,
+    /// Set for test runs (`ROALT_DATA_DIR`): moving is not offered.
+    pub overridden: bool,
+}
+
+/// A message for the user from the backend (`app://notice`), shown as a toast.
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Notice {
+    pub error: bool,
+    pub message: String,
 }

@@ -8,6 +8,7 @@ import type { AccountSummary } from "./bindings/AccountSummary";
 import type { BulkProgress } from "./bindings/BulkProgress";
 import type { BulkRequest } from "./bindings/BulkRequest";
 import type { ConflictPolicy } from "./bindings/ConflictPolicy";
+import type { DataDir } from "./bindings/DataDir";
 import type { ErrorPayload } from "./bindings/ErrorPayload";
 import type { Favourite } from "./bindings/Favourite";
 import type { FavouriteInput } from "./bindings/FavouriteInput";
@@ -21,8 +22,10 @@ import type { JoinCandidate } from "./bindings/JoinCandidate";
 import type { LaunchInfo } from "./bindings/LaunchInfo";
 import type { LaunchTarget } from "./bindings/LaunchTarget";
 import type { MultiInstanceStatus } from "./bindings/MultiInstanceStatus";
+import type { Notice } from "./bindings/Notice";
 import type { ParsedInput } from "./bindings/ParsedInput";
 import type { PrivateServerPage } from "./bindings/PrivateServerPage";
+import type { RobloxClient } from "./bindings/RobloxClient";
 import type { ServerOrder } from "./bindings/ServerOrder";
 import type { ServerPage } from "./bindings/ServerPage";
 import type { Settings } from "./bindings/Settings";
@@ -34,7 +37,7 @@ import type { VaultStatus } from "./bindings/VaultStatus";
 export type {
   AccountInfo, AccountPresence, Headshot,
   Favourite, FavouriteInput, JoinCandidate, LaunchInfo, LaunchTarget, ParsedInput, UserRef,
-  Instance, MultiInstanceStatus, BulkProgress, BulkRequest, ServerOrder, ServerPage, GameInfo, PrivateServerPage,
+  Instance, MultiInstanceStatus, BulkProgress, BulkRequest, ServerOrder, ServerPage, GameInfo, PrivateServerPage, DataDir, Notice, RobloxClient,
   AccountPatch, AccountSummary, ConflictPolicy, ErrorPayload, Group, GroupInput,
   ImportReport, Settings, SettingsPatch, VaultMode, VaultStatus,
 };
@@ -132,6 +135,12 @@ export const api = {
   backupImport: (path: string, password: string, onConflict: ConflictPolicy) =>
     invoke<ImportReport>("backup_import", { path, password, onConflict }),
 
+  robloxClient: () => invoke<RobloxClient>("roblox_client"),
+  dataDirInfo: () => invoke<DataDir>("data_dir_info"),
+  dataDirOpen: () => invoke<void>("data_dir_open"),
+  /** Copies the database to `path` and restarts RoALT to use it (resolves only on failure). */
+  dataDirMove: (path: string) => invoke<void>("data_dir_move", { path }),
+
   settingsGet: () => invoke<Settings>("settings_get"),
   settingsSet: (patch: SettingsPatch) => invoke<Settings>("settings_set", { patch }),
 };
@@ -140,5 +149,6 @@ export const events = {
   onAccountsChanged: (f: () => void): Promise<UnlistenFn> => listen("accounts://changed", f),
   onVaultLocked: (f: () => void): Promise<UnlistenFn> => listen("vault://locked", f),
   onInstancesChanged: (f: () => void): Promise<UnlistenFn> => listen("instances://changed", f),
+  onNotice: (f: (n: Notice) => void): Promise<UnlistenFn> => listen<Notice>("app://notice", (e) => f(e.payload)),
   onBulkProgress: (f: (p: BulkProgress) => void): Promise<UnlistenFn> => listen<BulkProgress>("bulk://progress", (e) => f(e.payload)),
 };

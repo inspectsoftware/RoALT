@@ -14,4 +14,8 @@ startedAt: number, endedAt: number | null, viaBootstrapper: boolean,
  * Why it ended or what went wrong: "Closed", "Replaced by another Roblox client",
  * "Signed in as another account", "Roblox wants a human check", ...
  */
-note: string | null, };
+note: string | null, 
+/**
+ * How many auto-rejoins led to this client (0: launched by the user).
+ */
+rejoins: number, };

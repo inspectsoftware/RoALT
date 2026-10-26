@@ -22,6 +22,8 @@ pub struct LogFacts {
     pub in_game: bool,
     /// Disconnect / lost connection / kick after the latest join.
     pub disconnected: bool,
+    /// That disconnect was the player's own (`client_initiated`: Leave, or signed in elsewhere).
+    pub left: bool,
     /// `challengedByGcs`.
     pub challenged: bool,
     /// Closed because another client started (EventWaitResultUpdate then a close request).
@@ -45,6 +47,15 @@ const DISCONNECTS: [&str; 6] = [
     "Disconnected from server for reason",
     "Connection closed by server",
 ];
+
+/// The player's own disconnect, not to be rejoined: reason 285 (`DisconnectClientInitiated`:
+/// Leave, research M-logs) or 273 (the same account launched elsewhere: rejoining would kick
+/// that session). Only the message counts, not the timestamp/thread prefix before " [".
+fn client_initiated(line: &str) -> bool {
+    let msg = line.find(" [").map_or(line, |i| &line[i..]);
+    ["DisconnectClientInitiated", "Same account launched", "DuplicateLogin"].iter().any(|m| msg.contains(m))
+        || msg.split(|c: char| !c.is_ascii_digit()).any(|n| n == "285" || n == "273")
+}
 
 /// `%LOCALAPPDATA%\Roblox\logs`.
 pub fn logs_dir() -> Option<PathBuf> {
@@ -108,11 +119,13 @@ pub fn parse_line(line: &str, facts: &mut LogFacts) {
             facts.place_id = number_after(rest, " place ");
             facts.in_game = false;
             facts.disconnected = false;
+            facts.left = false;
         }
     } else if line.contains("[FLog::Network] Replicator created") || line.contains("[FLog::Network] serverId:") {
         facts.in_game = true;
     } else if DISCONNECTS.iter().any(|m| line.contains(m)) {
         facts.disconnected = true;
+        facts.left |= client_initiated(line);
     } else if line.contains("challengedByGcs") {
         facts.challenged = true;
     } else if line.contains("[FLog::GameJoinLoadTime] Report game_join_loadtime:") {
@@ -215,8 +228,11 @@ mod tests {
                 }
                 "join_loadtime" => want.user_id = Some(USER),
                 "replicator_created" => want.in_game = true,
-                "time_to_disconnect" | "client_disconnect_reason" | "lost_connection" | "server_closed_reason"
-                | "disconnection_notification" => want.disconnected = true,
+                "time_to_disconnect" | "lost_connection" | "server_closed_reason" | "disconnection_notification" => {
+                    want.disconnected = true
+                }
+                // Player: 285 (DisconnectClientInitiated): the player left.
+                "client_disconnect_reason" => (want.disconnected, want.left) = (true, true),
                 "singleton_event_signalled" => want.signalled = true,
                 // Alone, a close request is the user's tray Exit.
                 "close_main_window_request" | "update_required" | "tray_treatment" | "singleton_mutex_wait"
@@ -327,4 +343,23 @@ mod tests {
         assert!(f.disconnected);
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
+    #[test]
+    fn a_disconnect_the_player_started_is_told_apart() {
+        let kicked = parsed(&[&line("[FLog::Network] Sending disconnect with reason: 267")]);
+        assert!(kicked.disconnected && !kicked.left);
+        let shutdown = parsed(&[&line("[FLog::Network] Connection closed by server for reason: RCC: 288 (DisconnectServerShutdown)")]);
+        assert!(shutdown.disconnected && !shutdown.left);
+        for l in ["[FLog::Network] Disconnection Notification. Reason: 285", "Disconnected from server for reason: Player: 285 (DisconnectClientInitiated)"] {
+            let left = parsed(&[&line(l)]);
+            assert!(left.disconnected && left.left, "{l}");
+        }
+        assert!(!parsed(&[&line("[FLog::Network] Disconnection Notification. Reason: 2851")]).left);
+        let elsewhere = parsed(&[&line("[FLog::Network] Disconnection Notification. Reason: 273")]);
+        assert!(elsewhere.disconnected && elsewhere.left);
+        // A 285 in the timestamp, seconds or thread id is not the reason.
+        let prefixed = parsed(&["2026-10-17T18:16:31.285Z,285.100000,a285,6,Info [FLog::Network] Sending disconnect with reason: 267"]);
+        assert!(prefixed.disconnected && !prefixed.left);
+    }
 }
+

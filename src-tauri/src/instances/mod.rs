@@ -6,4 +6,5 @@ pub mod multi;
 pub mod process;
 mod tracker;
 
+pub mod rejoin;
 pub use tracker::{CHALLENGED, Tracker, WRONG_ACCOUNT};

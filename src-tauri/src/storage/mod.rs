@@ -84,6 +84,18 @@ impl Db {
         Ok(Db { conn: Mutex::new(conn) })
     }
 
+    /// A consistent copy of the open database, written to `path` with `VACUUM INTO` (compacted:
+    /// no freed pages come along), then `then` with the database still locked, so nothing is
+    /// written to it after the copy meanwhile. Fails when `path` exists and isn't empty.
+    pub fn copy_to<T>(&self, path: &Path, then: impl FnOnce() -> Result<T>) -> Result<T> {
+        let path = path.to_str().ok_or_else(|| AppError::Invalid("That folder's name can't be used.".into()))?;
+        let conn = self.conn();
+        conn.execute("VACUUM INTO ?1", [path])?;
+        let out = then();
+        drop(conn);
+        out
+    }
+
     fn conn(&self) -> MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -552,6 +564,26 @@ mod tests {
             assert_eq!(mode, "wal");
         }
         assert_eq!(Db::open(&path).unwrap().accounts().unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn copies_itself_while_open() {
+        let dir = std::env::temp_dir().join(format!("roalt-test-{}", uuid::Uuid::new_v4()));
+        let db = Db::open(&dir.join("roalt.db")).unwrap();
+        add(&db, 1);
+        add(&db, 2);
+        let copy = dir.join("moved").join("roalt.db");
+        std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
+        db.copy_to(&copy, || Ok(())).unwrap();
+        // The original keeps working; the copy has what it had then.
+        add(&db, 3);
+        let users = |db: &Db| db.accounts().unwrap().iter().map(|a| a.user_id).collect::<Vec<_>>();
+        assert_eq!(users(&Db::open(&copy).unwrap()), [1, 2]);
+        assert_eq!(users(&db), [1, 2, 3]);
+        // Never over an existing database.
+        assert!(db.copy_to(&copy, || Ok(())).is_err());
+        drop(db);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

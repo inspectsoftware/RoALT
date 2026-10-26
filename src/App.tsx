@@ -14,7 +14,7 @@ import { SettingsView, SETTINGS_SECTIONS } from "./features/settings/SettingsVie
 import { UnlockScreen, type LockReason } from "./features/vault/UnlockScreen";
 import { Icon } from "./ui/Icon";
 import { TitleBar } from "./ui/TitleBar";
-import { friendly, toastError, Toaster } from "./ui/Toast";
+import { friendly, toast, toastError, Toaster } from "./ui/Toast";
 
 /** Last applied theme, read before first paint so a light-theme start does not flash dark. */
 export const THEME_KEY = "roalt.theme";
@@ -60,6 +60,8 @@ function Root() {
         for (const queryKey of [qk.instances, qk.multi]) qc.invalidateQueries({ queryKey });
       }),
       events.onBulkProgress((p) => qc.setQueryData(qk.bulk, p)),
+      // Errors stay until dismissed: the window may have been hidden in the tray.
+      events.onNotice((n) => toast(n.message, n.error ? "error" : "ok", n.error)),
       events.onVaultLocked(() => {
         if (Date.now() - manualLockAt.current > 3000) setLockReason("idle");
         markLocked();
@@ -150,11 +152,31 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
     known.current = ids;
   }, [accounts.data, qc]);
 
+  // Opens on the Launch target's game until a game is loaded here.
+  const openServers = () => {
+    const p = draft.parsed?.text === draft.text ? draft.parsed.value : null;
+    const t = p?.kind === "target" ? p.target : null;
+    if (serversPlace === null && t && "placeId" in t) setServersPlace(t.placeId);
+    setView("servers");
+  };
+
+  // Re-bound each render: Ctrl+3 needs the current draft. Alt is left alone (AltGr types characters).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || document.querySelector("dialog[open]")) return;
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || document.querySelector("dialog[open]")) return;
       const k = e.key.toLowerCase();
-      if (k === "n") {
+      // By key position, so Ctrl+1 works on layouts where the digits need Shift.
+      const views: Record<string, () => void> = {
+        Digit1: () => setView("accounts"),
+        Digit2: () => setView("launch"),
+        Digit3: openServers,
+        Digit4: () => setView("settings"),
+      };
+      const go = views[e.code];
+      if (go) {
+        e.preventDefault();
+        go();
+      } else if (k === "n") {
         e.preventDefault();
         setAdding(true);
       } else if (k === "f") {
@@ -165,7 +187,7 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  });
 
   const failed = accounts.error ?? groups.error;
   if (failed)
@@ -193,14 +215,6 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
     if (valid.length) setPicked(valid);
     setView("launch");
   };
-  // Opens on the Launch target's game until a game is loaded here.
-  const openServers = () => {
-    const p = draft.parsed?.text === draft.text ? draft.parsed.value : null;
-    const t = p?.kind === "target" ? p.target : null;
-    if (serversPlace === null && t && "placeId" in t) setServersPlace(t.placeId);
-    setView("servers");
-  };
-
   return (
     <div className="flex-1 flex min-h-0">
       <nav aria-label="Sections" className="w-52 flex-none flex flex-col px-2 py-3 bg-panel border-r border-line">

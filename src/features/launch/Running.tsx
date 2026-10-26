@@ -116,6 +116,12 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
                       <span className="flex items-center gap-2 min-w-0 font-sans">
                         {a && <Avatar account={a} size={20} />}
                         <span className="truncate">{name}</span>
+                        {i.rejoins > 0 && (
+                          <span className="mono flex-none text-dim" title={`Rejoined ${plural(i.rejoins, "time")}`}>
+                            <span aria-hidden="true">↻{i.rejoins}</span>
+                            <span className="sr-only">, rejoined {plural(i.rejoins, "time")}</span>
+                          </span>
+                        )}
                       </span>
                     </td>
                     <td className="pr-2 py-1.5">

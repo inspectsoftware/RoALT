@@ -8,6 +8,8 @@
 // A bulk launch runs on timers too; "AFK 1" fails in it the same way and the batch goes on.
 // Servers: place 1 doesn't exist; Mega Obby (7719004215) sells no private servers; "Builder" may
 // not join private servers. Without an account the public list allows 3 requests a minute, as Roblox does.
+// "Alt 02"'s first client is kicked 20 s into its game; with auto-rejoin on it is closed and comes back once.
+// Moving the data folder to a path containing "bad" fails as a folder that already has a RoALT database.
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type {
@@ -58,7 +60,7 @@ let accounts: AccountSummary[] = seed.map(([alias, displayName, username, userId
 
 let settings: Settings = {
   theme: "dark", density: "detailed", autoLockMinutes: 15, clipboardClearSeconds: 30, cacheMinutes: 10,
-  multiInstance: false, protectSharedLogin: true, launchDelayMs: 6000,
+  multiInstance: false, protectSharedLogin: true, launchDelayMs: 6000, autoRejoin: false, closeToTray: false,
 };
 // Instances: a stranger client blocks multi-instance until "Close Roblox".
 let strangerRunning = true;
@@ -90,12 +92,12 @@ function endInstance(id: string, note: string) {
   i.note = note;
   instancesChanged();
 }
-function track(accountId: number, pid: number, target: LaunchTarget, placeId: number | null, viaBootstrapper: boolean) {
+function track(accountId: number, pid: number, target: LaunchTarget, placeId: number | null, viaBootstrapper: boolean, rejoins = 0) {
   // Without the lock a new client replaces the running one, as Roblox does.
   if (!lockHeld) for (const old of instances) endInstance(old.id, "Replaced by another Roblox client");
   const i: Instance = {
     id: crypto.randomUUID(), accountId, pid, state: "starting", target, placeId, jobId: null,
-    startedAt: Date.now(), endedAt: null, viaBootstrapper, note: null,
+    startedAt: Date.now(), endedAt: null, viaBootstrapper, note: null, rejoins,
   };
   instances.push(i);
   if (!lockHeld) eventHolder = i.id;
@@ -103,7 +105,26 @@ function track(accountId: number, pid: number, target: LaunchTarget, placeId: nu
   const step = (ms: number, f: () => void) => setTimeout(() => { if (i.state !== "exited") { f(); instancesChanged(); } }, ms);
   step(1500, () => { i.state = "joining"; });
   step(4000, () => { i.state = "inGame"; i.jobId = target.kind === "server" ? target.jobId : crypto.randomUUID(); i.placeId ??= 1818; });
+  if (accountId === 3 && rejoins === 0) setTimeout(() => kick(i), 24_000);
   return i;
+}
+/** As instances::rejoin: a disconnected client is closed after the launch delay and the same
+ * account launched into the same target again. */
+function kick(i: Instance) {
+  if (i.state === "exited") return;
+  i.state = "disconnected";
+  instancesChanged();
+  if (!settings.autoRejoin) return;
+  setTimeout(() => {
+    const a = find(i.accountId);
+    if (i.state !== "disconnected") return;
+    const busy = instances.some((x) => x.id !== i.id && x.accountId === i.accountId && x.state !== "exited" && x.state !== "disconnected");
+    if (!a || !settings.autoRejoin || (batch && !batch.done) || busy) return;
+    endInstance(i.id, "Closed");
+    void emit("app://notice", { error: false, message: `${a.alias || a.displayName} was disconnected and is rejoining.` });
+    retakeLock();
+    track(a.id, 14000 + Math.floor(Math.random() * 9000), i.target, i.placeId, i.viaBootstrapper, i.rejoins + 1);
+  }, settings.launchDelayMs);
 }
 const vault = { mode: "master" as VaultMode, locked: false, password: "password" };
 const FAKE_COOKIE = "_|WARNING:-DO-NOT-SHARE-THIS.--DEV-PREVIEW-FAKE-VALUE|_" + "0F1E2D3C4B5A69788796A5B4C3D2E1F0".repeat(6);
@@ -111,6 +132,7 @@ const FAKE_COOKIE = "_|WARNING:-DO-NOT-SHARE-THIS.--DEV-PREVIEW-FAKE-VALUE|_" + 
 type Args = Record<string, any>;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const fail = (kind: string, message: string) => Promise.reject({ kind, message });
+const MOVE_BUSY = "Wait for the running launch, batch or auto-rejoin to finish, then move the data folder.";
 const changed = () => void emit("accounts://changed");
 const find = (id: number) => accounts.find((a) => a.id === id);
 
@@ -707,6 +729,19 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       retakeLock();
       return multiStatus();
 
+    case "roblox_client":
+      return { path: "C:\\Users\\you\\AppData\\Local\\Roblox\\Versions\\version-5e1f0c9a7d3b4e21\\RobloxPlayerBeta.exe", bootstrapper: false };
+    case "data_dir_info":
+      return { path: "C:\\Users\\you\\AppData\\Local\\RoALT", default: true, overridden: false };
+    case "data_dir_open":
+      return null;
+    case "data_dir_move":
+      await sleep(1200);
+      if (batch && !batch.done) return fail("invalid", MOVE_BUSY);
+      if (/bad/i.test(args.path)) return fail("invalid", "That folder already has a RoALT database. Pick another one.");
+      location.reload();
+      return new Promise(() => {});
+
     case "settings_get":
       return { ...settings };
     case "settings_set":
@@ -716,7 +751,7 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "plugin:dialog|save":
       return `C:\\Users\\you\\Documents\\${args.options?.defaultPath ?? "backup.roalt"}`;
     case "plugin:dialog|open":
-      return "C:\\Users\\you\\Documents\\RoALT-backup-2026-10-01.roalt";
+      return args.options?.directory ? "D:\\RoALT data" : "C:\\Users\\you\\Documents\\RoALT-backup-2026-10-01.roalt";
     case "plugin:window|is_maximized":
       return false;
     default:

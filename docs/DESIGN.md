@@ -276,8 +276,12 @@ Copy user ID / username and "open profile" stay in the UI (clipboard API, opener
   mismatch in the log, a locked vault or multi-instance turned off (the accounts not yet launched are
   cancelled and can be picked again in one click); cancel stops after the current step.
 - **Close:** WM_CLOSE twice (the client may show a leave prompt), then TerminateProcess after a few seconds.
-- **Auto-rejoin:** an instance that exits without RoALT closing it, and was not replaced by Roblox's own
-  update or tray handover, relaunches into the same target after the stagger, at most 3 tries.
+- **Auto-rejoin:** a client Roblox disconnects (kicked, server shut down, connection lost: a disconnect
+  line in its log whose reason isn't the player's own Leave, 285, or the same account launched elsewhere, 273,
+  which a rejoin would kick) is closed after the stagger and its account relaunched into the same target, at
+  most 3 tries in a row (a client that stays in a game for 5 minutes starts the count over). A plain exit is not rejoined: closing Roblox's
+  window leaves no trace in the log, so it can't be told apart from a crash, and a kicked client stays open
+  on its error dialog anyway.
 
 Rate limits: one queue per route, driven by Roblox's `x-ratelimit-limit/remaining/reset` headers (windows
 are aligned to the clock minute); 429 waits for `x-ratelimit-reset` (Retry-After is shorter than the real

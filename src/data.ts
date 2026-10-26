@@ -19,6 +19,8 @@ export const qk = {
   game: (placeId: number | null) => ["game", placeId],
   servers: ["servers"],
   privateServers: ["privateServers"],
+  client: ["client"],
+  dataDir: ["dataDir"],
 } as const;
 
 export const queryClient = new QueryClient({

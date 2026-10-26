@@ -92,7 +92,6 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
     setMoving(true);
     try {
       await api.dataDirMove(movePath);
-      await api.appRestart();
     } catch (e) {
       toastError(e);
       setMoving(false);
@@ -322,8 +321,9 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
         title="Move data folder?"
         text={
           <>
-            RoALT copies its data to <span className="mono text-text break-all">{movePath}</span> and restarts to use it. The old
-            copy is removed after the restart.
+            RoALT copies its database to <span className="mono text-text break-all">{movePath}</span> and restarts to use it. The
+            old database is deleted after the restart. Logs and the app's browser data stay in the old folder, so the theme and
+            other view preferences reset.
           </>
         }
         confirmLabel={moving ? "Moving…" : "Move and restart"}

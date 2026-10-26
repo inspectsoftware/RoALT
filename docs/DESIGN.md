@@ -277,8 +277,9 @@ Copy user ID / username and "open profile" stay in the UI (clipboard API, opener
   cancelled and can be picked again in one click); cancel stops after the current step.
 - **Close:** WM_CLOSE twice (the client may show a leave prompt), then TerminateProcess after a few seconds.
 - **Auto-rejoin:** a client Roblox disconnects (kicked, server shut down, connection lost: a disconnect
-  line in its log whose reason isn't the player's own Leave, 285) is closed after the stagger and its account
-  relaunched into the same target, at most 3 tries in a row. A plain exit is not rejoined: closing Roblox's
+  line in its log whose reason isn't the player's own Leave, 285, or the same account launched elsewhere, 273,
+  which a rejoin would kick) is closed after the stagger and its account relaunched into the same target, at
+  most 3 tries in a row (a client that stays in a game for 5 minutes starts the count over). A plain exit is not rejoined: closing Roblox's
   window leaves no trace in the log, so it can't be told apart from a crash, and a kicked client stays open
   on its error dialog anyway.
 

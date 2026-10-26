@@ -9,7 +9,7 @@
 // Servers: place 1 doesn't exist; Mega Obby (7719004215) sells no private servers; "Builder" may
 // not join private servers. Without an account the public list allows 3 requests a minute, as Roblox does.
 // "Alt 02"'s first client is kicked 20 s into its game; with auto-rejoin on it is closed and comes back once.
-// Moving the data folder to a path containing "bad" fails.
+// Moving the data folder to a path containing "bad" fails as a folder that already has a RoALT database.
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type {
@@ -132,6 +132,7 @@ const FAKE_COOKIE = "_|WARNING:-DO-NOT-SHARE-THIS.--DEV-PREVIEW-FAKE-VALUE|_" + 
 type Args = Record<string, any>;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const fail = (kind: string, message: string) => Promise.reject({ kind, message });
+const MOVE_BUSY = "Wait for the running launch, batch or auto-rejoin to finish, then move the data folder.";
 const changed = () => void emit("accounts://changed");
 const find = (id: number) => accounts.find((a) => a.id === id);
 
@@ -736,10 +737,10 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       return null;
     case "data_dir_move":
       await sleep(1200);
-      return /bad/i.test(args.path) ? fail("invalid", "That folder already has RoALT data. Pick an empty folder.") : null;
-    case "app_restart":
+      if (batch && !batch.done) return fail("invalid", MOVE_BUSY);
+      if (/bad/i.test(args.path)) return fail("invalid", "That folder already has a RoALT database. Pick another one.");
       location.reload();
-      return null;
+      return new Promise(() => {});
 
     case "settings_get":
       return { ...settings };

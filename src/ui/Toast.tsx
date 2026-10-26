@@ -22,11 +22,12 @@ function dismiss(id: number) {
   setTimeout(() => publish(items.filter((t) => t.id !== id)), 200);
 }
 
-/** Shows a short message bottom-right. Callable from anywhere, including outside React. */
-export function toast(text: string, tone: Tone = "ok") {
+/** Shows a short message bottom-right. Callable from anywhere, including outside React. A sticky
+ *  one stays until dismissed. */
+export function toast(text: string, tone: Tone = "ok", sticky = false) {
   const id = ++nextId;
   publish([...items.slice(-3), { id, text, tone }]);
-  setTimeout(() => dismiss(id), tone === "error" ? 7000 : 4000);
+  if (!sticky) setTimeout(() => dismiss(id), tone === "error" ? 7000 : 4000);
 }
 
 const FRIENDLY: Record<string, string> = {

@@ -16,7 +16,8 @@ static TURN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Called by the tracker loop after each poll with what `take_rejoins` returned. When
 /// auto-rejoin is off, does nothing. Otherwise, per rejoin, on the async runtime: wait the
-/// launch delay; drop it silently when the client got back into a game meanwhile (Reconnect);
+/// launch delay; drop it silently when it is no longer a rejoin case (`still_wants_rejoin`:
+/// back in a game, closed by the user, cleared); mark it in flight (`Bulk::begin_rejoin`);
 /// skip it (logged, plus an `app://notice`) when auto-rejoin was turned off meanwhile, the
 /// vault is locked, a batch is running, the account is gone, is no longer the same user or its
 /// cookie isn't valid, or the account has another client starting, joining or in game; else
@@ -41,13 +42,15 @@ async fn rejoin(app: &AppHandle, r: Rejoin, user_id: Option<i64>) {
     let _turn = TURN.lock().await;
     let s = app.state::<App>();
     tokio::time::sleep(jittered(s.db.settings().map_or(6_000, |v| v.launch_delay_ms))).await;
-    // Back in a game (the player pressed Reconnect): nothing to do.
-    if s.tracker.get(&r.from).is_some_and(|i| !matches!(i.state, InstanceState::Disconnected | InstanceState::Exited)) {
+    // Back in a game (the player pressed Reconnect), closed by the user or cleared: nothing to do.
+    if !s.tracker.still_wants_rejoin(&r.from) {
         return;
     }
     let account = s.db.account(r.account_id).ok().filter(|a| Some(a.user_id) == user_id);
     let name = account.as_ref().map_or_else(|| "An account".to_owned(), name_of);
-    if let Some(why) = skip_reason(&s, &r, account.as_ref()) {
+    // Until the launch is done, batches and single launches wait (DESIGN §6: one at a time).
+    let busy = s.bulk.begin_rejoin();
+    if let Some(why) = skip_reason(&s, &r, account.as_ref(), busy.is_none()) {
         log::info!("auto-rejoin of instance {} skipped: {why}", r.from);
         notice(app, false, format!("{name} wasn't rejoined: {why}."));
         return;
@@ -79,8 +82,8 @@ async fn rejoin(app: &AppHandle, r: Rejoin, user_id: Option<i64>) {
 }
 
 /// Why the rejoin can't go ahead now (None: launch it). `account` is None when it was removed
-/// or its id now belongs to another user.
-fn skip_reason(s: &App, r: &Rejoin, account: Option<&AccountSummary>) -> Option<&'static str> {
+/// or its id now belongs to another user; `batch`: a batch is running.
+fn skip_reason(s: &App, r: &Rejoin, account: Option<&AccountSummary>, batch: bool) -> Option<&'static str> {
     let busy = |i: &Instance| {
         i.id != r.from
             && i.account_id == r.account_id
@@ -91,7 +94,7 @@ fn skip_reason(s: &App, r: &Rejoin, account: Option<&AccountSummary>) -> Option<
         Some("auto-rejoin was turned off")
     } else if s.vault.is_locked() {
         Some("the vault is locked")
-    } else if s.bulk.running() {
+    } else if batch {
         Some("a batch is running")
     } else if account.is_none() {
         Some("it was removed")

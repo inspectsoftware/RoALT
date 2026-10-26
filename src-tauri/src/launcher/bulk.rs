@@ -32,7 +32,7 @@
 //! 5. Every change emits `bulk://progress` with the whole `BulkProgress`, and `Bulk` keeps the
 //!    latest copy for `bulk_current`.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -54,6 +54,7 @@ const EVENT: &str = "bulk://progress";
 const MIN_DELAY: u32 = 2_000;
 const MAX_DELAY: u32 = 60_000;
 const CANCELLED: &str = "Cancelled";
+const REJOINING: &str = "A rejoin is in progress, try again in a moment.";
 /// How often a wait looks at the clients and the cancel flag.
 const TICK: Duration = Duration::from_millis(500);
 const BIND_WAIT: Duration = Duration::from_secs(30);
@@ -63,6 +64,25 @@ const SETTLE_WAIT: Duration = Duration::from_secs(120);
 /// The running or last batch.
 pub struct Bulk {
     inner: Mutex<Option<Batch>>,
+    /// Auto-rejoins closing or launching (set and checked under `inner`'s lock, so a batch and
+    /// a rejoin never overlap).
+    rejoining: AtomicUsize,
+    /// Launches in flight (`commands::launch_tracked`).
+    launches: AtomicUsize,
+}
+
+/// Holds a count of `Bulk` up while alive.
+pub struct Busy<'a>(&'a AtomicUsize);
+
+impl Drop for Busy<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+fn busy(n: &AtomicUsize) -> Busy<'_> {
+    n.fetch_add(1, Ordering::SeqCst);
+    Busy(n)
 }
 
 struct Batch {
@@ -72,7 +92,7 @@ struct Batch {
 
 impl Bulk {
     pub fn new() -> Bulk {
-        Bulk { inner: Mutex::new(None) }
+        Bulk { inner: Mutex::new(None), rejoining: AtomicUsize::new(0), launches: AtomicUsize::new(0) }
     }
 
     /// A copy of the running or last batch.
@@ -83,6 +103,33 @@ impl Bulk {
     /// A batch is still running.
     pub fn running(&self) -> bool {
         self.batch().as_ref().is_some_and(|b| !b.progress.done)
+    }
+
+    /// Marks an auto-rejoin in flight until the guard drops; None while a batch runs.
+    pub fn begin_rejoin(&self) -> Option<Busy<'_>> {
+        let batch = self.batch();
+        (!batch.as_ref().is_some_and(|b| !b.progress.done)).then(|| busy(&self.rejoining))
+    }
+
+    /// Marks a launch in flight until the guard drops.
+    pub fn begin_launch(&self) -> Busy<'_> {
+        busy(&self.launches)
+    }
+
+    /// Why a single launch can't start now: a batch or an auto-rejoin is running.
+    pub fn check_single_launch(&self) -> Result<()> {
+        if self.running() {
+            Err(AppError::Invalid("A batch is still running.".into()))
+        } else if self.rejoining.load(Ordering::SeqCst) > 0 {
+            Err(AppError::Invalid(REJOINING.into()))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// A batch, launch or auto-rejoin is running.
+    pub fn any_busy(&self) -> bool {
+        self.running() || self.rejoining.load(Ordering::SeqCst) > 0 || self.launches.load(Ordering::SeqCst) > 0
     }
 
     /// Asks the running batch to stop after its current step. `NotFound` when `batch_id` isn't
@@ -114,6 +161,7 @@ impl Default for Bulk {
 /// - an id isn't a stored account with a valid cookie → `Invalid("<name> can't launch: ...")`
 ///   (`NotFound` for an unknown id);
 /// - a batch is still running → `Invalid("A batch is already running.")`;
+/// - an auto-rejoin is closing or launching → `Invalid("A rejoin is in progress, ...")`;
 /// - an account already has a client starting, joining or in game → `Invalid`;
 /// - more than one account while multi-instance isn't active (after trying to take it, see
 ///   `commands::retake_multi`) → `Invalid("Turn on multi-instance to launch several accounts.")`
@@ -163,6 +211,9 @@ pub fn start(app: AppHandle, req: BulkRequest) -> Result<String> {
         let mut batch = s.bulk.batch();
         if batch.as_ref().is_some_and(|b| !b.progress.done) {
             return Err(AppError::Invalid("A batch is already running.".into()));
+        }
+        if s.bulk.rejoining.load(Ordering::SeqCst) > 0 {
+            return Err(AppError::Invalid(REJOINING.into()));
         }
         *batch = Some(Batch { progress: progress.clone(), cancel: cancel.clone() });
     }
@@ -675,6 +726,25 @@ mod tests {
         assert_eq!(stage_of(&instance(Exited, None)), failed("Closed"));
         assert_eq!(stage_of(&instance(Exited, Some("Closed unexpectedly"))), failed("Closed unexpectedly"));
         assert_eq!(stage_of(&instance(Disconnected, Some("Roblox wants a human check"))), failed("Roblox wants a human check"));
+    }
+
+    #[test]
+    fn a_rejoin_holds_off_single_launches_and_waits_for_a_batch() {
+        let b = Bulk::new();
+        assert!(b.check_single_launch().is_ok() && !b.any_busy());
+        let launch = b.begin_launch();
+        assert!(b.any_busy() && b.check_single_launch().is_ok());
+        drop(launch);
+        let rejoin = b.begin_rejoin().unwrap();
+        assert!(matches!(b.check_single_launch(), Err(AppError::Invalid(m)) if m == REJOINING));
+        assert!(b.any_busy());
+        drop(rejoin);
+        assert!(b.check_single_launch().is_ok() && !b.any_busy());
+
+        let req = BulkRequest { account_ids: vec![1], target: LaunchTarget::Place { place_id: 1, launch_data: None }, delay_ms: 0, same_server: SameServer::PickFirst, favourite_id: None };
+        let progress = new_progress("b".into(), &req, &[Account { id: 1, user_id: 1, name: "A".into() }]);
+        *b.batch() = Some(Batch { progress, cancel: Arc::new(AtomicBool::new(false)) });
+        assert!(b.begin_rejoin().is_none() && b.any_busy());
     }
 
     #[test]

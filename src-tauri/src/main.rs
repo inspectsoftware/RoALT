@@ -55,7 +55,7 @@ impl App {
 
 pub const DB_FILE: &str = "roalt.db";
 /// The database and its journal: all a data folder move ever deletes, from the old folder.
-const DB_FILES: [&str; 3] = [DB_FILE, "roalt.db-wal", "roalt.db-shm"];
+pub const DB_FILES: [&str; 3] = [DB_FILE, "roalt.db-wal", "roalt.db-shm"];
 const LOCATION: &str = "location.json";
 
 /// `%LOCALAPPDATA%\RoALT\location.json`: where the data folder was moved to (and from, until
@@ -79,12 +79,12 @@ pub fn data_dir_overridden() -> bool {
 }
 
 /// `ROALT_DATA_DIR` (test runs), else the folder `%LOCALAPPDATA%\RoALT\location.json` names
-/// (`dataDir`, when it holds a roalt.db), else `%LOCALAPPDATA%\RoALT`. After a move, also the
-/// folder it left (`movedFrom`): `init` deletes its database files once the new database has
-/// opened, then drops `movedFrom`.
-fn data_dir() -> (PathBuf, Option<PathBuf>) {
+/// (`dataDir`), else `%LOCALAPPDATA%\RoALT`. After a move, also the folder it left
+/// (`movedFrom`): `init` deletes its database files once the new database has opened, then
+/// drops `movedFrom`. Err: the moved folder isn't available (a message for `fatal`).
+fn data_dir() -> std::result::Result<(PathBuf, Option<PathBuf>), String> {
     if let Some(d) = std::env::var_os("ROALT_DATA_DIR") {
-        return (d.into(), None);
+        return Ok((d.into(), None));
     }
     let default = default_dir();
     let json = std::fs::read_to_string(default.join(LOCATION)).ok();
@@ -92,11 +92,25 @@ fn data_dir() -> (PathBuf, Option<PathBuf>) {
 }
 
 /// The folder location.json points at, with `movedFrom`: its `dataDir` when that is a full
-/// path holding a roalt.db; else `default`. Missing or malformed JSON counts as no move.
-fn chosen_dir(default: PathBuf, json: Option<&str>) -> (PathBuf, Option<PathBuf>) {
+/// path; else `default`. Missing or malformed JSON counts as no move. A moved folder without
+/// a roalt.db (a drive not connected) is an error, not a fresh empty vault in `default`.
+fn chosen_dir(default: PathBuf, json: Option<&str>) -> std::result::Result<(PathBuf, Option<PathBuf>), String> {
     match json.and_then(|j| serde_json::from_str::<Location>(j).ok()) {
-        Some(l) if l.data_dir.is_absolute() && l.data_dir.join(DB_FILE).is_file() => (l.data_dir, l.moved_from),
-        _ => (default, None),
+        Some(l) if l.data_dir.is_absolute() => {
+            if l.data_dir.join(DB_FILE).is_file() {
+                Ok((l.data_dir, l.moved_from))
+            } else if same_dir(&l.data_dir, &default) {
+                Ok((default, None))
+            } else {
+                Err(format!(
+                    "RoALT's data folder {} isn't available (no {DB_FILE}). Connect that drive and start RoALT again, \
+                     or delete {} to start fresh in the default folder.",
+                    l.data_dir.display(),
+                    default.join(LOCATION).display()
+                ))
+            }
+        }
+        _ => Ok((default, None)),
     }
 }
 
@@ -145,27 +159,34 @@ pub fn move_target(current: &Path, path: &str) -> Result<PathBuf> {
 }
 
 /// The moved database opened: the old folder's database files go and location.json forgets
-/// the old folder.
+/// the old folder (kept while a file couldn't be deleted, so the next start tries again).
 fn finish_move(data_dir: &Path, old: &Path) {
-    remove_old_db(data_dir, old);
+    if !remove_old_db(data_dir, old) {
+        return;
+    }
     if let Err(e) = write_location(&Location { data_dir: data_dir.to_owned(), moved_from: None }) {
         log::warn!("could not update {LOCATION}: {e}");
     }
 }
 
 /// Deletes roalt.db and its journal files from `old`: nothing else, and nothing when `old` is
-/// the folder in use.
-fn remove_old_db(data_dir: &Path, old: &Path) {
+/// the folder in use. True when none of them is left there.
+fn remove_old_db(data_dir: &Path, old: &Path) -> bool {
     if same_dir(old, data_dir) {
-        return;
+        return true;
     }
+    let mut gone = true;
     for f in DB_FILES {
         match std::fs::remove_file(old.join(f)) {
             Ok(()) => log::info!("deleted {f} from the old data folder {}", old.display()),
             Err(e) if e.kind() == ErrorKind::NotFound => {}
-            Err(e) => log::warn!("could not delete {f} from the old data folder {}: {e}", old.display()),
+            Err(e) => {
+                log::warn!("could not delete {f} from the old data folder {}: {e}", old.display());
+                gone = false;
+            }
         }
     }
+    gone
 }
 
 fn main_window(app: &TauriApp, data_dir: &Path, theme: Theme) -> tauri::Result<()> {
@@ -203,8 +224,11 @@ fn spawn_auto_lock(handle: AppHandle) {
                 continue;
             }
             // Using a Roblox window (signing in, a session) is activity too: its cookie is
-            // encrypted when it closes, which needs the vault open.
-            if handle.webview_windows().keys().any(|l| l.starts_with("session-") || l.starts_with("login-")) {
+            // encrypted when it closes, which needs the vault open. So is a client auto-rejoin
+            // follows: rejoining needs its cookie.
+            if handle.webview_windows().keys().any(|l| l.starts_with("session-") || l.starts_with("login-"))
+                || (s.tracker.any_running() && s.db.settings().is_ok_and(|v| v.auto_rejoin))
+            {
                 s.vault.touch();
                 continue;
             }
@@ -302,7 +326,7 @@ fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
 
 fn main() {
     webview::clear_webview2_env();
-    let (data_dir, moved_from) = data_dir();
+    let (data_dir, moved_from) = data_dir().unwrap_or_else(|e| fatal(&e));
     if let Err(e) = std::fs::create_dir_all(&data_dir) {
         fatal(&format!("RoALT can't create its data folder {}: {e}", data_dir.display()));
     }
@@ -373,7 +397,6 @@ fn main() {
             commands::data_dir_info,
             commands::data_dir_open,
             commands::data_dir_move,
-            commands::app_restart,
             commands::private_servers_list,
             commands::groups_list,
             commands::group_save,
@@ -417,15 +440,20 @@ mod tests {
         let (default, moved, empty) = (tmp.join("default"), tmp.join("moved"), tmp.join("empty"));
         touch(&moved.join("roalt.db"));
         std::fs::create_dir_all(&empty).unwrap();
-        let pick = |j: Option<&str>| chosen_dir(default.clone(), j);
+        let pick = |j: Option<&str>| chosen_dir(default.clone(), j).unwrap();
 
         assert_eq!(pick(None), (default.clone(), None));
         for bad in ["", "{", "[]", "null", r#"{"dataDir": 5}"#, r#"{"movedFrom": "C:\\x"}"#] {
             assert_eq!(pick(Some(bad)), (default.clone(), None), "{bad}");
         }
-        assert_eq!(pick(Some(&json(&empty, Some(&default)))), (default.clone(), None));
-        assert_eq!(pick(Some(&json(&tmp.join("gone"), None))), (default.clone(), None));
         assert_eq!(pick(Some(r#"{"dataDir": "relative\\moved"}"#)), (default.clone(), None));
+        // Moved back to the default folder, which then lost its database: a fresh start there.
+        assert_eq!(pick(Some(&json(&default, Some(&moved)))), (default.clone(), None));
+        // A moved folder without a database (a drive not connected) is no fresh start.
+        for gone in [empty.clone(), tmp.join("gone")] {
+            let err = chosen_dir(default.clone(), Some(&json(&gone, Some(&default)))).unwrap_err();
+            assert!(err.contains(&gone.display().to_string()) && err.contains(LOCATION), "{err}");
+        }
 
         assert_eq!(pick(Some(&json(&moved, None))), (moved.clone(), None));
         assert_eq!(pick(Some(&json(&moved, Some(&default)))), (moved.clone(), Some(default.clone())));
@@ -476,15 +504,22 @@ mod tests {
         let left = |dir: &Path| DB_FILES.iter().filter(|f| dir.join(f).exists()).count();
 
         // Never from the folder in use, however it is spelled.
-        remove_old_db(&new, &tmp.join(r"NEW\.\"));
+        assert!(remove_old_db(&new, &tmp.join(r"NEW\.\")));
         assert_eq!(left(&new), 3);
 
-        remove_old_db(&new, &old);
+        // Still open elsewhere (no delete sharing, like SQLite's): reported, so it is retried.
+        use std::os::windows::fs::OpenOptionsExt;
+        let held = std::fs::File::options().read(true).share_mode(1).open(old.join(DB_FILE)).unwrap();
+        assert!(!remove_old_db(&new, &old));
+        assert_eq!(left(&old), 1);
+        drop(held);
+
+        assert!(remove_old_db(&new, &old));
         assert_eq!(left(&old), 0);
         assert_eq!(left(&new), 3);
         assert!(old.join("notes.txt").exists() && old.join(r"logs\roalt.log").exists() && old.join(r"webview\x").exists());
         // Already gone: nothing to do.
-        remove_old_db(&new, &old);
+        assert!(remove_old_db(&new, &old));
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 }

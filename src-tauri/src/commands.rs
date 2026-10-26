@@ -488,9 +488,7 @@ pub async fn launch(
     favourite_id: Option<i64>,
 ) -> Result<LaunchInfo> {
     // Launches go strictly one at a time (DESIGN §6).
-    if s.bulk.running() {
-        return Err(AppError::Invalid("A batch is still running.".into()));
-    }
+    s.bulk.check_single_launch()?;
     Ok(launch_tracked(&app, &s, account_id, target, favourite_id).await?.0)
 }
 
@@ -505,6 +503,7 @@ pub(crate) async fn launch_tracked(
     target: LaunchTarget,
     favourite_id: Option<i64>,
 ) -> Result<(LaunchInfo, Instance)> {
+    let _busy = s.bulk.begin_launch();
     let v = s.db.settings()?;
     retake_multi(s, &v);
     // Holds the shared files until the client is tracked (the poll releases them when idle).
@@ -560,29 +559,37 @@ pub fn data_dir_open(app: AppHandle, s: State<'_, App>) -> Result<()> {
 }
 
 /// Copies the database into `path` (a new folder or one without a roalt.db; not the current
-/// folder or inside it) with SQLite's `VACUUM INTO` (consistent while open), then records it in
-/// `%LOCALAPPDATA%\RoALT\location.json` as `{"dataDir": path, "movedFrom": current}`. The move
-/// takes effect at the next start (`app_restart`); that start deletes the old folder's
-/// roalt.db, roalt.db-wal and roalt.db-shm once the new database opened, and drops `movedFrom`.
-/// Refused for test runs (`ROALT_DATA_DIR`) and when `path` already has a roalt.db. Async: the
-/// copy can take a moment.
+/// folder or inside it) with SQLite's `VACUUM INTO` (consistent while open), records it in
+/// `%LOCALAPPDATA%\RoALT\location.json` as `{"dataDir": path, "movedFrom": current}` and
+/// restarts RoALT, all with the database locked so no write lands in the old copy after the
+/// copy. The next start deletes the old folder's roalt.db, roalt.db-wal and roalt.db-shm once
+/// the new database opened, and drops `movedFrom`. Returns only on failure, after deleting the
+/// database files it may have left in `path`. Refused for test runs (`ROALT_DATA_DIR`), when
+/// `path` already has a roalt.db, and while a launch, batch or auto-rejoin runs (the restart
+/// would cut it off). Async: the copy can take a moment.
 #[tauri::command]
-pub async fn data_dir_move(s: State<'_, App>, path: String) -> Result<()> {
+pub async fn data_dir_move(app: AppHandle, s: State<'_, App>, path: String) -> Result<()> {
     if crate::data_dir_overridden() {
         return Err(AppError::Invalid("A test run's data folder (ROALT_DATA_DIR) can't be moved.".into()));
     }
+    if s.bulk.any_busy() {
+        return Err(AppError::Invalid(
+            "Wait for the running launch, batch or auto-rejoin to finish, then move the data folder.".into(),
+        ));
+    }
     let target = crate::move_target(&s.data_dir, &path)?;
     std::fs::create_dir_all(&target)?;
-    s.db.copy_to(&target.join(crate::DB_FILE))?;
-    crate::write_location(&crate::Location { data_dir: target.clone(), moved_from: Some(s.data_dir.clone()) })?;
-    log::info!("database copied to {}; RoALT uses it from the next start", target.display());
-    Ok(())
-}
-
-/// Restarts RoALT (after a data folder move).
-#[tauri::command]
-pub fn app_restart(app: AppHandle) {
-    app.restart();
+    let location = crate::Location { data_dir: target.clone(), moved_from: Some(s.data_dir.clone()) };
+    let failed = s.db.copy_to(&target.join(crate::DB_FILE), || {
+        crate::write_location(&location)?;
+        log::info!("database copied to {}; restarting to use it", target.display());
+        app.restart()
+    });
+    // A half-written copy would make a retry to the same folder refused.
+    for f in crate::DB_FILES {
+        let _ = std::fs::remove_file(target.join(f));
+    }
+    failed
 }
 
 // ---------- bulk ----------

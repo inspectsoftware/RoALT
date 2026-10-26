@@ -138,9 +138,8 @@ export const api = {
   robloxClient: () => invoke<RobloxClient>("roblox_client"),
   dataDirInfo: () => invoke<DataDir>("data_dir_info"),
   dataDirOpen: () => invoke<void>("data_dir_open"),
-  /** Copies the data to `path`; takes effect after `appRestart`. */
+  /** Copies the database to `path` and restarts RoALT to use it (resolves only on failure). */
   dataDirMove: (path: string) => invoke<void>("data_dir_move", { path }),
-  appRestart: () => invoke<void>("app_restart"),
 
   settingsGet: () => invoke<Settings>("settings_get"),
   settingsSet: (patch: SettingsPatch) => invoke<Settings>("settings_set", { patch }),

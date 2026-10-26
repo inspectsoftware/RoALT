@@ -60,7 +60,8 @@ function Root() {
         for (const queryKey of [qk.instances, qk.multi]) qc.invalidateQueries({ queryKey });
       }),
       events.onBulkProgress((p) => qc.setQueryData(qk.bulk, p)),
-      events.onNotice((n) => toast(n.message, n.error ? "error" : "ok")),
+      // Errors stay until dismissed: the window may have been hidden in the tray.
+      events.onNotice((n) => toast(n.message, n.error ? "error" : "ok", n.error)),
       events.onVaultLocked(() => {
         if (Date.now() - manualLockAt.current > 3000) setLockReason("idle");
         markLocked();

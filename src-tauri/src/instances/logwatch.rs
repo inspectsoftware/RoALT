@@ -22,7 +22,7 @@ pub struct LogFacts {
     pub in_game: bool,
     /// Disconnect / lost connection / kick after the latest join.
     pub disconnected: bool,
-    /// That disconnect was the player's own (reason 285, `DisconnectClientInitiated`: Leave).
+    /// That disconnect was the player's own (`client_initiated`: Leave, or signed in elsewhere).
     pub left: bool,
     /// `challengedByGcs`.
     pub challenged: bool,
@@ -48,9 +48,13 @@ const DISCONNECTS: [&str; 6] = [
     "Connection closed by server",
 ];
 
-/// Reason 285 (`DisconnectClientInitiated`): the player left (research M-logs).
+/// The player's own disconnect, not to be rejoined: reason 285 (`DisconnectClientInitiated`:
+/// Leave, research M-logs) or 273 (the same account launched elsewhere: rejoining would kick
+/// that session). Only the message counts, not the timestamp/thread prefix before " [".
 fn client_initiated(line: &str) -> bool {
-    line.contains("DisconnectClientInitiated") || line.split(|c: char| !c.is_ascii_digit()).any(|n| n == "285")
+    let msg = line.find(" [").map_or(line, |i| &line[i..]);
+    ["DisconnectClientInitiated", "Same account launched", "DuplicateLogin"].iter().any(|m| msg.contains(m))
+        || msg.split(|c: char| !c.is_ascii_digit()).any(|n| n == "285" || n == "273")
 }
 
 /// `%LOCALAPPDATA%\Roblox\logs`.
@@ -351,6 +355,11 @@ mod tests {
             assert!(left.disconnected && left.left, "{l}");
         }
         assert!(!parsed(&[&line("[FLog::Network] Disconnection Notification. Reason: 2851")]).left);
+        let elsewhere = parsed(&[&line("[FLog::Network] Disconnection Notification. Reason: 273")]);
+        assert!(elsewhere.disconnected && elsewhere.left);
+        // A 285 in the timestamp, seconds or thread id is not the reason.
+        let prefixed = parsed(&["2026-10-17T18:16:31.285Z,285.100000,a285,6,Info [FLog::Network] Sending disconnect with reason: 267"]);
+        assert!(prefixed.disconnected && !prefixed.left);
     }
 }
 

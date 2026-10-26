@@ -22,6 +22,8 @@ pub const WRONG_ACCOUNT: &str = "Signed in as another account";
 pub const CHALLENGED: &str = "Roblox wants a human check";
 /// The note of a client that ended without RoALT closing it and with nothing else to blame.
 const UNEXPECTED: &str = "Closed unexpectedly";
+/// In a game this long, a client's auto-rejoins stop counting against `MAX_REJOINS`.
+const REJOIN_RESET_MS: i64 = 5 * 60_000;
 
 pub struct Tracker {
     inner: Mutex<Vec<Entry>>,
@@ -46,6 +48,8 @@ struct Entry {
     closing: bool,
     /// Unix ms the client first reached a server.
     in_game_at: Option<i64>,
+    /// Unix ms the client's current stretch in a game began (None while not in one).
+    in_game_since: Option<i64>,
     /// Unix ms the bootstrapper of a not yet adopted entry was first seen gone.
     gone_at: Option<i64>,
     /// Handed out by `take_rejoins` (or ended): not again until it is back in a game.
@@ -90,6 +94,7 @@ impl Tracker {
             user_checked: false,
             closing: false,
             in_game_at: None,
+            in_game_since: None,
             gone_at: None,
             rejoin_seen: false,
         });
@@ -139,6 +144,12 @@ impl Tracker {
         if let Some(e) = self.entries().iter_mut().find(|e| e.inst.id == id) {
             e.inst.rejoins = rejoins;
         }
+    }
+
+    /// Still a rejoin case (`wants_rejoin`), checked again after the launch delay: false once
+    /// the user closed it, it reconnected or it was cleared.
+    pub fn still_wants_rejoin(&self, id: &str) -> bool {
+        self.entries().iter().any(|e| e.inst.id == id && wants_rejoin(&e.inst, &e.facts))
     }
 
     /// Clients that got disconnected since the last call and may be rejoined (`wants_rejoin`),
@@ -226,6 +237,8 @@ impl Tracker {
             let closing = e.closing && (e.adopted || !w.adopted);
             let before = std::mem::replace(e, w).inst;
             e.closing = closing;
+            // set_rejoins may have run since the copy was taken.
+            e.inst.rejoins = before.rejoins;
             settle(e, now);
             changed |= e.inst != before;
         }
@@ -379,6 +392,14 @@ fn settle(e: &mut Entry, now: i64) {
     let (state, note) = state_of(&e.facts, e.log.is_some(), ended, e.closing, e.expected_user);
     e.inst.state = state;
     e.inst.note = note;
+    if e.inst.state == InstanceState::InGame {
+        // Rejoins count "in a row": a client that stayed in a game a while starts over.
+        if now - *e.in_game_since.get_or_insert(now) >= REJOIN_RESET_MS {
+            e.inst.rejoins = 0;
+        }
+    } else {
+        e.in_game_since = None;
+    }
     if e.facts.place_id.is_some() {
         e.inst.place_id = e.facts.place_id;
     }
@@ -873,6 +894,53 @@ mod tests {
         poll(start + 5_000);
         assert_eq!(t.take_rejoins().len(), 1);
         assert_eq!(state(&t, &left).0, Disconnected);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rejoins_count_in_a_row_and_a_closed_client_is_not_rejoined() {
+        let dir = temp_dir();
+        let t = Tracker::new();
+        let start = now_ms();
+        let secs = (start / 1000) as u64;
+        let launch = |pid: u32| LaunchInfo { browser_tracker_id: BTID + i64::from(pid), ..info(pid, start, false) };
+        let long = t.register(&launch(100), target()).id;
+        let quick = t.register(&launch(200), target()).id;
+        let log = |pid: u32| dir.join(format!("0.744.0.7441080_20261024T1200{pid}Z_Player_R{pid}_last.log"));
+        for (pid, id) in [(100, &long), (200, &quick)] {
+            t.set_rejoins(id, MAX_REJOINS);
+            append(&log(pid), &[btid_line(BTID + i64::from(pid))]);
+            append(&log(pid), &join_lines(USER));
+            append(&log(pid), &[replicator()]);
+        }
+        let procs = Fake::new(&[(100, secs), (200, secs)]);
+        let poll = |now: i64| t.poll(Some(&dir), &procs, &user_of, now);
+        poll(start + 1_000);
+        poll(start + 60_000);
+        let kick = |pid| append(&log(pid), &["[FLog::Network] Sending disconnect with reason: 267".into()]);
+
+        // Kicked after a minute in game: still at the cap.
+        kick(200);
+        poll(start + 61_000);
+        assert_eq!(state(&t, &quick).0, Disconnected);
+        assert!(t.take_rejoins().is_empty());
+
+        // Kicked after five minutes in game: the count started over.
+        poll(start + 1_000 + REJOIN_RESET_MS);
+        assert_eq!(t.get(&long).unwrap().rejoins, 0);
+        kick(100);
+        poll(start + 2_000 + REJOIN_RESET_MS);
+        assert_eq!(t.take_rejoins(), vec![Rejoin { from: long.clone(), account_id: 1, target: target(), rejoins: 1 }]);
+        assert!(t.still_wants_rejoin(&long));
+
+        // Closed by the user during the launch delay: no longer wanted; cleared: neither.
+        t.mark_closing(&long);
+        procs.set(&[(200, secs)]);
+        poll(start + 3_000 + REJOIN_RESET_MS);
+        assert_eq!(state(&t, &long).1, note("Closed"));
+        assert!(!t.still_wants_rejoin(&long));
+        t.clear_ended();
+        assert!(!t.still_wants_rejoin(&long));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -177,9 +177,7 @@ async fn launch(app: &AppHandle, id: i64) -> Result<()> {
             notice(app, false, format!("No account of \"{}\" can launch. Pick accounts for it in RoALT.", fav.name));
         }
         1 => {
-            if s.bulk.running() {
-                return Err(AppError::Invalid("A batch is still running.".into()));
-            }
+            s.bulk.check_single_launch()?;
             commands::launch_tracked(app, &s, ids[0], fav.target, Some(fav.id)).await?;
         }
         _ => {

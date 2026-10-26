@@ -563,7 +563,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
 
         <footer className="mono h-7 flex-none flex items-center gap-4 px-5 border-t border-line text-[11px] text-dim">
           <span>{lastChecked ? `validated ${ago(lastChecked, now)}` : "not validated yet"}</span>
-          <span className="ml-auto">v0.1.0</span>
+          <span className="ml-auto">v{import.meta.env.APP_VERSION}</span>
         </footer>
       </main>
 

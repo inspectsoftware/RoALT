@@ -257,7 +257,7 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
         </table>
 
         <Heading id="about">About</Heading>
-        <Row title={<>RoALT <span className="mono">0.1.0</span></>} hint="RoALT only talks to roblox.com. New versions are on GitHub Releases." last>
+        <Row title={<>RoALT <span className="mono">{import.meta.env.APP_VERSION}</span></>} hint="RoALT only talks to roblox.com. New versions are on GitHub Releases." last>
           <button className="btn" onClick={() => openUrl(RELEASES).catch(toastError)}>
             Open releases page
             <Icon name="external" size={12} />

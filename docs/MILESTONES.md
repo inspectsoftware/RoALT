@@ -125,3 +125,25 @@ invited to a private server.
 still have them, so the Private tab is always offered and the account's own list decides; game
 info, icons and the place → universe lookup work without a cookie; icons are only accepted from
 https *.rbxcdn.com.
+
+## M7 — quality of life
+
+**Built:** auto-rejoin (Settings → Launching, and next to Same server in Launch): a client Roblox
+disconnects (kicked, server shut down, connection lost) is closed after the launch delay and its
+account relaunched into the same target, up to 3 tries in a row (the count resets after 5 minutes
+in game); leaving on purpose (reason 285) or a duplicate-login kick (273) is not rejoined, and in
+master-password mode the vault stays unlocked while auto-rejoin has clients to watch. Tray icon:
+show, favourites (launch with their stored accounts; several as a batch), close all clients,
+lock vault, quit; optional close to tray. Settings also show the Roblox client RoALT will start
+and the data folder, which can be opened or moved (copied, RoALT restarts in the new place, the
+old database is deleted after the restart). Shortcuts Ctrl+1..4 switch views. Backend notices
+(rejoins, tray launches) show as toasts; errors stay until dismissed.
+
+**Test:** turn on auto-rejoin, launch an account, get it kicked (idle 20 min or a server
+shutdown): its client closes and comes back in the same game. Leave a game normally: no rejoin.
+Turn on Close to tray, close the window, use the tray menu to show it and launch a favourite.
+Move the data folder to another drive: RoALT restarts and the accounts are still there.
+
+**Roblox differences:** closing Roblox's window leaves no trace in its log, so plain exits can't
+be told from crashes and aren't rejoined; a kicked client stays open on its error dialog, which
+is why rejoin closes it first.

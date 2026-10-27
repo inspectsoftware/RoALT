@@ -27,6 +27,20 @@ const REJOIN_RESET_MS: i64 = 5 * 60_000;
 
 pub struct Tracker {
     inner: Mutex<Vec<Entry>>,
+    /// Accounts being launched (`claim`); locked before `inner`.
+    claimed: Mutex<Vec<i64>>,
+}
+
+/// An account being launched; released on drop.
+pub struct Claim<'a> {
+    tracker: &'a Tracker,
+    account_id: i64,
+}
+
+impl Drop for Claim<'_> {
+    fn drop(&mut self) {
+        self.tracker.claimed.lock().unwrap_or_else(|e| e.into_inner()).retain(|&a| a != self.account_id);
+    }
 }
 
 /// One launch: what the UI sees plus what following it needs.
@@ -58,7 +72,7 @@ struct Entry {
 
 impl Tracker {
     pub fn new() -> Tracker {
-        Tracker { inner: Mutex::new(Vec::new()) }
+        Tracker { inner: Mutex::new(Vec::new()), claimed: Mutex::new(Vec::new()) }
     }
 
     fn entries(&self) -> MutexGuard<'_, Vec<Entry>> {
@@ -133,6 +147,26 @@ impl Tracker {
         if let Some(e) = self.entries().iter_mut().find(|e| e.inst.id == id) {
             e.closing = false;
         }
+    }
+
+    /// The account has a client starting, joining or in a game (a disconnected one doesn't
+    /// count: it is waiting to be closed or rejoined).
+    pub fn has_live_client(&self, account_id: i64) -> bool {
+        self.entries().iter().any(|e| {
+            e.inst.account_id == account_id
+                && matches!(e.inst.state, InstanceState::Starting | InstanceState::Joining | InstanceState::InGame)
+        })
+    }
+
+    /// Reserves the account for one launch: None while it has a live client or another launch
+    /// holds it. Hold the claim until the new client is registered.
+    pub fn claim(&self, account_id: i64) -> Option<Claim<'_>> {
+        let mut claimed = self.claimed.lock().unwrap_or_else(|e| e.into_inner());
+        if claimed.contains(&account_id) || self.has_live_client(account_id) {
+            return None;
+        }
+        claimed.push(account_id);
+        Some(Claim { tracker: self, account_id })
     }
 
     /// True while a client RoALT started hasn't ended.
@@ -521,6 +555,20 @@ mod tests {
 
     fn target() -> LaunchTarget {
         LaunchTarget::Place { place_id: 1818, launch_data: None }
+    }
+
+    #[test]
+    fn live_client_per_account() {
+        let t = Tracker::new();
+        let id = t.register(&info(900, now_ms(), false), target()).id;
+        assert!(t.has_live_client(1) && !t.has_live_client(2));
+        assert!(t.claim(1).is_none(), "a running account can't be claimed");
+        let claim = t.claim(2).unwrap();
+        assert!(t.claim(2).is_none(), "nor one being launched");
+        drop(claim);
+        assert!(t.claim(2).is_some());
+        t.entries().iter_mut().find(|e| e.inst.id == id).unwrap().inst.state = Disconnected;
+        assert!(!t.has_live_client(1) && t.claim(1).is_some());
     }
 
     fn temp_dir() -> PathBuf {

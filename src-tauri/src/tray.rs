@@ -177,7 +177,7 @@ async fn launch(app: &AppHandle, id: i64) -> Result<()> {
             notice(app, false, format!("No account of \"{}\" can launch. Pick accounts for it in RoALT.", fav.name));
         }
         1 => {
-            s.bulk.check_single_launch()?;
+            let _single = s.bulk.begin_single_launch()?;
             commands::launch_tracked(app, &s, ids[0], fav.target, Some(fav.id)).await?;
         }
         _ => {

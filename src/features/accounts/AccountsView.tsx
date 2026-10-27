@@ -50,7 +50,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
   selected: number | null;
   setSelected: (id: number | null) => void;
   onAdd: () => void;
-  onLaunch: (id: number) => void;
+  onLaunch: (ids: number[]) => void;
 }) {
   const detail = usePanelWidth("detail", 340, 280, 560);
   const [menu, setMenu] = useState<MenuAt | null>(null);
@@ -97,6 +97,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
   const presence = usePresence(presenceIds).data;
   const shown = matching.filter((a) => inFilter(a, filter, presence?.get(a.id)));
   const checkedIds = accounts.filter((a) => checked.has(a.id)).map((a) => a.id);
+  const checkedValid = checkedIds.filter((id) => byId.get(id)?.status === "valid").length;
   const current = (selected !== null && byId.get(selected)) || shown[0] || null;
   const needsSignIn = accounts.filter((a) => a.status === "invalid").length;
   const lastChecked = Math.max(0, ...accounts.map((a) => a.statusCheckedAt ?? 0)) || null;
@@ -530,6 +531,15 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
           <div className="enter flex flex-wrap items-center gap-2.5 px-5 py-2.5 border-t border-line-strong bg-raised">
             <span className="mono font-medium">{checkedIds.length} selected</span>
             <span className="w-px h-5 bg-line" aria-hidden="true" />
+            <button
+              className="btn btn-primary"
+              onClick={() => onLaunch(checkedIds)}
+              disabled={checkedValid === 0}
+              title={checkedValid < checkedIds.length ? `${plural(checkedIds.length - checkedValid, "account")} can't launch and will be left out` : undefined}
+            >
+              <Icon name="play" size={12} />
+              Launch {checkedValid}
+            </button>
             <button className="btn" onClick={() => validate.mutate(checkedIds)} disabled={validate.isPending}>
               <Icon name="refresh" size={14} />
               Validate
@@ -571,6 +581,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
         at={menu}
         onClose={closeMenu}
         selection={checkedIds}
+        canLaunch={(id) => byId.get(id)?.status === "valid"}
         onLaunch={onLaunch}
         onValidate={(ids) => validate.mutate(ids)}
         onRemove={askRemove}
@@ -593,7 +604,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
             checking={isChecking(current.id)}
             onValidate={() => validate.mutate([current.id])}
             onRemove={() => askRemove([current.id])}
-            onLaunch={() => onLaunch(current.id)}
+            onLaunch={() => onLaunch([current.id])}
           />
         </aside>
       )}

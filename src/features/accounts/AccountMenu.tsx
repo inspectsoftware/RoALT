@@ -11,13 +11,14 @@ import { plural } from "./shared";
 export type MenuAt = { account: AccountSummary; x: number; y: number };
 
 /** Right-click menu of an account row. With several rows ticked and this one among them,
- * Validate and Remove apply to all of them. */
-export function AccountMenu({ at, onClose, selection, onLaunch, onValidate, onRemove }: {
+ * Launch, Validate and Remove apply to all of them. */
+export function AccountMenu({ at, onClose, selection, canLaunch, onLaunch, onValidate, onRemove }: {
   at: MenuAt | null;
   onClose: () => void;
   /** Ticked account ids. */
   selection: number[];
-  onLaunch: (id: number) => void;
+  canLaunch: (id: number) => boolean;
+  onLaunch: (ids: number[]) => void;
   onValidate: (ids: number[]) => void;
   onRemove: (ids: number[]) => void;
 }) {
@@ -46,6 +47,7 @@ export function AccountMenu({ at, onClose, selection, onLaunch, onValidate, onRe
   const a = at?.account;
   const ids = a && selection.length > 1 && selection.includes(a.id) ? selection : a ? [a.id] : [];
   const many = ids.length > 1;
+  const anyValid = ids.some(canLaunch);
   const run = (f: () => unknown) => () => {
     ref.current?.hidePopover();
     void f();
@@ -54,7 +56,7 @@ export function AccountMenu({ at, onClose, selection, onLaunch, onValidate, onRe
 
   const items: ([IconName, string, () => unknown, boolean?] | null)[] = a
     ? [
-        ["play", "Launch", () => onLaunch(a.id), a.status !== "valid"],
+        ["play", many ? `Launch ${plural(ids.length, "account")}` : "Launch", () => onLaunch(ids), !anyValid],
         ["signin", "Open on roblox.com", () => session.mutateAsync(a.id).catch(toastError)],
         ["external", "Open profile", () => openUrl(`https://www.roblox.com/users/${a.userId}/profile`).catch(toastError)],
         null,

@@ -589,6 +589,9 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       await sleep(1200);
       const a = find(args.accountId);
       if (!a) return fail("notFound", "Not found.");
+      // As commands::launch_tracked: one live client per account.
+      if (instances.some((i) => i.accountId === a.id && ["starting", "joining", "inGame"].includes(i.state)))
+        return fail("invalid", `${a.alias || a.displayName} is already running. Close its client first.`);
       if (a.username === "afk_unit_1") {
         a.status = "invalid";
         changed();

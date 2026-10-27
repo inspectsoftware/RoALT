@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, type AccountSummary, type Instance, type InstanceState, type Limits, type MultiInstanceStatus } from "../../api";
-import { qk, useInstances, useMultiStatus } from "../../data";
+import { qk, useBulk, useInstances, useMultiStatus } from "../../data";
 import { Segmented, Switch } from "../../ui/controls";
 import { ConfirmDialog } from "../../ui/Dialog";
 import { Divider, usePanelWidth } from "../../ui/Resizer";
@@ -9,6 +9,7 @@ import { Icon } from "../../ui/Icon";
 import { toastError } from "../../ui/Toast";
 import { accountName, Avatar, plural } from "../accounts/shared";
 import { BatchSection } from "./Batch";
+import { launchBlocked, launched, launchFailed } from "./LaunchView";
 
 const STATES: Record<InstanceState, [label: string, color: string]> = {
   starting: ["Starting", "var(--dim)"],
@@ -78,6 +79,9 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
   const [confirmAll, setConfirmAll] = useState(false);
   const [busyAll, setBusyAll] = useState(false);
   const [tuning, setTuning] = useState<string | null>(null);
+  const [relaunching, setRelaunching] = useState<string | null>(null);
+  const multi = useMultiStatus().data;
+  const batch = useBulk().data;
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const running = list.filter(isRunning);
   const rows = [...list].sort((a, b) => Number(isRunning(b)) - Number(isRunning(a)) || b.startedAt - a.startedAt);
@@ -97,6 +101,16 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
       toastError(e);
     });
   };
+  /** Same account, same target, for an ended row. */
+  const relaunch = (i: Instance, a: AccountSummary) => {
+    setRelaunching(i.id);
+    api
+      .launch(a.id, i.target)
+      .then((info) => launched(a, info), launchFailed)
+      .finally(() => setRelaunching(null));
+  };
+  // Starting next to running clients needs multi-instance, as a bulk launch does.
+  const relaunchBlocked = launchBlocked(running.length > 0, multi, batch) ?? (relaunching ? "Launching…" : null);
   const closeAll = () => {
     setBusyAll(true);
     api
@@ -197,6 +211,17 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
                           <Icon name="x" size={10} />
                         </button>
                         </span>
+                      )}
+                      {!live && a?.status === "valid" && !running.some((r) => r.accountId === a.id && r.state !== "disconnected") && (
+                        <button
+                          className="wc w-9 h-8"
+                          aria-label={`Relaunch ${name}`}
+                          title={relaunchBlocked ?? "Launch this account into the same game again"}
+                          disabled={relaunchBlocked !== null}
+                          onClick={() => relaunch(i, a)}
+                        >
+                          <Icon name="play" size={10} />
+                        </button>
                       )}
                     </td>
                   </tr>

@@ -488,14 +488,15 @@ pub async fn launch(
     favourite_id: Option<i64>,
 ) -> Result<LaunchInfo> {
     // Launches go strictly one at a time (DESIGN §6).
-    s.bulk.check_single_launch()?;
+    let _single = s.bulk.begin_single_launch()?;
     Ok(launch_tracked(&app, &s, account_id, target, favourite_id).await?.0)
 }
 
 /// One launch as every caller does it: the multi-instance lock first (it has to be held
 /// before this client starts, or the next one replaces it), and so the shared login files
 /// while protection is on; a dead or challenged cookie recorded on the account; the client
-/// tracked; the favourite marked as used.
+/// tracked; the favourite marked as used. An account whose client is still running is refused
+/// (a second client would sign it out of the first).
 pub(crate) async fn launch_tracked(
     app: &AppHandle,
     s: &App,
@@ -503,6 +504,13 @@ pub(crate) async fn launch_tracked(
     target: LaunchTarget,
     favourite_id: Option<i64>,
 ) -> Result<(LaunchInfo, Instance)> {
+    // Claimed until the client is tracked, so a launch from another path (rejoin, tray,
+    // batch) can't start the same account meanwhile.
+    let Some(_claim) = s.tracker.claim(account_id) else {
+        let name = s.db.account(account_id).map(|a| crate::launcher::bulk::name_of(&a)).ok().filter(|n| !n.is_empty());
+        let name = name.as_deref().unwrap_or("This account");
+        return Err(AppError::Invalid(format!("{name} is already running. Close its client first.")));
+    };
     let _busy = s.bulk.begin_launch();
     let v = s.db.settings()?;
     retake_multi(s, &v);

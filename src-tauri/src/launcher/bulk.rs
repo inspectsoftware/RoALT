@@ -55,6 +55,7 @@ const MIN_DELAY: u32 = 2_000;
 const MAX_DELAY: u32 = 60_000;
 const CANCELLED: &str = "Cancelled";
 const REJOINING: &str = "A rejoin is in progress, try again in a moment.";
+const LAUNCHING: &str = "Another launch is in progress, try again in a moment.";
 /// How often a wait looks at the clients and the cancel flag.
 const TICK: Duration = Duration::from_millis(500);
 const BIND_WAIT: Duration = Duration::from_secs(30);
@@ -127,6 +128,15 @@ impl Bulk {
         }
     }
 
+    /// Starts a single launch (button, tray): refused while a batch, an auto-rejoin or another
+    /// launch runs, so launches go one at a time (DESIGN §6). In flight until the guard drops.
+    pub fn begin_single_launch(&self) -> Result<Busy<'_>> {
+        self.check_single_launch()?;
+        // Taken atomically, so two launches asked for at once can't both start.
+        self.launches.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst).map_err(|_| AppError::Invalid(LAUNCHING.into()))?;
+        Ok(Busy(&self.launches))
+    }
+
     /// A batch, launch or auto-rejoin is running.
     pub fn any_busy(&self) -> bool {
         self.running() || self.rejoining.load(Ordering::SeqCst) > 0 || self.launches.load(Ordering::SeqCst) > 0
@@ -182,17 +192,13 @@ pub fn start(app: AppHandle, req: BulkRequest) -> Result<String> {
         return Err(AppError::Locked);
     }
     let mut accounts = Vec::with_capacity(ids.len());
-    let live = s.tracker.list();
     for &id in ids {
         let a = s.db.account(id)?;
         let name = name_of(&a);
         if let Some(why) = cant_launch(a.status) {
             return Err(AppError::Invalid(format!("{name} can't launch: {why}")));
         }
-        let running = |i: &Instance| {
-            i.account_id == id && matches!(i.state, InstanceState::Starting | InstanceState::Joining | InstanceState::InGame)
-        };
-        if live.iter().any(running) {
+        if s.tracker.has_live_client(id) {
             return Err(AppError::Invalid(format!("{name} is already running. Untick it or close its client first.")));
         }
         accounts.push(Account { id, user_id: a.user_id, name });
@@ -735,7 +741,11 @@ mod tests {
         assert!(b.check_single_launch().is_ok() && !b.any_busy());
         let launch = b.begin_launch();
         assert!(b.any_busy() && b.check_single_launch().is_ok());
+        assert!(matches!(b.begin_single_launch(), Err(AppError::Invalid(m)) if m == LAUNCHING));
         drop(launch);
+        let single = b.begin_single_launch().unwrap();
+        assert!(b.begin_single_launch().is_err());
+        drop(single);
         let rejoin = b.begin_rejoin().unwrap();
         assert!(matches!(b.check_single_launch(), Err(AppError::Invalid(m)) if m == REJOINING));
         assert!(b.any_busy());

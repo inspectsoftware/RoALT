@@ -5,6 +5,7 @@ import { qk, queryClient, useAccounts, useGroups, useInstances, useSetSettings, 
 import { AccountsView } from "./features/accounts/AccountsView";
 import { AddAccountDialog } from "./features/accounts/AddAccountDialog";
 import { GroupsNav } from "./features/accounts/GroupsNav";
+import { plural } from "./features/accounts/shared";
 import { FavouritesNav } from "./features/launch/Favourites";
 import { lastLaunchAccount, LaunchView } from "./features/launch/LaunchView";
 import { isRunning, MultiInstanceSwitch, RunningPanel } from "./features/launch/Running";
@@ -212,8 +213,12 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
     setView("accounts");
     setGroup(null);
   };
-  const launchAs = (id: number) => {
-    setPicked([id]);
+  /** Opens Launch with these accounts picked; ones that can't launch are left out. */
+  const launchAs = (ids: number[]) => {
+    const valid = ids.filter((id) => accounts.data?.some((a) => a.id === id && a.status === "valid"));
+    if (!valid.length) return;
+    if (valid.length < ids.length) toast(`Left out ${plural(ids.length - valid.length, "account")} that can't launch`);
+    setPicked(valid);
     setView("launch");
   };
   const pickFavourite = (f: Favourite) => {

@@ -97,7 +97,7 @@ function track(accountId: number, pid: number, target: LaunchTarget, placeId: nu
   if (!lockHeld) for (const old of instances) endInstance(old.id, "Replaced by another Roblox client");
   const i: Instance = {
     id: crypto.randomUUID(), accountId, pid, state: "starting", target, placeId, jobId: null,
-    startedAt: Date.now(), endedAt: null, viaBootstrapper, note: null, rejoins,
+    startedAt: Date.now(), endedAt: null, viaBootstrapper, note: null, rejoins, limits: { cpuCap: null, eco: false },
   };
   instances.push(i);
   if (!lockHeld) eventHolder = i.id;
@@ -710,6 +710,13 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       await sleep(900);
       instances.forEach((i) => endInstance(i.id, "Closed"));
       return null;
+    case "instance_set_limits": {
+      const i = instances.find((x) => x.id === args.id && x.state !== "exited");
+      if (!i) return fail("notFound", "Not found.");
+      i.limits = args.limits;
+      instancesChanged();
+      return null;
+    }
     case "instances_clear_ended":
       instances = instances.filter((i) => i.state !== "exited");
       instancesChanged();

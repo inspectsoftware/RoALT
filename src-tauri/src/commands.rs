@@ -779,6 +779,28 @@ pub(crate) async fn close_running(s: &App, force: bool) -> Result<()> {
     Ok(())
 }
 
+/// Sets one client's limits (CPU cap, efficiency mode). A client still behind its
+/// bootstrapper gets them once it is found.
+#[tauri::command]
+pub async fn instance_set_limits(app: AppHandle, s: State<'_, App>, id: String, limits: Limits) -> Result<()> {
+    if limits.cpu_cap.is_some_and(|c| !(1..=100).contains(&c)) {
+        return Err(AppError::Invalid("The CPU limit must be between 1 and 100 %.".into()));
+    }
+    let (prev, client) = s.tracker.set_limits(&id, limits).ok_or(AppError::NotFound)?;
+    instances_changed(&app);
+    let Some((pid, t0)) = client else { return Ok(()) };
+    let app2 = app.clone();
+    let r = tauri::async_runtime::spawn_blocking(move || app2.state::<App>().limiter.apply(&id, pid, t0, limits).map_err(|e| (id, e)))
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    if let Err((id, e)) = r {
+        s.tracker.set_limits(&id, prev);
+        instances_changed(&app);
+        return Err(e);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn instances_clear_ended(app: AppHandle, s: State<'_, App>) {
     s.tracker.clear_ended();

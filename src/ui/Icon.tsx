@@ -14,6 +14,7 @@ const paths = {
   eye: <><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z" /><rect x="6.5" y="6.5" width="3" height="3" /></>,
   eyeOff: <><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z" /><path d="M2 14L14 2" /></>,
   x: <path d="M4 4l8 8M12 4l-8 8" />,
+  sliders: <><path d="M2 4h12M2 12h12" /><rect x="9" y="2.5" width="3" height="3" /><rect x="4" y="10.5" width="3" height="3" /></>,
   check: <path d="M3 8.5l3 3 7-7" />,
   trash: <><path d="M2 4h12M6 4V2h4v2" /><path d="M3.5 4l1 10h7l1-10" /></>,
   pencil: <path d="M10.5 2.5l3 3L6 13H3v-3z" />,

@@ -122,13 +122,13 @@ fn post_close(pid: u32) {
     let _ = unsafe { EnumWindows(Some(each), LPARAM(pid as isize)) };
 }
 
-fn open(pid: u32, rights: PROCESS_ACCESS_RIGHTS) -> Option<Owned<HANDLE>> {
+pub(super) fn open(pid: u32, rights: PROCESS_ACCESS_RIGHTS) -> Option<Owned<HANDLE>> {
     // SAFETY: on success the handle is ours; Owned closes it on drop.
     unsafe { OpenProcess(rights, false, pid).ok().map(|h| Owned::new(h)) }
 }
 
 /// Start of the process behind `h` in Unix seconds, `None` once it has exited (signalled).
-fn started(h: HANDLE) -> Option<u64> {
+pub(super) fn started(h: HANDLE) -> Option<u64> {
     let (mut created, mut exited, mut kernel, mut user) =
         (FILETIME::default(), FILETIME::default(), FILETIME::default(), FILETIME::default());
     // SAFETY: `h` is a live handle with PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE; the out

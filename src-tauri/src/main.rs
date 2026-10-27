@@ -35,6 +35,7 @@ pub struct App {
     pub copied: Mutex<Option<Secret>>,
     pub tracker: instances::Tracker,
     pub multi: instances::multi::Multi,
+    pub limiter: instances::limits::Limiter,
     pub bulk: launcher::bulk::Bulk,
 }
 
@@ -297,6 +298,7 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
         copied: Mutex::new(None),
         tracker: instances::Tracker::new(),
         multi,
+        limiter: instances::limits::Limiter::new(),
         bulk: launcher::bulk::Bulk::new(),
     });
     if let Err(e) = tray::setup(app.handle()) {
@@ -384,6 +386,7 @@ fn main() {
             commands::instance_close,
             commands::instances_close_all,
             commands::instances_clear_ended,
+            commands::instance_set_limits,
             commands::multi_instance_status,
             commands::multi_instance_set,
             commands::roblox_close_all,

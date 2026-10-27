@@ -21,6 +21,7 @@ import type { Instance } from "./bindings/Instance";
 import type { JoinCandidate } from "./bindings/JoinCandidate";
 import type { LaunchInfo } from "./bindings/LaunchInfo";
 import type { LaunchTarget } from "./bindings/LaunchTarget";
+import type { Limits } from "./bindings/Limits";
 import type { MultiInstanceStatus } from "./bindings/MultiInstanceStatus";
 import type { Notice } from "./bindings/Notice";
 import type { ParsedInput } from "./bindings/ParsedInput";
@@ -49,6 +50,7 @@ export type { GameServer } from "./bindings/GameServer";
 export type { PrivateServer } from "./bindings/PrivateServer";
 export type { SameServer } from "./bindings/SameServer";
 export type { InstanceState } from "./bindings/InstanceState";
+export type { Limits } from "./bindings/Limits";
 export type { Presence } from "./bindings/Presence";
 export type { PresenceKind } from "./bindings/PresenceKind";
 export type { Subscription } from "./bindings/Subscription";
@@ -108,6 +110,8 @@ export const api = {
   instanceClose: (id: string, force: boolean) => invoke<void>("instance_close", { id, force }),
   instancesCloseAll: (force: boolean) => invoke<void>("instances_close_all", { force }),
   instancesClearEnded: () => invoke<void>("instances_clear_ended"),
+  /** CPU cap and efficiency mode for one running client. */
+  instanceSetLimits: (id: string, limits: Limits) => invoke<void>("instance_set_limits", { id, limits }),
   multiInstanceStatus: () => invoke<MultiInstanceStatus>("multi_instance_status"),
   multiInstanceSet: (enabled: boolean) => invoke<MultiInstanceStatus>("multi_instance_set", { enabled }),
   /** Every Roblox client, tracked or not; then takes the multi-instance lock if enabled. */

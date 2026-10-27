@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { api, type AccountSummary, type Instance, type InstanceState, type MultiInstanceStatus } from "../../api";
+import { api, type AccountSummary, type Instance, type InstanceState, type Limits, type MultiInstanceStatus } from "../../api";
 import { qk, useInstances, useMultiStatus } from "../../data";
-import { Switch } from "../../ui/controls";
+import { Segmented, Switch } from "../../ui/controls";
 import { ConfirmDialog } from "../../ui/Dialog";
 import { Divider, usePanelWidth } from "../../ui/Resizer";
 import { Icon } from "../../ui/Icon";
@@ -35,6 +35,40 @@ export function useNow(ms: number) {
   return now;
 }
 
+const CAPS = [0, 50, 25, 10, 5];
+const limited = (l: Limits) => l.cpuCap !== null || l.eco;
+
+/** One client's utility panel, under its row: CPU cap and efficiency mode. */
+function LimitsRow({ inst }: { inst: Instance }) {
+  const set = (patch: Partial<Limits>) => api.instanceSetLimits(inst.id, { ...inst.limits, ...patch }).catch(toastError);
+  return (
+    <tr className="border-b border-line">
+      <td colSpan={5} className="px-5 py-3 font-sans">
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-[13px] text-text">CPU limit</span>
+            <Segmented
+              mono
+              label="CPU limit"
+              value={inst.limits.cpuCap ?? 0}
+              options={CAPS.map((c) => ({ value: c, label: c ? `${c}%` : "Off" }))}
+              onChange={(c) => set({ cpuCap: c || null })}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[13px] text-text">Efficiency mode</span>
+            <Switch label="Efficiency mode" checked={inst.limits.eco} onChange={(eco) => set({ eco })} />
+          </div>
+          <p className="text-xs text-dim">
+            The limit is a share of all CPU cores; its frame rate drops with it. Roblox has no per-client FPS cap RoALT
+            can set without modifying the client. Efficiency mode lowers its priority, as Task Manager does.
+          </p>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
 /** The Launch view's right column: the bulk launch, then clients RoALT started, newest first. */
 export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[]; onPick: (ids: number[]) => void }) {
   const width = usePanelWidth("running", 400, 300, 720);
@@ -43,6 +77,7 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
   const [closing, setClosing] = useState<ReadonlySet<string>>(new Set());
   const [confirmAll, setConfirmAll] = useState(false);
   const [busyAll, setBusyAll] = useState(false);
+  const [tuning, setTuning] = useState<string | null>(null);
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const running = list.filter(isRunning);
   const rows = [...list].sort((a, b) => Number(isRunning(b)) - Number(isRunning(a)) || b.startedAt - a.startedAt);
@@ -103,8 +138,8 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
                 <th className="font-normal border-b border-line">State</th>
                 <th className="font-normal border-b border-line hidden @sm:table-cell">Job</th>
                 <th className="font-normal border-b border-line">Up</th>
-                <th className="w-12 border-b border-line">
-                  <span className="sr-only">Close</span>
+                <th className="w-20 border-b border-line">
+                  <span className="sr-only">Actions</span>
                 </th>
               </tr>
             </thead>
@@ -115,7 +150,8 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
                 const [label, color] = STATES[i.state];
                 const live = isRunning(i);
                 return (
-                  <tr key={i.id} className={`enter h-10 border-b border-line ${live ? "" : "text-dim"}`} title={`PID ${i.pid}`}>
+                  <Fragment key={i.id}>
+                  <tr className={`enter h-10 border-b border-line ${live ? "" : "text-dim"}`} title={`PID ${i.pid}`}>
                     <td className="pl-5 pr-2 max-w-0 w-[40%]">
                       <span className="flex items-center gap-2 min-w-0 font-sans">
                         {a && <Avatar account={a} size={20} />}
@@ -141,6 +177,16 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
                     <td className="pr-2 whitespace-nowrap">{uptime(i.startedAt, i.endedAt ?? now)}</td>
                     <td>
                       {live && (
+                        <span className="flex">
+                        <button
+                          className={`wc w-9 h-8 ${limited(i.limits) ? "text-accent-text" : ""}`}
+                          aria-label={`Limits for ${name}'s client`}
+                          aria-expanded={tuning === i.id}
+                          title={limited(i.limits) ? `Limited${i.limits.cpuCap ? ` to ${i.limits.cpuCap}% CPU` : ""}${i.limits.eco ? ", efficiency mode" : ""}` : "CPU limit and efficiency mode"}
+                          onClick={() => setTuning((t) => (t === i.id ? null : i.id))}
+                        >
+                          <Icon name="sliders" size={12} />
+                        </button>
                         <button
                           className="wc w-9 h-8"
                           aria-label={`Close ${name}'s client`}
@@ -150,9 +196,12 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
                         >
                           <Icon name="x" size={10} />
                         </button>
+                        </span>
                       )}
                     </td>
                   </tr>
+                  {live && tuning === i.id && <LimitsRow inst={i} />}
+                  </Fragment>
                 );
               })}
             </tbody>

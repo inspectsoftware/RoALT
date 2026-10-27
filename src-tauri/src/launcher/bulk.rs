@@ -661,6 +661,7 @@ mod tests {
             via_bootstrapper: false,
             note: note.map(Into::into),
             rejoins: 0,
+            limits: Default::default(),
         }
     }
 

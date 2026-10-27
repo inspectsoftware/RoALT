@@ -8,7 +8,7 @@ use tauri::{AppHandle, Manager};
 
 use super::logwatch::{self, LogFacts};
 use super::process::{self, ProcInfo};
-use crate::model::{Instance, InstanceState, LaunchInfo, LaunchTarget};
+use crate::model::{Instance, InstanceState, LaunchInfo, LaunchTarget, Limits};
 
 /// A client that vanishes this soon after launch without reaching a game may come back under
 /// a new PID (Roblox's updater relaunches it, research M8/M9), or, behind a bootstrapper, may
@@ -80,6 +80,7 @@ impl Tracker {
             via_bootstrapper: info.via_bootstrapper,
             note: None,
             rejoins: 0,
+            limits: Default::default(),
         };
         self.entries().push(Entry {
             inst: inst.clone(),
@@ -146,6 +147,25 @@ impl Tracker {
         }
     }
 
+    /// Sets the client's limits; returns the previous ones and its process (pid, start time)
+    /// once it is known to be the client itself (None while only a bootstrapper is seen).
+    /// None when there is no such running client.
+    pub fn set_limits(&self, id: &str, limits: Limits) -> Option<(Limits, Option<(u32, u64)>)> {
+        let mut entries = self.entries();
+        let e = entries.iter_mut().find(|e| e.inst.id == id && e.inst.state != InstanceState::Exited)?;
+        let prev = std::mem::replace(&mut e.inst.limits, limits);
+        Some((prev, client_of(e)))
+    }
+
+    /// Running clients by (id, pid, start time, limits), for `Limiter::sync`.
+    pub fn clients(&self) -> Vec<(String, u32, u64, Limits)> {
+        self.entries()
+            .iter()
+            .filter(|e| e.inst.state != InstanceState::Exited)
+            .filter_map(|e| client_of(e).map(|(pid, t0)| (e.inst.id.clone(), pid, t0, e.inst.limits)))
+            .collect()
+    }
+
     /// Still a rejoin case (`wants_rejoin`), checked again after the launch delay: false once
     /// the user closed it, it reconnected or it was cleared.
     pub fn still_wants_rejoin(&self, id: &str) -> bool {
@@ -200,6 +220,8 @@ impl Tracker {
                     let changed = s.tracker.poll(logwatch::logs_dir().as_deref(), &Live, &user_of, crate::commands::now_ms());
                     // The shared login files are held only while RoALT's clients run (or launch).
                     s.multi.release_if(|| !s.tracker.any_running());
+                    // A client re-adopted under a new pid gets its limits again.
+                    s.limiter.sync(&s.tracker.clients());
                     (changed, s.tracker.take_rejoins())
                 })
                 .await
@@ -237,14 +259,19 @@ impl Tracker {
             let closing = e.closing && (e.adopted || !w.adopted);
             let before = std::mem::replace(e, w).inst;
             e.closing = closing;
-            // set_rejoins may have run since the copy was taken.
+            // set_rejoins / set_limits may have run since the copy was taken.
             e.inst.rejoins = before.rejoins;
+            e.inst.limits = before.limits;
             settle(e, now);
             changed |= e.inst != before;
         }
         prune(&mut entries);
         changed
     }
+}
+
+fn client_of(e: &Entry) -> Option<(u32, u64)> {
+    (e.adopted && e.alive).then_some((e.inst.pid, e.start_time?)).filter(|&(_, t0)| t0 != 0)
 }
 
 /// At most this many auto-rejoins in a row for one client.

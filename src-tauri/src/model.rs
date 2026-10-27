@@ -465,6 +465,18 @@ pub struct Instance {
     pub note: Option<String>,
     /// How many auto-rejoins led to this client (0: launched by the user).
     pub rejoins: u32,
+    pub limits: Limits,
+}
+
+/// What Windows holds one client to (instances::limits). Lasts as long as the client.
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Limits {
+    /// Hard cap on its CPU time, in percent of the whole machine (1-100); None: no cap.
+    pub cpu_cap: Option<u8>,
+    /// Efficiency mode: EcoQoS and below-normal priority, as Task Manager's.
+    pub eco: bool,
 }
 
 #[derive(Serialize, TS, Clone, Debug, PartialEq)]

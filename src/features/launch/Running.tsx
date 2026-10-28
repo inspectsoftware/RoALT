@@ -417,7 +417,7 @@ export function KillAllButton() {
           transition: held ? `width ${HOLD_MS}ms linear` : "none",
         }}
       />
-      <span className="relative">{busy ? "Killing…" : held ? "Keep holding…" : "Hold to kill all Roblox"}</span>
+      <span className="relative min-w-0 truncate">{busy ? "Killing…" : held ? "Keep holding…" : "Hold to kill all"}</span>
     </button>
   );
 }

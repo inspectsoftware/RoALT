@@ -208,7 +208,7 @@ launch accounts, signed in with an 8-digit PIN.
 > compare its SHA-256 with `SHA256SUMS.txt` on the release page, then choose **More info → Run anyway**.
 >
 > ```powershell
-> Get-FileHash .\RoALT-Setup-0.4.0.exe -Algorithm SHA256
+> Get-FileHash .\RoALT-Setup-0.5.0.exe -Algorithm SHA256
 > ```
 
 Your accounts and settings live in `%LOCALAPPDATA%\RoALT`. Uninstalling keeps them unless you tick

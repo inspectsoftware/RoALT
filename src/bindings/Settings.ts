@@ -103,6 +103,11 @@ discord: DiscordEvents,
  */
 autoUpdate: boolean, 
 /**
+ * Ask GitHub for a newer RoALT at start and every 6 hours (`self_update`); it is offered,
+ * never installed without a click.
+ */
+selfUpdate: boolean, 
+/**
  * Minimize each client (without taking the focus) once, when its window first appears.
  */
 minimizeOnLaunch: boolean, 

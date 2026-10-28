@@ -1,8 +1,9 @@
 name: Release
 
-# On a v* tag, or by hand (Actions > Release > Run workflow): builds the installer, then puts it
-# with its SHA-256 on a draft release v<version>. Nothing is signed and nothing is published: a
-# maintainer reviews the draft and publishes it, which creates the tag when a manual run made it.
+# On a v* tag, or by hand (Actions > Release > Run workflow): builds the installer, signs it for
+# RoALT's self-updater (RoALT-Setup-<version>.exe.sig, ECDSA P-256 with the ROALT_UPDATE_KEY
+# secret), then puts both with their SHA-256 on a draft release v<version>. Nothing is published:
+# a maintainer reviews the draft and publishes it, which creates the tag when a manual run made it.
 on:
   push:
     tags: ["v*"]
@@ -43,10 +44,39 @@ jobs:
         # Installs it, or upgrades a preinstalled older 6.x (the .iss needs 6.6).
         run: choco upgrade innosetup --no-progress -y
       - run: powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1
+      - name: Sign the installer for the self-updater
+        # The key (a PKCS#8 PEM P-256 private key) reaches Node only through the environment and is
+        # never printed. Signed: "RoALT-Setup-<version>.exe\n" then the installer's bytes, so the
+        # version can't be swapped. The signature is IEEE P1363 (r||s, 64 bytes) in base64: what
+        # RoALT checks, and it is checked here against the PUBLIC_KEY in self_update.rs first.
+        env:
+          ROALT_UPDATE_KEY: ${{ secrets.ROALT_UPDATE_KEY }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          node -e '
+            const crypto = require("crypto"), fs = require("fs");
+            const key = process.env.ROALT_UPDATE_KEY;
+            if (!key) { console.log("::error::the ROALT_UPDATE_KEY secret is not set: the installer cannot be signed"); process.exit(1); }
+            const name = `RoALT-Setup-${process.env.VERSION}.exe`, exe = `dist-installer/${name}`;
+            const data = Buffer.concat([Buffer.from(name + "\n"), fs.readFileSync(exe)]);
+            const sig = crypto.sign("sha256", data, { key, dsaEncoding: "ieee-p1363" });
+            const hex = fs.readFileSync("src-tauri/src/self_update.rs", "utf8").match(/const PUBLIC_KEY: &str = "([0-9a-f]{128})"/)[1];
+            const xy = Buffer.from(hex, "hex"), b64 = (b) => b.toString("base64url");
+            const pub = crypto.createPublicKey({ key: { kty: "EC", crv: "P-256", x: b64(xy.subarray(0, 32)), y: b64(xy.subarray(32)) }, format: "jwk" });
+            if (!crypto.verify("sha256", data, { key: pub, dsaEncoding: "ieee-p1363" }, sig)) {
+              console.log("::error::ROALT_UPDATE_KEY is not the key whose public half is PUBLIC_KEY in self_update.rs: RoALT would refuse this installer");
+              process.exit(1);
+            }
+            fs.writeFileSync(exe + ".sig", sig.toString("base64"));
+            console.log("signed " + exe);
+          '
+        shell: bash
       - uses: actions/upload-artifact@v7
         with:
           name: windows
-          path: dist-installer/RoALT-Setup-${{ steps.v.outputs.version }}.exe
+          path: |
+            dist-installer/RoALT-Setup-${{ steps.v.outputs.version }}.exe
+            dist-installer/RoALT-Setup-${{ steps.v.outputs.version }}.exe.sig
           if-no-files-found: error
 
   release:
@@ -69,8 +99,9 @@ jobs:
         run: |
           sha256sum -- * > SHA256SUMS.txt
           cat SHA256SUMS.txt
+          test -s "RoALT-Setup-$VERSION.exe.sig" || { echo "::error::RoALT-Setup-$VERSION.exe.sig is missing"; exit 1; }
           cat > ../notes.md <<EOF
-          Unsigned build: code signing comes later. The installer's SHA-256 is below and in SHA256SUMS.txt.
+          No Authenticode signature yet: SmartScreen warns. The SHA-256 sums are below and in SHA256SUMS.txt; RoALT-Setup-$VERSION.exe.sig is the signature RoALT's built-in updater checks before it runs the installer.
 
           - **Windows** 10 1809 or later, or Windows 11, x64: RoALT-Setup-$VERSION.exe. SmartScreen warns on first run: More info → Run anyway.
           - Needs the Microsoft Edge WebView2 Runtime (Windows 11 has it). Setup checks, and offers Microsoft's download when it is missing.

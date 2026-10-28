@@ -11,6 +11,7 @@ import { friendly, toast, toastError } from "../../ui/Toast";
 import { plural } from "../accounts/shared";
 import { useMultiToggle } from "../launch/Running";
 import { PasswordDialog } from "../vault/PasswordDialog";
+import { unhideUpdate } from "./UpdateBanner";
 
 /** Accent presets: value ("" is the theme's own lime) and name. Any other colour comes from the picker. */
 const ACCENTS: [string, string][] = [
@@ -479,7 +480,8 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
         </table>
 
         <Heading id="about">About</Heading>
-        <Row title={<>RoALT <span className="mono">{import.meta.env.APP_VERSION}</span></>} hint="RoALT only talks to roblox.com (and Discord, once you set a webhook), and changes nothing on your PC unless you apply a bandwidth limit. New versions are on GitHub Releases." last>
+        <SelfUpdateRow on={settings.selfUpdate} onChange={(selfUpdate) => set.mutate({ selfUpdate })} />
+        <Row title={<>RoALT <span className="mono">{import.meta.env.APP_VERSION}</span></>} hint="RoALT talks to roblox.com, to GitHub to look for its own updates (unless turned off above) and to Discord once you set a webhook, and changes nothing on your PC unless you apply a bandwidth limit. New versions are on GitHub Releases." last>
           <button className="btn" onClick={() => openUrl(RELEASES).catch(toastError)}>
             Open releases page
             <Icon name="external" size={12} />
@@ -895,6 +897,43 @@ function installStep(p: InstallProgress | null) {
     default:
       return null;
   }
+}
+
+/** The self-updater's switch and Check now, with what the check found. */
+function SelfUpdateRow({ on, onChange }: { on: boolean; onChange: (on: boolean) => void }) {
+  const qc = useQueryClient();
+  const [result, setResult] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function check() {
+    setBusy(true);
+    setResult(null);
+    try {
+      const u = await api.selfUpdateCheck();
+      unhideUpdate();
+      qc.setQueryData(qk.appUpdate, u);
+      setResult(u.available ? `RoALT ${u.available} is available.` : "RoALT is up to date.");
+    } catch (e) {
+      setResult(friendly(asError(e)));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Row
+      title="Check for RoALT updates"
+      hint="Asks GitHub Releases at start and every 6 hours. A new version is offered, never installed without your click, and its installer runs only if it carries RoALT's release signature."
+    >
+      <span className="flex flex-wrap items-center gap-3">
+        {result && <span className="text-xs text-dim" role="status">{result}</span>}
+        <button className="btn btn-sm" disabled={busy} onClick={() => void check()}>
+          {busy ? "Checking…" : "Check now"}
+        </button>
+        <Switch label="Check for RoALT updates" checked={on} onChange={onChange} />
+      </span>
+    </Row>
+  );
 }
 
 /** The client RoALT starts, its version, and Install / Update Roblox (Roblox's own client only). */

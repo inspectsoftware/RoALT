@@ -75,7 +75,7 @@ let settings: Settings = {
   adaptive: { enabled: false, background: { cpuCap: 25, eco: true, trimEveryMin: null, affinity: null } }, bandwidthKbps: 0,
   antiAfk: { enabled: false, intervalMin: 15, mode: "focus" },
   discord: { crash: true, hang: true, memRestart: true, disconnect: true, restart: true, breaker: true, batchDone: true, launch: false, statusEveryMin: 0 },
-  autoUpdate: false, minimizeOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0,
+  autoUpdate: false, selfUpdate: true, minimizeOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0,
   remote: { enabled: false, port: 47800 },
 };
 let remotePin = "48213907";
@@ -88,6 +88,15 @@ let robloxClient: RobloxClient = {
   latest: "version-9ac8595712b447a7",
   outdated: true,
 };
+/** RoALT's self-update: the background check "finds" the next minor version 10 s after start. */
+const APP_VERSION: string = import.meta.env.APP_VERSION;
+const NEXT_VERSION = APP_VERSION.replace(/^(\d+)\.(\d+)\..*$/, (_, a, b) => `${a}.${Number(b) + 1}.0`);
+let appUpdate: string | null = null;
+setTimeout(() => {
+  if (!settings.selfUpdate) return;
+  appUpdate = NEXT_VERSION;
+  void emit("app://update", { current: APP_VERSION, available: appUpdate });
+}, 10_000);
 /** The fake vault's Discord webhook (the real one is encrypted; the UI only ever sees its id's end). */
 /** `roblox_install` runs: launches and a second install are refused, as in Rust. */
 let installing = false;
@@ -938,6 +947,19 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       if (!webhook) return fail("invalid", "Set a webhook first.");
       if (webhook.token.includes("deleted")) return fail("invalid", "Discord refused the webhook; it may have been deleted. Paste a new one.");
       return null;
+    case "self_update_status":
+      return { current: APP_VERSION, available: appUpdate };
+    case "self_update_check":
+      await sleep(800);
+      appUpdate = NEXT_VERSION;
+      return { current: APP_VERSION, available: appUpdate };
+    case "self_update_install":
+      if (!appUpdate) return fail("invalid", "RoALT is up to date.");
+      if (batch && !batch.done) return fail("invalid", "Wait for the running launch, batch or auto-rejoin to finish, then update RoALT.");
+      // Downloading, checking, then the installer restarts the app.
+      await sleep(2500);
+      location.reload();
+      return new Promise(() => {});
     case "roblox_client":
       return { ...robloxClient };
     case "roblox_install": {
@@ -1029,6 +1051,10 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
         return fail("invalid", "The status summary must be off (0) or every 5 minutes to 24 hours.");
       if (args.patch.panicHotkey && !/^((ctrl|shift|alt|super)\+)*[^+]+$/i.test(args.patch.panicHotkey))
         return fail("invalid", `"${args.patch.panicHotkey}" isn't a key combination, like Ctrl+Shift+F12.`);
+      if (args.patch.selfUpdate === false && settings.selfUpdate) {
+        appUpdate = null;
+        void emit("app://update", { current: APP_VERSION, available: null });
+      }
       settings = { ...settings, ...args.patch };
       return { ...settings };
 

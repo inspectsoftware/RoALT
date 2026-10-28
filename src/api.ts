@@ -5,6 +5,7 @@ import type { AccountInfo } from "./bindings/AccountInfo";
 import type { AccountPatch } from "./bindings/AccountPatch";
 import type { AccountPresence } from "./bindings/AccountPresence";
 import type { AccountSummary } from "./bindings/AccountSummary";
+import type { AppUpdate } from "./bindings/AppUpdate";
 import type { BandwidthStatus } from "./bindings/BandwidthStatus";
 import type { BulkProgress } from "./bindings/BulkProgress";
 import type { BulkRequest } from "./bindings/BulkRequest";
@@ -46,7 +47,7 @@ export type {
   AccountInfo, AccountPresence, Headshot,
   Favourite, FavouriteInput, JoinCandidate, LaunchInfo, LaunchTarget, ParsedInput, UserRef,
   BandwidthStatus, ClientMetrics, Crash, DiscordStatus, Instance, MultiInstanceStatus, BulkProgress, BulkRequest, ServerOrder, ServerPage, GameInfo, PrivateServerPage, DataDir, LogsCleaned, Notice, RemoteStatus, RobloxClient,
-  AccountPatch, AccountSummary, ConflictPolicy, ErrorPayload, Group, GroupInput,
+  AccountPatch, AccountSummary, AppUpdate, ConflictPolicy, ErrorPayload, Group, GroupInput,
   ImportReport, InstallProgress, Settings, SettingsPatch, VaultMode, VaultStatus,
 };
 export type { AccountStatus } from "./bindings/AccountStatus";
@@ -196,6 +197,12 @@ export const api = {
   robloxClient: () => invoke<RobloxClient>("roblox_client"),
   /** Downloads Roblox's installer, checks it is signed by Roblox Corporation, runs it; progress on onRobloxInstall. */
   robloxInstall: () => invoke<RobloxClient>("roblox_install"),
+  /** RoALT's version and the newer release the last check found (no network). */
+  selfUpdateStatus: () => invoke<AppUpdate>("self_update_status"),
+  /** Asks GitHub for a newer RoALT now. */
+  selfUpdateCheck: () => invoke<AppUpdate>("self_update_check"),
+  /** Downloads the newer RoALT, checks its signature, runs its installer and quits (the installer starts RoALT again). */
+  selfUpdateInstall: () => invoke<void>("self_update_install"),
   dataDirInfo: () => invoke<DataDir>("data_dir_info"),
   dataDirOpen: () => invoke<void>("data_dir_open"),
   /** Copies the database to `path` and restarts RoALT to use it (resolves only on failure). */
@@ -233,5 +240,7 @@ export const events = {
   onBulkProgress: (f: (p: BulkProgress) => void): Promise<UnlistenFn> => listen<BulkProgress>("bulk://progress", (e) => f(e.payload)),
   /** The client or its versions changed (version check at start and every 30 min, an install). */
   onRobloxClient: (f: (c: RobloxClient) => void): Promise<UnlistenFn> => listen<RobloxClient>("roblox://client", (e) => f(e.payload)),
+  /** A newer RoALT is out (checked 10 s after start and every 6 h). */
+  onAppUpdate: (f: (u: AppUpdate) => void): Promise<UnlistenFn> => listen<AppUpdate>("app://update", (e) => f(e.payload)),
   onRobloxInstall: (f: (p: InstallProgress) => void): Promise<UnlistenFn> => listen<InstallProgress>("roblox://install", (e) => f(e.payload)),
 };

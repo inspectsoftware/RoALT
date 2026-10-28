@@ -185,6 +185,7 @@ launch accounts, signed in with an 8-digit PIN.
 | 💤 **Anti-AFK** | Off by default. While you are away from the PC, every few minutes each client is briefly brought to the front and gets one Space press, so Roblox doesn't kick it after 20 idle minutes. Stops the moment you touch the mouse. Or **in the background**: the Space press is posted to the window without bringing it to the front, even when minimized (Roblox may not count it in every game; auto-rejoin stays the fallback). Per-client opt-out. |
 | 🔔 **Discord** | Crash, disconnect, restart and batch alerts, plus an opt-in alert when a client gets into a game. Mute alerts per account. |
 | 📱 **Web dashboard** | Opt-in, off by default. A small page on your PC's LAN address: running clients with Close and Force, Kill all, and launch ticked accounts into a pasted link. 8-digit PIN, 30-day sign-in, rate-limited. |
+| 🔄 **RoALT updates** | Looks for a new RoALT on GitHub Releases at start and every 6 hours (can be turned off; *Check now* in Settings). A banner offers it; *Update now* downloads it, checks its release signature, installs it silently and restarts RoALT. Never installs on its own. |
 | 🧰 **Comfort** | Tray menu with favourites, close to tray, relaunch an ended client in one click, movable data folder, keyboard shortcuts. Dark, light or system theme, any accent colour, and your own background image. |
 
 </details>
@@ -208,7 +209,7 @@ launch accounts, signed in with an 8-digit PIN.
 > compare its SHA-256 with `SHA256SUMS.txt` on the release page, then choose **More info → Run anyway**.
 >
 > ```powershell
-> Get-FileHash .\RoALT-Setup-0.5.1.exe -Algorithm SHA256
+> Get-FileHash .\RoALT-Setup-0.6.0.exe -Algorithm SHA256
 > ```
 
 Your accounts and settings live in `%LOCALAPPDATA%\RoALT`. Uninstalling keeps them unless you tick
@@ -289,10 +290,11 @@ In **Settings → Launching**, turn on **Auto-rejoin** (and, if you like, **Auto
 
 #### ✅ What RoALT does
 
-- Talks **only** to `*.roblox.com` and `*.rbxcdn.com` (plus your Discord webhook, and your LAN if you turn on the web dashboard).
+- Talks **only** to `*.roblox.com` and `*.rbxcdn.com`, plus GitHub to look for RoALT updates (can be turned off), your Discord webhook, and your LAN if you turn on the web dashboard.
 - Encrypts every cookie with **AES-256-GCM** under a key protected by **Windows DPAPI**, plus your master password if you set one.
 - Signs you in through **Roblox's own page**, in a throw-away browser profile.
 - Installs Roblox updates **only** when the installer is signed by Roblox Corporation.
+- Updates itself **only** when you click Update now, and only with an installer that carries RoALT's release signature.
 - Redacts launch tickets from anything it reads in Roblox's logs.
 
 </td>
@@ -319,6 +321,13 @@ In **Settings → Launching**, turn on **Auto-rejoin** (and, if you like, **Auto
   Nothing is sent while the vault is locked.
 - **Roblox updates** come from Roblox only: the version from `clientsettingscdn.roblox.com`, the installer from
   `setup.rbxcdn.com`, run only when its signature checks out as Roblox Corporation's.
+- **RoALT updates** are looked up on GitHub (`api.github.com`, this repository's latest published release) 10 seconds
+  after start and every 6 hours, unless you turn *Check for RoALT updates* off in Settings. The request carries only
+  `RoALT/<version>` as its user agent. When you click Update now, the installer and its `.sig` are downloaded from
+  `github.com` (GitHub's own download hosts only), and the installer runs only if its ECDSA P-256 signature checks out
+  against the public key built into RoALT. The signature covers the version too, so the release must be newer than
+  the RoALT you run and the installer must be the one signed for that version. It installs silently, and RoALT starts again.
+  Roblox clients keep running through it, but the restarted RoALT doesn't track them.
 - **Multi-instance** works by creating one named Windows object before Roblox starts. RoALT also holds Roblox's shared
   sign-in files while its clients run, so clients can't sign each other out.
 - **Limits** go through Windows itself (job objects, priority, affinity). RoALT only ever opens a client with the

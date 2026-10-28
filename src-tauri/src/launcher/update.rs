@@ -33,7 +33,7 @@ const CHECK_EVERY: Duration = Duration::from_secs(30 * 60);
 const MAX_INSTALLER: u64 = 50_000_000;
 pub const INSTALL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 /// Win32 `FILE_SHARE_READ`: others may read (and run) the file, never write or delete it.
-const FILE_SHARE_READ: u32 = 0x1;
+pub(crate) const FILE_SHARE_READ: u32 = 0x1;
 const BOOTSTRAPPER: &str = "A bootstrapper (e.g. Bloxstrap) manages this Roblox install and keeps it up to date; RoALT leaves it alone.";
 
 #[derive(Default)]
@@ -151,7 +151,7 @@ async fn check(app: &AppHandle) {
     let c = publish(app);
     let enabled = s.db.settings().is_ok_and(|v| v.auto_update);
     let running = crate::instances::process::roblox_processes().len();
-    if !may_auto_update(enabled, &c, running, s.bulk.any_busy() || s.update.installing()) {
+    if !may_auto_update(enabled, &c, running, s.bulk.any_busy() || s.update.installing() || s.self_update.installing()) {
         return;
     }
     {
@@ -207,7 +207,7 @@ async fn run_install(app: &AppHandle, s: &App) -> Result<()> {
     *lock(&s.update.latest) = Some(version.clone());
     let url = installer_url(&version).ok_or_else(|| AppError::Roblox("unexpected version name".into()))?;
 
-    let dir = TempDir::new()?;
+    let dir = TempDir::new("roalt-install-")?;
     let mut shown = 0;
     let bytes = s
         .api
@@ -274,16 +274,16 @@ fn run(exe: &Path, timeout: Duration) -> Result<Option<i32>> {
     }
 }
 
-async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
+pub(crate) async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
     tauri::async_runtime::spawn_blocking(f).await.map_err(|e| AppError::Internal(e.to_string()))?
 }
 
-/// A fresh, uniquely named folder in %TEMP%, deleted with everything in it on drop.
-struct TempDir(PathBuf);
+/// A fresh, uniquely named folder in %TEMP% (`prefix` + a UUID), deleted with everything in it on drop.
+pub(crate) struct TempDir(pub(crate) PathBuf);
 
 impl TempDir {
-    fn new() -> Result<Self> {
-        let dir = std::env::temp_dir().join(format!("roalt-install-{}", uuid::Uuid::new_v4()));
+    pub(crate) fn new(prefix: &str) -> Result<Self> {
+        let dir = std::env::temp_dir().join(format!("{prefix}{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&dir)?;
         Ok(Self(dir))
     }
@@ -373,7 +373,7 @@ mod tests {
     #[test]
     fn run_waits_for_a_write_locked_program() {
         let system = std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
-        let dir = TempDir::new().unwrap();
+        let dir = TempDir::new("roalt-install-").unwrap();
         let exe = dir.0.join("ping-copy.exe");
         std::fs::copy(system.join(r"System32\PING.EXE"), &exe).unwrap();
         let pinned = OpenOptions::new().read(true).share_mode(FILE_SHARE_READ).open(&exe).unwrap();

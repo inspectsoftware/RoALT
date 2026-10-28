@@ -8,6 +8,7 @@ mod launcher;
 mod model;
 mod remote;
 mod roblox_api;
+mod self_update;
 mod storage;
 mod tray;
 mod vault;
@@ -43,6 +44,7 @@ pub struct App {
     pub bulk: launcher::bulk::Bulk,
     pub discord: discord::Discord,
     pub update: launcher::update::Updater,
+    pub self_update: self_update::SelfUpdater,
     /// The LAN web dashboard (`remote`).
     pub remote: remote::Remote,
     /// When the shutdown RoALT scheduled is due (Unix ms; `commands::shutdown_schedule`).
@@ -316,6 +318,7 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
         bulk: launcher::bulk::Bulk::new(),
         discord: discord::Discord::new(),
         update: launcher::update::Updater::new(),
+        self_update: self_update::SelfUpdater::new(),
         remote: remote::Remote::new(),
         shutdown: Mutex::new(shutdown),
     });
@@ -350,6 +353,7 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
     instances::afk::spawn(app.handle().clone());
     discord::spawn(app.handle().clone());
     launcher::update::spawn(app.handle().clone());
+    self_update::spawn(app.handle().clone());
     remind_bandwidth(app.handle().clone());
     Ok(())
 }
@@ -484,6 +488,9 @@ fn main() {
             commands::target_place,
             commands::roblox_client,
             commands::roblox_install,
+            commands::self_update_status,
+            commands::self_update_check,
+            commands::self_update_install,
             commands::data_dir_info,
             commands::data_dir_open,
             commands::data_dir_move,

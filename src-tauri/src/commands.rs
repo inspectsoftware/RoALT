@@ -746,6 +746,25 @@ pub async fn roblox_install(app: AppHandle) -> Result<RobloxClient> {
     crate::launcher::update::install(&app).await
 }
 
+/// RoALT's version and the newer release the last check found (no network).
+#[tauri::command]
+pub fn self_update_status(s: State<'_, App>) -> AppUpdate {
+    crate::self_update::status(&s)
+}
+
+/// Asks GitHub for a newer RoALT now (Check now), whatever `settings.self_update` says.
+#[tauri::command]
+pub async fn self_update_check(app: AppHandle) -> Result<AppUpdate> {
+    crate::self_update::check(&app).await
+}
+
+/// Downloads the newer RoALT's installer, checks its signature, runs it and quits
+/// (`self_update::install`; the installer starts RoALT again).
+#[tauri::command]
+pub async fn self_update_install(app: AppHandle) -> Result<()> {
+    crate::self_update::install(&app).await
+}
+
 /// Where the data lives now (see `main::data_dir`).
 #[tauri::command]
 pub fn data_dir_info(s: State<'_, App>) -> DataDir {
@@ -1865,6 +1884,8 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
         v.discord = d;
     }
     if let Some(a) = patch.auto_update { v.auto_update = a }
+    let self_update = patch.self_update.filter(|&u| u != v.self_update);
+    if let Some(u) = self_update { v.self_update = u }
     if let Some(m) = patch.minimize_on_launch { v.minimize_on_launch = m }
     if let Some(c) = patch.clean_logs { v.clean_logs = c }
     if let Some(d) = patch.launch_delay_ms {
@@ -1910,6 +1931,9 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
         let _ = set_panic_hotkey(&app, &v.panic_hotkey, &had);
     }
     rest?;
+    if let Some(u) = self_update {
+        crate::self_update::switched(&app, u);
+    }
     Ok(v)
 }
 

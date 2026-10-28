@@ -54,6 +54,8 @@ Name: "{autodesktop}\RoALT"; Filename: "{app}\RoALT.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\RoALT.exe"; Description: "{cm:LaunchProgram,RoALT}"; Flags: nowait postinstall skipifsilent; Check: WebView2Installed
+; RoALT's self-updater runs Setup with /VERYSILENT ... /RELAUNCH and quits: start it again.
+Filename: "{app}\RoALT.exe"; Flags: nowait; Check: Relaunch
 
 [Code]
 const
@@ -87,6 +89,18 @@ begin
       mbConfirmation, MB_YESNO, IDNO) = IDYES) then
     ShellExecAsOriginalUser('open', WebView2Download, '', '', SW_SHOWNORMAL, ewNoWait, Code);
   Result := True;
+end;
+
+{ Setup was started by RoALT's self-updater (/RELAUNCH), silently. }
+function Relaunch: Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  if WizardSilent and WebView2Installed then
+    for I := 1 to ParamCount do
+      if CompareText(ParamStr(I), '/RELAUNCH') = 0 then
+        Result := True;
 end;
 
 { A running RoALT holds its exe and database open: uninstalling then would leave both behind. }

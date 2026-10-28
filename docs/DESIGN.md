@@ -337,8 +337,8 @@ client can opt out.
 Discord alerts (opt-in): the webhook URL is encrypted with its own AAD (`roalt.discord.webhook`) and
 accepted only for the Discord hosts, https, `/api/webhooks/<id>/<token>`; redirects are off. Events are
 coalesced into one message at most every 2 s, and a 429's `retry_after` is honoured. Nothing is sent
-while the vault is locked; messages carry names only and disable mentions. Discord is the only host
-outside Roblox's that RoALT ever contacts, and only with a webhook set.
+while the vault is locked; messages carry names only and disable mentions. Outside Roblox's hosts, RoALT
+contacts only Discord (with a webhook set) and GitHub (its own update check, below).
 
 Roblox updates: the live version comes from `clientsettingscdn.roblox.com/v2/client-version/WindowsPlayer`
 (at start and every 30 min) and is compared with the client's `Versions\version-…` folder; a bulk launch
@@ -359,10 +359,24 @@ doesn't retry a version that failed. Fallback: open roblox.com/download.
 - `scripts/build-installer.ps1`: builds the app (`tauri build --no-bundle`, static CRT) and runs ISCC with
   the version from `tauri.conf.json`, output `dist\RoALT-Setup-<version>.exe`.
 - `.github/workflows/release.yml` (same pattern as AgentSuite): a `v*` tag builds on windows-latest,
-  installs Inno Setup, attaches the setup .exe and `SHA256SUMS.txt` to a **draft** release; you publish it.
+  installs Inno Setup, signs `RoALT-Setup-<version>.exe` + newline + the setup .exe's bytes with the
+  `ROALT_UPDATE_KEY` secret (ECDSA P-256 / SHA-256, IEEE P1363, base64 in `RoALT-Setup-<version>.exe.sig`;
+  the job fails without the secret, or when the signature doesn't verify against `PUBLIC_KEY` in
+  `self_update.rs`), attaches both and
+  `SHA256SUMS.txt` to a **draft** release; you publish it.
   `ci.yml` runs `cargo test`, clippy and `tsc` on every push.
-- No code signing yet: SmartScreen will warn on first run. No in-app update check for RoALT itself (the
-  version check is Roblox's client only); Settings → About links to the Releases page.
+- No Authenticode signing yet: SmartScreen will warn on first run.
+- Self-update (`self_update.rs`, setting `selfUpdate`, default on): `api.github.com/.../releases/latest`
+  (published, non-draft, non-prerelease) 10 s after start and every 6 h; a strictly newer `vX.Y.Z` tag with
+  both assets is offered in a banner (Later hides it until the next start) and by Settings → Check now.
+  Turning the switch off forgets the found version (the banner hides); on checks at once.
+  Update now (asks first while tracked clients run: they keep running, untracked after the restart) asks
+  GitHub again, downloads from github.com (redirects only to GitHub's asset hosts; ≤ 200 MB, sig ≤ 4 KB)
+  into a fresh temp folder, write-locks the file, verifies the release's name line + the bytes read back
+  through that handle with CNG against the embedded public key (so an older signed installer can't pose
+  as a newer version), checks again that no launch, batch, rejoin or Roblox install started, runs it `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+  /CLOSEAPPLICATIONS /RELAUNCH` and quits; RoALT.iss starts RoALT again on `/RELAUNCH`. The next start
+  deletes the folder.
 
 ## 8. Milestones
 

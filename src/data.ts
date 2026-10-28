@@ -24,6 +24,7 @@ export const qk = {
   servers: ["servers"],
   privateServers: ["privateServers"],
   client: ["client"],
+  appUpdate: ["appUpdate"],
   dataDir: ["dataDir"],
   shutdown: ["shutdown"],
   background: ["background"],

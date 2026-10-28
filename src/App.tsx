@@ -15,6 +15,7 @@ import { draftFor, EMPTY_DRAFT, type Draft } from "./features/launch/target";
 import { MonitorView } from "./features/monitor/MonitorView";
 import { ServersView } from "./features/servers/ServersView";
 import { SettingsView, SETTINGS_SECTIONS } from "./features/settings/SettingsView";
+import { UpdateBanner } from "./features/settings/UpdateBanner";
 import { UnlockScreen, type LockReason } from "./features/vault/UnlockScreen";
 import { Icon } from "./ui/Icon";
 import { Divider, usePanelWidth } from "./ui/Resizer";
@@ -69,6 +70,7 @@ function Root() {
       }),
       events.onBulkProgress((p) => qc.setQueryData(qk.bulk, p)),
       events.onRobloxClient((c) => qc.setQueryData(qk.client, c)),
+      events.onAppUpdate((u) => qc.setQueryData(qk.appUpdate, u)),
       // Errors stay until dismissed: the window may have been hidden in the tray.
       events.onNotice((n) => toast(n.message, n.error ? "error" : "ok", n.error)),
       events.onVaultLocked(() => {
@@ -114,6 +116,7 @@ function Root() {
         onLock={unlocked && v.mode === "master" ? lock : undefined}
         onRefresh={unlocked ? refresh : undefined}
       />
+      {unlocked && s && !failed && <UpdateBanner />}
       {failed ? (
         <div className="flex-1 grid place-items-center p-8">
           <div className="flex flex-col items-start gap-3 max-w-sm">

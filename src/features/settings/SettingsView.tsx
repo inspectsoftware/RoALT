@@ -636,7 +636,7 @@ function ClientRow({ client }: { client: RobloxClient | undefined }) {
     return () => void un.then((f) => f());
   }, []);
   const step = installStep(progress);
-  const offer = client && !client.bootstrapper && (!client.path || client.outdated);
+  const offer = client && !client.bootstrapper;
 
   async function install() {
     if (busy) return;
@@ -683,7 +683,7 @@ function ClientRow({ client }: { client: RobloxClient | undefined }) {
         ) : (
           offer && (
             <button className="btn btn-sm" disabled={busy} onClick={() => void install()} title="Downloads Roblox's installer from setup.rbxcdn.com and runs it once it is verified as signed by Roblox Corporation">
-              {client.path ? "Update Roblox" : "Install Roblox"}
+              {!client.path ? "Install Roblox" : client.outdated ? "Update Roblox" : "Reinstall Roblox"}
             </button>
           )
         )}

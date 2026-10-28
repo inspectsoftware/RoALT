@@ -5,6 +5,7 @@
 pub mod authenticode;
 pub mod bulk;
 pub mod client;
+pub mod fps;
 pub mod target;
 pub mod update;
 pub mod uri;
@@ -131,7 +132,10 @@ fn args_for(s: &App, account_id: i64) -> Result<Vec<String>> {
 
 /// One launch: resolve → `client-assertion` (failure ignored) → `authentication-ticket` →
 /// URI with a fresh `browsertrackerid` → start the client (`client::find` + `client::start`,
-/// with the account's or the default launch arguments after the URI).
+/// with the account's or the default launch arguments after the URI). Just before the client
+/// starts, the account's or the default FPS cap goes into Roblox's flag file (`fps`, put back
+/// `fps::SETTLE` after the start; launches wait for each other meanwhile), unless a
+/// bootstrapper manages the client (logged).
 /// `AppError::Locked` when the vault is locked; cookie errors as the API client maps them.
 pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget) -> Result<LaunchInfo> {
     let cookie = account_cookie(s, account_id)?;
@@ -144,7 +148,29 @@ pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget) -> Result<L
     let ticket = s.api.authentication_ticket(account_id, &cookie, assertion.as_ref()).await?;
     let (browser_tracker_id, started_at) = (uri::new_browser_tracker_id(), crate::commands::now_ms());
     let place = uri::PlaceLaunch { join: &join, browser_tracker_id, join_attempt_id: Uuid::new_v4() };
-    let (pid, pid_start) = client::start(&exe, &uri::player_uri(&ticket, started_at, &place), &args)?;
+    let fps = match s.db.account(account_id)?.fps_cap {
+        Some(own) => own,
+        None => s.db.settings()?.fps_cap,
+    };
+    let flags = fps::LOCK.lock().await;
+    let undo = if client::managed_by_bootstrapper(&exe) {
+        if fps != 0 {
+            log::info!("FPS cap skipped for account {account_id}: a bootstrapper manages Roblox's flags");
+        }
+        None
+    } else {
+        fps::apply(&exe.path, fps)
+    };
+    let started = client::start(&exe, &uri::player_uri(&ticket, started_at, &place), &args);
+    if let Some(undo) = undo {
+        if started.is_ok() {
+            tokio::time::sleep(fps::SETTLE).await;
+        }
+        undo.put_back();
+    }
+    drop(flags);
+    let (pid, pid_start) = started?;
+
     log::info!("launched account {account_id} (pid {pid}, bootstrapper: {}, {} extra argument(s))", exe.bootstrapper, args.len());
     Ok(LaunchInfo {
         account_id,

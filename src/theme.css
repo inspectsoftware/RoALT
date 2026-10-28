@@ -70,6 +70,81 @@
     --backdrop: rgb(14 16 19 / 0.32);
     color-scheme: light;
   }
+  /* Named palettes: each defines every token, so none leans on :root. Swatches in SettingsView. */
+  :root[data-theme="neon"] {
+    --bg: #07050f;
+    --panel: #0c0a17;
+    --raised: #121022;
+    --hover: #18152c;
+    --sel: #221d3d;
+    --line: #1e1a33;
+    --line-strong: #2f2a4d;
+    --text: #ecebf7;
+    --dim: #a09cbf;
+    --accent: #ff4fd8;
+    --accent-text: var(--accent);
+    --on-accent: #0c0a17;
+    --blue: #5ab8ff;
+    --orange: #ffa05c;
+    --grey: #686487;
+    --grid: rgb(255 79 216 / 0.04);
+    --on: var(--accent);
+    --on-ink: #0c0a17;
+    --focus: var(--accent);
+    --shadow: 0 16px 40px rgb(0 0 0 / 0.5), 0 0 24px rgb(255 79 216 / 0.06);
+    --backdrop: rgb(4 2 10 / 0.72);
+    color-scheme: dark;
+  }
+  :root[data-theme="sakura"] {
+    --bg: #fdf2f6;
+    --panel: #ffffff;
+    --raised: #fff7fa;
+    --hover: #fbe7ef;
+    --sel: #f8d9e6;
+    --line: #f0d6e0;
+    --line-strong: #e0b6c6;
+    --text: #2a1520;
+    --dim: #74505f;
+    --accent: #f48fb8;
+    --accent-text: #a8306a;
+    --on-accent: #2a1520;
+    --blue: #2f5fc4;
+    --orange: #b0520f;
+    --grey: #a08a94;
+    --grid: rgb(80 0 40 / 0.045);
+    /* The pastel accent fails 3:1 on white; checked controls and focus use a deeper pink. */
+    --on: #d6457f;
+    --on-ink: #ffffff;
+    --focus: #d6457f;
+    --shadow: 0 16px 40px rgb(90 20 50 / 0.14);
+    --backdrop: rgb(42 21 32 / 0.3);
+    color-scheme: light;
+  }
+  :root[data-theme="bricks"] {
+    --bg: #140d0b;
+    --panel: #1b1310;
+    --raised: #221814;
+    --hover: #2a1e19;
+    --sel: #36261f;
+    --line: #2e211b;
+    --line-strong: #45322a;
+    --text: #f3e9e3;
+    --dim: #b8a59a;
+    --accent: #e2603f;
+    --accent-text: #ef7a58;
+    --on-accent: #1b1310;
+    --blue: #8fb4ff;
+    --orange: #f5b461;
+    --grey: #6f5f57;
+    --grid: rgb(255 220 200 / 0.035);
+    --on: var(--accent);
+    --on-ink: #1b1310;
+    --focus: var(--accent);
+    --shadow: 0 16px 40px rgb(0 0 0 / 0.5);
+    --backdrop: rgb(10 5 3 / 0.72);
+    color-scheme: dark;
+  }
+
 
   *,
   ::before,
@@ -213,7 +288,8 @@
   .seg:disabled {
     opacity: 0.45;
   }
-  .seg[aria-pressed="true"] {
+  .seg[aria-pressed="true"],
+  .seg[aria-checked="true"] {
     background: var(--text);
     color: var(--bg);
   }

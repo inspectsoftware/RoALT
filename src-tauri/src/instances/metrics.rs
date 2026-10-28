@@ -132,6 +132,18 @@ pub fn mem_strikes(prev: u32, private_mb: u64, limit_mb: u32) -> u32 {
     if limit_mb > 0 && private_mb > u64::from(limit_mb) { prev.saturating_add(1) } else { 0 }
 }
 
+/// Whether a client is held by the memory throttle after a sample of `private_mb` (pure): on
+/// over `limit_mb`, off again under 90 % of it, else as it was (`prev`). Never with 0 (off).
+pub fn mem_throttled(prev: bool, private_mb: u64, limit_mb: u32) -> bool {
+    let limit = u64::from(limit_mb);
+    match limit_mb {
+        0 => false,
+        _ if private_mb > limit => true,
+        _ if private_mb * 10 < limit * 9 => false,
+        _ => prev,
+    }
+}
+
 /// Samples over the limit in a row that restart a client.
 pub const MEM_STRIKES: u32 = 3;
 
@@ -180,5 +192,15 @@ mod tests {
         assert_eq!(mem_strikes(2, 4_096, 4_096), 0, "at the limit is not over it");
         assert_eq!(mem_strikes(2, 99_999, 0), 0, "off");
         assert_eq!(mem_strikes(u32::MAX, 5_000, 1), u32::MAX);
+    }
+
+    #[test]
+    fn memory_throttle_has_hysteresis() {
+        assert!(mem_throttled(false, 4_097, 4_096), "over");
+        assert!(!mem_throttled(false, 4_096, 4_096), "at the limit is not over it");
+        assert!(mem_throttled(true, 3_700, 4_096), "between 90 % and the limit: stays");
+        assert!(!mem_throttled(false, 3_700, 4_096), "between: stays off");
+        assert!(!mem_throttled(true, 3_686, 4_096), "under 90 %: lifted");
+        assert!(!mem_throttled(true, 99_999, 0), "off");
     }
 }

@@ -3,6 +3,8 @@ import type { Adaptive } from "./Adaptive";
 import type { AntiAfk } from "./AntiAfk";
 import type { Density } from "./Density";
 import type { DiscordEvents } from "./DiscordEvents";
+import type { MemThrottle } from "./MemThrottle";
+import type { RemoteAccess } from "./RemoteAccess";
 import type { Theme } from "./Theme";
 
 /**
@@ -67,6 +69,10 @@ closeToTray: boolean,
  */
 memRestartMb: number, 
 /**
+ * Hold a client to a CPU cap (lowering its frame rate) while its private memory is over a limit.
+ */
+memThrottle: MemThrottle, 
+/**
  * Trim each client's working set this often (minutes, 0: off) unless its own limits say.
  */
 trimEveryMin: number, 
@@ -87,4 +93,25 @@ discord: DiscordEvents,
  * Install a new Roblox version on its own once no client runs and no launch or batch does
  * (never over a bootstrapper; the installer is signature-checked as always).
  */
-autoUpdate: boolean, };
+autoUpdate: boolean, 
+/**
+ * Minimize each client (without taking the focus) once, when its window first appears.
+ */
+minimizeOnLaunch: boolean, 
+/**
+ * System-wide key combination for Kill all, like "Ctrl+Shift+F12"; "" for none.
+ */
+panicHotkey: string, 
+/**
+ * Delete old or huge Roblox client logs at start and every hour (`logwatch::clean`).
+ */
+cleanLogs: boolean, 
+/**
+ * Target FPS written to Roblox's `ClientAppSettings.json` before each launch
+ * (`launcher::fps`), unless the account has its own; 0: leave Roblox alone, else 5..=360.
+ */
+fpsCap: number, 
+/**
+ * The LAN web dashboard (`remote`); its PIN is in the vault, not here.
+ */
+remote: RemoteAccess, };

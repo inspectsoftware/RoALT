@@ -131,15 +131,25 @@ impl Limiter {
 
 /// The limits each running client gets (`clients` as `Tracker::clients`, with the limits the
 /// user set): `effective`, with `foreground` the pid owning the window in front and each
-/// client's auto-spread share of `cores`.
-pub fn plan(clients: &[(String, u32, u64, Limits)], v: &Settings, foreground: Option<u32>, cores: u32) -> Vec<(String, u32, u64, Limits)> {
+/// client's auto-spread share of `cores`; then the memory throttle's cap on the `throttled` ids.
+pub fn plan(
+    clients: &[(String, u32, u64, Limits)],
+    v: &Settings,
+    foreground: Option<u32>,
+    cores: u32,
+    throttled: &[String],
+) -> Vec<(String, u32, u64, Limits)> {
     let n = clients.len() as u32;
     clients
         .iter()
         .enumerate()
         .map(|(i, (id, pid, t0, manual))| {
             let share = (v.auto_spread && n > 1).then(|| spread(i as u32, n, cores));
-            (id.clone(), *pid, *t0, effective(*manual, foreground == Some(*pid), v, share))
+            let mut l = effective(*manual, foreground == Some(*pid), v, share);
+            if v.mem_throttle.mb > 0 && throttled.contains(id) {
+                l.cpu_cap = Some(throttle_cap(l.cpu_cap, v.mem_throttle.cpu_cap));
+            }
+            (id.clone(), *pid, *t0, l)
         })
         .collect()
 }
@@ -156,6 +166,11 @@ pub fn effective(manual: Limits, foreground: bool, v: &Settings, share: Option<u
         l.affinity = share;
     }
     l
+}
+
+/// The CPU cap of a throttled client (pure): the throttle's, or its own if that is tighter.
+pub fn throttle_cap(own: Option<u8>, throttle: u8) -> u8 {
+    own.map_or(throttle, |c| c.min(throttle))
 }
 
 /// Client `i` of `n`'s cores out of `cores` (at most 64), round-robin (pure): with at least as
@@ -354,9 +369,24 @@ mod tests {
         v.adaptive.enabled = true;
         v.auto_spread = true;
         let c = |id: &str, pid| (id.to_owned(), pid, 1, none);
-        let p = plan(&[c("a", 10), c("b", 20)], &v, Some(20), 4);
+        let p = plan(&[c("a", 10), c("b", 20)], &v, Some(20), 4, &[]);
         assert_eq!(p[0].3, Limits { trim_every_min: Some(15), affinity: Some(0b0101), ..bg });
         assert_eq!(p[1].3, Limits { trim_every_min: Some(15), affinity: Some(0b1010), ..none });
-        assert_eq!(plan(&[c("a", 10)], &v, None, 4)[0].3.affinity, None);
+        assert_eq!(plan(&[c("a", 10)], &v, None, 4, &[])[0].3.affinity, None);
+
+        // The memory throttle tightens the cap of the clients it holds, the one in front too.
+        v.mem_throttle = crate::model::MemThrottle { mb: 4_096, cpu_cap: 10 };
+        let held = ["b".to_owned()];
+        let p = plan(&[c("a", 10), c("b", 20)], &v, Some(20), 4, &held);
+        assert_eq!((p[0].3.cpu_cap, p[1].3.cpu_cap), (Some(25), Some(10)));
+        let tight = Limits { cpu_cap: Some(5), ..none };
+        assert_eq!(plan(&[("b".to_owned(), 20, 1, tight)], &v, None, 4, &held)[0].3.cpu_cap, Some(5), "its own tighter cap");
+        v.mem_throttle.mb = 0;
+        assert_eq!(plan(&[c("b", 20)], &v, Some(20), 4, &held)[0].3.cpu_cap, None, "off");
+    }
+
+    #[test]
+    fn throttle_cap_only_tightens() {
+        assert_eq!((throttle_cap(None, 10), throttle_cap(Some(50), 10), throttle_cap(Some(5), 10)), (10, 10, 5));
     }
 }

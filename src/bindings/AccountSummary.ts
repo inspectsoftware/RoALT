@@ -21,4 +21,12 @@ allowDisconnect: boolean,
 /**
  * Extra client arguments, used instead of `Settings.launch_args`; None: the default.
  */
-launchArgs: string | null, };
+launchArgs: string | null, 
+/**
+ * No Discord alerts about this account's clients (batch summaries and status still go).
+ */
+discordMuted: boolean, 
+/**
+ * Target FPS for its launches, used instead of `Settings.fps_cap`; None: the default.
+ */
+fpsCap: number | null, };

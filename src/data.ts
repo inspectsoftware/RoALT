@@ -25,6 +25,8 @@ export const qk = {
   privateServers: ["privateServers"],
   client: ["client"],
   dataDir: ["dataDir"],
+  shutdown: ["shutdown"],
+  remote: ["remote"],
 } as const;
 
 export const queryClient = new QueryClient({

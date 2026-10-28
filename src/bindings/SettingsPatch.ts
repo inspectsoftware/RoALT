@@ -3,6 +3,8 @@ import type { Adaptive } from "./Adaptive";
 import type { AntiAfk } from "./AntiAfk";
 import type { Density } from "./Density";
 import type { DiscordEvents } from "./DiscordEvents";
+import type { MemThrottle } from "./MemThrottle";
+import type { RemoteAccess } from "./RemoteAccess";
 import type { Theme } from "./Theme";
 
-export type SettingsPatch = { theme?: Theme, density?: Density, autoLockMinutes?: number, clipboardClearSeconds?: number, cacheMinutes?: number, protectSharedLogin?: boolean, launchDelayMs?: number, autoRejoin?: boolean, autoRestartOnCrash?: boolean, breakerMax?: number, breakerWindowMin?: number, closeGraceS?: number, launchArgs?: string, closeToTray?: boolean, memRestartMb?: number, trimEveryMin?: number, autoSpread?: boolean, adaptive?: Adaptive, antiAfk?: AntiAfk, discord?: DiscordEvents, autoUpdate?: boolean, };
+export type SettingsPatch = { theme?: Theme, density?: Density, autoLockMinutes?: number, clipboardClearSeconds?: number, cacheMinutes?: number, protectSharedLogin?: boolean, launchDelayMs?: number, autoRejoin?: boolean, autoRestartOnCrash?: boolean, breakerMax?: number, breakerWindowMin?: number, closeGraceS?: number, launchArgs?: string, closeToTray?: boolean, memRestartMb?: number, memThrottle?: MemThrottle, trimEveryMin?: number, autoSpread?: boolean, adaptive?: Adaptive, antiAfk?: AntiAfk, discord?: DiscordEvents, autoUpdate?: boolean, minimizeOnLaunch?: boolean, panicHotkey?: string, cleanLogs?: boolean, fpsCap?: number, remote?: RemoteAccess, };

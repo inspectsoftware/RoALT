@@ -7,6 +7,7 @@ import { toast, toastError } from "../../ui/Toast";
 import { Heading, Row } from "../settings/SettingsView";
 
 const EVENTS: [key: Exclude<keyof DiscordEvents, "statusEveryMin">, title: string, hint: string][] = [
+  ["launch", "Launches", "A client got into a game (not after a rejoin, restart or reconnect)."],
   ["crash", "Crashes", "A client closed without RoALT closing it."],
   ["hang", "Stopped responding", "A client's window hasn't responded for 30 s."],
   ["disconnect", "Disconnects", "Roblox kicked a client, its server shut down or the connection was lost."],

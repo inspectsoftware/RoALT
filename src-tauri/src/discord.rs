@@ -75,6 +75,8 @@ pub enum Event {
     Crash { name: String, place_id: Option<i64> },
     Hang { name: String },
     Disconnect { name: String },
+    /// A client first got into a game.
+    Launch { name: String, place_id: Option<i64> },
     /// An auto-rejoin (`Disconnect`) or auto-restart went ahead.
     Restart { name: String, cause: CrashKind },
     /// The crash breaker gave up on the account.
@@ -89,6 +91,7 @@ impl Event {
             Self::Crash { .. } => v.crash,
             Self::Hang { .. } => v.hang,
             Self::Disconnect { .. } => v.disconnect,
+            Self::Launch { .. } => v.launch,
             Self::Restart { cause: CrashKind::Mem, .. } => v.mem_restart,
             Self::Restart { .. } => v.restart,
             Self::Breaker { .. } => v.breaker,
@@ -113,6 +116,8 @@ impl Event {
             Self::Crash { name, place_id: None } => format!("💥 **{name}**: the client crashed."),
             Self::Hang { name } => format!("🧊 **{name}**: the client stopped responding."),
             Self::Disconnect { name } => format!("🔌 **{name}**: disconnected by Roblox."),
+            Self::Launch { name, place_id: Some(p) } => format!("🎮 **{name}**: in game (place {p})."),
+            Self::Launch { name, place_id: None } => format!("🎮 **{name}**: in game."),
             Self::Restart { name, cause: CrashKind::Disconnect } => format!("🔁 **{name}**: rejoined."),
             Self::Restart { name, cause: CrashKind::Mem } => format!("🧹 **{name}**: restarted, it used too much memory."),
             Self::Restart { name, cause: CrashKind::Hang } => format!("🔁 **{name}**: restarted after it stopped responding."),
@@ -172,6 +177,14 @@ pub fn change_of(t: &Transition) -> Option<CrashKind> {
         return Some(CrashKind::Disconnect);
     }
     (a.note.as_deref() == Some(HUNG) && b.note.as_deref() != Some(HUNG)).then_some(CrashKind::Hang)
+}
+
+/// The client got into a game for the first time (pure): not a rejoin, restart or reconnect.
+pub fn launched(t: &Transition) -> bool {
+    let (b, a) = (&t.before, &t.after);
+    a.state == InstanceState::InGame
+        && a.rejoins == 0
+        && !matches!(b.state, InstanceState::InGame | InstanceState::Disconnected)
 }
 
 /// The webhook body for some events (pure): one embed, one line each.
@@ -273,11 +286,12 @@ impl Default for Discord {
     }
 }
 
-fn hex(bytes: &[u8]) -> String {
+/// Lowercase hex, how vault blobs sit in the settings table.
+pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn unhex(s: &str) -> Option<Vec<u8>> {
+pub(crate) fn unhex(s: &str) -> Option<Vec<u8>> {
     if !s.len().is_multiple_of(2) {
         return None;
     }
@@ -369,18 +383,26 @@ pub fn notify(app: &AppHandle, event: Event) {
     }
 }
 
-/// The tracker's poll saw these changes.
+/// The tracker's poll saw these changes. Muted accounts (`discord_muted`) are left out.
 pub fn transitions(app: &AppHandle, moved: &[Transition]) {
     for t in moved {
-        let Some(kind) = change_of(t) else { continue };
+        let kind = change_of(t);
+        if kind.is_none() && !launched(t) {
+            continue;
+        }
         let a = app.state::<App>().db.account(t.after.account_id).ok();
+        if a.as_ref().is_some_and(|a| a.discord_muted) {
+            continue;
+        }
         let name = name_of(a.as_ref(), t.after.account_id);
+        let place_id = t.after.place_id;
         notify(
             app,
             match kind {
-                CrashKind::Disconnect => Event::Disconnect { name },
-                CrashKind::Hang => Event::Hang { name },
-                _ => Event::Crash { name, place_id: t.after.place_id },
+                None => Event::Launch { name, place_id },
+                Some(CrashKind::Disconnect) => Event::Disconnect { name },
+                Some(CrashKind::Hang) => Event::Hang { name },
+                Some(_) => Event::Crash { name, place_id },
             },
         );
     }
@@ -539,6 +561,8 @@ mod tests {
             limits: Default::default(),
             anti_afk: true,
             afk_at: None,
+            throttled: false,
+            micro: false,
         }
     }
 
@@ -561,6 +585,17 @@ mod tests {
         assert_eq!(t(inst(Starting, None), inst(Joining, None)), None);
         assert_eq!(t(inst(Joining, None), inst(InGame, None)), None);
         assert_eq!(t(inst(Disconnected, None), inst(InGame, None)), None, "reconnected");
+
+        // Getting into a game is a launch alert, once, and only for the first client.
+        let l = |b: Instance, a: Instance| launched(&Transition { before: b, after: a });
+        assert!(l(inst(Joining, None), inst(InGame, None)));
+        assert!(l(inst(Starting, None), inst(InGame, None)));
+        assert!(!l(inst(InGame, None), inst(InGame, Some(HUNG))), "already in game");
+        assert!(!l(inst(Disconnected, None), inst(InGame, None)), "reconnected");
+        let mut rejoined = inst(InGame, None);
+        rejoined.rejoins = 1;
+        assert!(!l(inst(Joining, None), rejoined), "a rejoin or restart");
+        assert!(!l(inst(Joining, None), inst(Exited, Some(UNEXPECTED))));
     }
 
     #[test]
@@ -580,6 +615,8 @@ mod tests {
         assert_eq!(batch.line(), "🚀 Batch finished: 1 of 3 in game, 1 done, 1 failed (stopped: Cancelled).");
         let status = Event::Status { clients: 2, ram_mb: 1536.4, cpu_pct: Some(12.6) };
         assert_eq!(status.line(), "📊 2 clients running · 1536 MB RAM · 13% CPU.");
+        let launch = Event::Launch { name: "A".into(), place_id: Some(1818) };
+        assert_eq!(launch.line(), "🎮 **A**: in game (place 1818).");
         let no_cpu = Event::Status { clients: 1, ram_mb: 512.0, cpu_pct: None };
         assert_eq!(no_cpu.line(), "📊 1 client running · 512 MB RAM.");
 
@@ -609,6 +646,9 @@ mod tests {
             created_at: 0,
             allow_disconnect: false,
             launch_args: None,
+            discord_muted: false,
+            fps_cap: None,
+
         };
         assert_eq!(name_of(Some(&a), 1), "\\*Nova\\* \\@everyone (\\@nova\\_builds)");
         assert_eq!(name_of(None, 7), "Account 7");
@@ -620,7 +660,10 @@ mod tests {
         let mem = Event::Restart { name: "A".into(), cause: CrashKind::Mem };
         let crash_restart = Event::Restart { name: "A".into(), cause: CrashKind::Crash };
         let status = Event::Status { clients: 1, ram_mb: 1.0, cpu_pct: Some(1.0) };
-        assert!(mem.wanted(&v) && crash_restart.wanted(&v) && !status.wanted(&v));
+        let launch = Event::Launch { name: "A".into(), place_id: None };
+        assert!(mem.wanted(&v) && crash_restart.wanted(&v) && !status.wanted(&v) && !launch.wanted(&v));
+        v.launch = true;
+        assert!(launch.wanted(&v));
         v.mem_restart = false;
         assert!(!mem.wanted(&v) && crash_restart.wanted(&v));
         v.status_every_min = 30;

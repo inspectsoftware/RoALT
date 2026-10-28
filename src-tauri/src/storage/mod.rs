@@ -67,7 +67,7 @@ const ACCOUNT_SELECT: &str = "SELECT a.id, a.user_id, a.username, a.display_name
      a.favourite, a.sort_order, \
      (SELECT group_concat(ag.group_id ORDER BY g.sort_order, g.id) \
         FROM account_groups ag JOIN groups g ON g.id = ag.group_id WHERE ag.account_id = a.id), \
-     a.status, a.status_checked_at, a.created_at, a.allow_disconnect, a.launch_args \
+     a.status, a.status_checked_at, a.created_at, a.allow_disconnect, a.launch_args, a.discord_muted, a.fps_cap \
      FROM accounts a";
 
 const GROUP_SELECT: &str = "SELECT id, name, color, sort_order FROM groups";
@@ -95,6 +95,8 @@ impl Db {
             M::up(include_str!("migrations/001_init.sql")),
             M::up(include_str!("migrations/002_account_options.sql")),
             M::up(include_str!("migrations/003_crashes.sql")),
+            M::up(include_str!("migrations/004_discord_mute.sql")),
+            M::up(include_str!("migrations/005_fps_cap.sql")),
         ])
             .to_latest(&mut conn)
             .map_err(|e| AppError::Storage(e.to_string()))?;
@@ -192,7 +194,7 @@ impl Db {
 
     /// Applies a UI patch. `color` must be `#rrggbb` or `""` (clear); alias ≤ 64 chars,
     /// notes ≤ 2000 chars; `group_ids` must exist and replace the current set; `launch_args`
-    /// blank clears the override (the caller validates the rest).
+    /// blank clears the override, `fps_cap` 0 likewise (the caller validates the rest).
     /// Bad input → `AppError::Invalid`, unknown id → `NotFound`.
     pub fn update_account(&self, id: i64, patch: &AccountPatch) -> Result<()> {
         let mut c = self.conn();
@@ -223,6 +225,12 @@ impl Db {
         if let Some(v) = &patch.launch_args {
             let v = Some(v.trim()).filter(|v| !v.is_empty());
             tx.execute("UPDATE accounts SET launch_args = ?2 WHERE id = ?1", params![id, v])?;
+        }
+        if let Some(v) = patch.discord_muted {
+            tx.execute("UPDATE accounts SET discord_muted = ?2 WHERE id = ?1", params![id, v])?;
+        }
+        if let Some(v) = patch.fps_cap {
+            tx.execute("UPDATE accounts SET fps_cap = ?2 WHERE id = ?1", params![id, Some(v).filter(|&v| v != 0)])?;
         }
         tx.commit()?;
         Ok(())
@@ -516,6 +524,8 @@ fn account_row(r: &Row) -> rusqlite::Result<AccountSummary> {
         created_at: r.get(12)?,
         allow_disconnect: r.get(13)?,
         launch_args: r.get(14)?,
+        discord_muted: r.get(15)?,
+        fps_cap: r.get(16)?,
     })
 }
 
@@ -708,7 +718,10 @@ mod tests {
             group_ids: Some(vec![g2, g1]),
             allow_disconnect: Some(true),
             launch_args: Some(" --fast ".into()),
+            discord_muted: Some(true),
+            fps_cap: None,
         };
+
         db.update_account(id, &p).unwrap();
         db.reorder_accounts(&[id, other]).unwrap();
 
@@ -726,7 +739,7 @@ mod tests {
         assert_eq!((a.status, a.status_checked_at), (AccountStatus::Valid, Some(5)));
         assert_eq!((a.alias.as_str(), a.notes.as_str()), ("farm", "n"));
         assert_eq!(a.color.as_deref(), Some("#a1b2c3"));
-        assert!(a.favourite && a.allow_disconnect);
+        assert!(a.favourite && a.allow_disconnect && a.discord_muted);
         assert_eq!(a.launch_args.as_deref(), Some("--fast"));
         assert_eq!(a.group_ids, vec![g1, g2]);
         assert_eq!(a.sort_order, 0);
@@ -868,6 +881,11 @@ mod tests {
         db.update_account(id, &patch(|p| p.launch_args = Some("-x".into()))).unwrap();
         db.update_account(id, &patch(|p| p.launch_args = Some("  ".into()))).unwrap();
         assert_eq!(db.account(id).unwrap().launch_args, None);
+        db.update_account(id, &patch(|p| p.fps_cap = Some(15))).unwrap();
+        assert_eq!(db.account(id).unwrap().fps_cap, Some(15));
+        db.update_account(id, &patch(|p| p.fps_cap = Some(0))).unwrap();
+        assert_eq!(db.account(id).unwrap().fps_cap, None);
+
 
         let log = r"C:\logs\x.log";
         for n in 0..205 {

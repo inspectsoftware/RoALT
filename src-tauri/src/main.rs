@@ -6,6 +6,7 @@ mod error;
 mod instances;
 mod launcher;
 mod model;
+mod remote;
 mod roblox_api;
 mod storage;
 mod tray;
@@ -20,7 +21,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tauri::window::Color;
 use tauri::{App as TauriApp, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
-use tauri_plugin_log::{Target, TargetKind};
+use tauri_plugin_global_shortcut::ShortcutState;
+use tauri_plugin_log::{RotationStrategy, Target, TargetKind};
 
 use crate::error::{AppError, Result};
 use crate::model::{Theme, VaultMode};
@@ -41,6 +43,10 @@ pub struct App {
     pub bulk: launcher::bulk::Bulk,
     pub discord: discord::Discord,
     pub update: launcher::update::Updater,
+    /// The LAN web dashboard (`remote`).
+    pub remote: remote::Remote,
+    /// When the shutdown RoALT scheduled is due (Unix ms; `commands::shutdown_schedule`).
+    pub shutdown: Mutex<Option<i64>>,
 }
 
 impl App {
@@ -195,10 +201,15 @@ fn remove_old_db(data_dir: &Path, old: &Path) -> bool {
 }
 
 fn main_window(app: &TauriApp, data_dir: &Path, theme: Theme) -> tauri::Result<()> {
+    // Each palette's --bg (theme.css); System paints dark until the UI applies it.
     let bg = match theme {
         Theme::Light => Color(242, 243, 240, 255),
-        _ => Color(5, 5, 6, 255),
+        Theme::Sakura => Color(253, 242, 246, 255),
+        Theme::Neon => Color(7, 5, 15, 255),
+        Theme::Bricks => Color(20, 13, 11, 255),
+        Theme::Dark | Theme::System => Color(5, 5, 6, 255),
     };
+
     #[allow(unused_mut)]
     let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
         .title("RoALT")
@@ -282,6 +293,7 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
     let api = roblox_api::Client::new(Arc::new(move |id, cookie| handle.state::<App>().store_rotated(id, cookie)));
     let settings = db.settings().map_err(|e| e.to_string())?;
     let theme = settings.theme;
+    let shutdown = commands::pending_shutdown(&db);
     let multi = instances::multi::Multi::new();
     if settings.multi_instance
         && let Err(e) = multi.enable().inspect(|()| {
@@ -307,7 +319,26 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
         bulk: launcher::bulk::Bulk::new(),
         discord: discord::Discord::new(),
         update: launcher::update::Updater::new(),
+        remote: remote::Remote::new(),
+        shutdown: Mutex::new(shutdown),
     });
+    if let Err(e) = commands::set_panic_hotkey(app.handle(), "", &settings.panic_hotkey) {
+        let handle = app.handle().clone();
+        // Said once the window is up.
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            commands::notice(&handle, true, format!("{e} The panic hotkey is off; change it in Settings, Automation."));
+        });
+    }
+    // Master mode starts locked: then it starts on unlock (`commands::vault_unlock`).
+    if let Err(e) = remote::resume(app.handle()) {
+        log::warn!("web dashboard not started: {e}");
+        let handle = app.handle().clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            commands::notice(&handle, true, format!("The web dashboard didn't start: {e}"));
+        });
+    }
     if let Err(e) = tray::setup(app.handle()) {
         log::warn!("no tray icon: {e}");
     }
@@ -368,6 +399,19 @@ fn main() {
                 .clear_targets()
                 .target(Target::new(TargetKind::Folder { path: log_dir, file_name: Some("roalt".into()) }))
                 .level(log::LevelFilter::Info)
+                // roalt.log plus the 4 before it, 5 MB each.
+                .max_file_size(5 << 20)
+                .rotation_strategy(RotationStrategy::KeepSome(5))
+                .build(),
+        )
+        // The panic hotkey (`settings.panic_hotkey`, registered by `commands::set_panic_hotkey`).
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _, e| {
+                    if e.state == ShortcutState::Pressed {
+                        tray::kill_all(app);
+                    }
+                })
                 .build(),
         )
         .plugin(tauri_plugin_window_state::Builder::new().with_filter(|label| label == "main").build())
@@ -389,6 +433,8 @@ fn main() {
             commands::app_activity,
             commands::accounts_list,
             commands::account_add_cookie,
+            commands::accounts_import_cookies,
+            commands::accounts_import_ram,
             commands::account_add_login,
             commands::account_update,
             commands::accounts_reorder,
@@ -416,10 +462,16 @@ fn main() {
             commands::instance_trim,
             commands::instance_set_anti_afk,
             commands::instances_metrics,
+            commands::instance_thumbnail,
+            commands::instance_show,
+            commands::instances_show_all,
+            commands::instance_micro,
+            commands::instances_tile,
             commands::bandwidth_status,
             commands::bandwidth_apply,
             commands::multi_instance_status,
             commands::multi_instance_set,
+            commands::multi_instance_take_over,
             commands::roblox_close_all,
             commands::panic_kill,
             commands::crashes_list,
@@ -438,6 +490,11 @@ fn main() {
             commands::data_dir_info,
             commands::data_dir_open,
             commands::data_dir_move,
+            commands::logs_open,
+            commands::logs_clean,
+            commands::shutdown_schedule,
+            commands::shutdown_cancel,
+            commands::shutdown_status,
             commands::private_servers_list,
             commands::groups_list,
             commands::group_save,
@@ -446,6 +503,9 @@ fn main() {
             commands::backup_import,
             commands::settings_get,
             commands::settings_set,
+            commands::remote_status,
+            commands::remote_pin,
+            commands::remote_pin_regenerate,
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| fatal(&format!("RoALT failed to start: {e}")))

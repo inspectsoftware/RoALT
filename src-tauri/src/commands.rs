@@ -39,6 +39,9 @@ pub async fn vault_unlock(app: AppHandle, s: State<'_, App>, password: String) -
     let rec = s.db.vault_record()?.ok_or(AppError::Internal("vault record missing".into()))?;
     s.vault.unlock(&rec, &password)?;
     crate::tray::refresh(&app);
+    if let Err(e) = crate::remote::resume(&app) {
+        notice(&app, true, format!("The web dashboard didn't start: {e}"));
+    }
     Ok(())
 }
 
@@ -126,10 +129,165 @@ pub async fn account_add_login(app: AppHandle, s: State<'_, App>) -> Result<Acco
     add_account(&app, &s, cookie).await
 }
 
+/// The start of every .ROBLOSECURITY value.
+const COOKIE_MARK: &str = "_|WARNING:-DO-NOT-SHARE-THIS.";
+
+/// Every .ROBLOSECURITY value in pasted text (pure), once each: on any line, from the warning
+/// to the next space, quote, `;`, `,` or `:` after it, so `user:pass:cookie` lines and plain
+/// lists both work.
+fn find_cookies(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let mut rest = line;
+        while let Some(at) = rest.find(COOKIE_MARK) {
+            let tail = &rest[at..];
+            // The warning ends with "|_"; the value proper starts after it.
+            let body = tail.find("|_").map_or(COOKIE_MARK.len(), |i| i + 2);
+            let end = tail[body..].find(|c: char| !c.is_ascii_graphic() || "\"';,:".contains(c)).map_or(tail.len(), |i| body + i);
+            let c = &tail[..end];
+            if end > body && !out.iter().any(|o| o == c) {
+                out.push(c.to_owned());
+            }
+            rest = &tail[end..];
+        }
+    }
+    out
+}
+
+/// Adds each cookie in turn through the single-account path (checked with Roblox, a short
+/// pause between them). A cookie for an account already stored refreshes it (`updated`); the
+/// same cookie twice counts once.
+async fn import_cookies(app: &AppHandle, s: &App, cookies: Vec<(Secret, ImportExtras)>) -> Result<ImportReport> {
+    let mut report = ImportReport::default();
+    let before: Vec<i64> = s.db.accounts()?.iter().map(|a| a.id).collect();
+    for (i, (cookie, extras)) in cookies.into_iter().enumerate() {
+        if i > 0 {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+        }
+        match add_account(app, s, cookie).await {
+            Ok(a) => {
+                if before.contains(&a.id) { report.updated += 1 } else { report.added += 1 }
+                let patch = AccountPatch {
+                    alias: Some(extras.alias.chars().take(64).collect()).filter(|v: &String| !v.trim().is_empty()),
+                    notes: Some(extras.notes.chars().take(2000).collect()).filter(|v: &String| !v.trim().is_empty()),
+                    ..Default::default()
+                };
+                if (patch.alias.is_some() || patch.notes.is_some()) && let Err(e) = s.db.update_account(a.id, &patch) {
+                    log::warn!("import: details of account {} not kept: {e}", a.id);
+                }
+            }
+            Err(AppError::Locked) => return Err(AppError::Locked),
+            Err(e) => {
+                log::info!("import: a cookie was refused: {e}");
+                report.failed += 1;
+            }
+        }
+    }
+    accounts_changed(app);
+    Ok(report)
+}
+
+/// What an import keeps besides the cookie.
+#[derive(Default)]
+struct ImportExtras {
+    alias: String,
+    notes: String,
+}
+
+/// Every cookie found in pasted text (`find_cookies`), added one by one. `skipped`: repeats.
+#[tauri::command]
+pub async fn accounts_import_cookies(app: AppHandle, s: State<'_, App>, text: String) -> Result<ImportReport> {
+    if s.vault.is_locked() {
+        return Err(AppError::Locked);
+    }
+    let found = find_cookies(&text);
+    if found.is_empty() {
+        return Err(AppError::Invalid("No .ROBLOSECURITY cookies found. Each starts with _|WARNING:-DO-NOT-SHARE-THIS.".into()));
+    }
+    let total = text.matches(COOKIE_MARK).count();
+    let cookies = found.iter().map(|c| normalize_cookie(c).map(|c| (c, ImportExtras::default()))).collect::<Result<Vec<_>>>()?;
+    let mut report = import_cookies(&app, &s, cookies).await?;
+    report.skipped = total.saturating_sub(found.len()) as u32;
+    Ok(report)
+}
+
+/// Roblox Account Manager's DPAPI entropy (ic3w0lf22/Roblox-Account-Manager, AccountManager.cs).
+const RAM_ENTROPY: &[u8] = b"ROBLOX ACCOUNT MANAGER | :) | BROUGHT TO YOU BUY ic3w0lf";
+/// Starts a RAM file saved with its own password (libsodium; not readable here).
+const RAM_HEADER: &[u8] = b"Roblox Account Manager created by ic3w0lf22 @ github.com .......";
+
+/// One account of RAM's AccountData.json.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct RamAccount {
+    #[serde(default)]
+    security_token: Option<String>,
+    #[serde(default)]
+    alias: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+/// RAM's accounts from its saved JSON (pure): the cookie (blank: None), alias and description.
+fn ram_accounts(json: &[u8]) -> Result<Vec<(Option<String>, ImportExtras)>> {
+    let list: Vec<RamAccount> = serde_json::from_slice(json.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(json))
+        .map_err(|_| AppError::Invalid("That isn't a Roblox Account Manager AccountData.json.".into()))?;
+    Ok(list
+        .into_iter()
+        .map(|a| {
+            let cookie = a.security_token.filter(|t| !t.trim().is_empty());
+            (cookie, ImportExtras { alias: a.alias.unwrap_or_default(), notes: a.description.unwrap_or_default() })
+        })
+        .collect())
+}
+
+/// Imports Roblox Account Manager's AccountData.json: plain, or DPAPI-encrypted by RAM for
+/// this Windows user. One saved with a RAM password is refused (remove the password in RAM
+/// first). Alias and Description become alias and notes.
+#[tauri::command]
+pub async fn accounts_import_ram(app: AppHandle, s: State<'_, App>, path: String) -> Result<ImportReport> {
+    if s.vault.is_locked() {
+        return Err(AppError::Locked);
+    }
+    let meta = std::fs::metadata(&path).map_err(|_| AppError::Invalid("RoALT couldn't read that file.".into()))?;
+    if meta.len() > 32 * 1024 * 1024 {
+        return Err(AppError::Invalid("That file is too big to be an AccountData.json.".into()));
+    }
+    let data = zeroize::Zeroizing::new(std::fs::read(&path).map_err(|_| AppError::Invalid("RoALT couldn't read that file.".into()))?);
+    if data.starts_with(RAM_HEADER) {
+        return Err(AppError::Invalid(
+            "This file is locked with a Roblox Account Manager password. Remove the password in Roblox Account Manager, then import again.".into(),
+        ));
+    }
+    let entries = match crate::vault::unprotect_with(&data, RAM_ENTROPY) {
+        Ok(plain) => ram_accounts(&plain)?,
+        Err(_) if data.trim_ascii_start().starts_with(b"[") || data.starts_with(b"\xEF\xBB\xBF") => ram_accounts(&data)?,
+        Err(_) => {
+            return Err(AppError::Invalid(
+                "RoALT couldn't decrypt this file. It must come from Roblox Account Manager on this PC, signed in as the same Windows user.".into(),
+            ));
+        }
+    };
+    let mut cookies = Vec::new();
+    let mut failed = 0;
+    for (cookie, extras) in entries {
+        match cookie.as_deref().map(normalize_cookie) {
+            Some(Ok(c)) => cookies.push((c, extras)),
+            _ => failed += 1,
+        }
+    }
+    let mut report = import_cookies(&app, &s, cookies).await?;
+    report.failed += failed;
+    Ok(report)
+}
+
 #[tauri::command]
 pub fn account_update(app: AppHandle, s: State<'_, App>, id: i64, patch: AccountPatch) -> Result<AccountSummary> {
     if let Some(a) = &patch.launch_args {
         crate::launcher::launch_args(a)?;
+    }
+    if let Some(f) = patch.fps_cap {
+        check_fps(f)?;
     }
     s.db.update_account(id, &patch)?;
     accounts_changed(&app);
@@ -605,6 +763,114 @@ pub fn data_dir_open(app: AppHandle, s: State<'_, App>) -> Result<()> {
     app.opener().open_path(s.data_dir.display().to_string(), None::<&str>).map_err(|e| AppError::Internal(e.to_string()))
 }
 
+/// Opens RoALT's own log folder (data folder\logs) in Explorer.
+#[tauri::command]
+pub fn logs_open(app: AppHandle, s: State<'_, App>) -> Result<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let dir = s.data_dir.join("logs");
+    std::fs::create_dir_all(&dir)?;
+    app.opener().open_path(dir.display().to_string(), None::<&str>).map_err(|e| AppError::Internal(e.to_string()))
+}
+
+/// Deletes Roblox client logs over a day old or 50 MB now (`logwatch::clean`), never a running
+/// client's.
+#[tauri::command]
+pub async fn logs_clean(s: State<'_, App>) -> Result<LogsCleaned> {
+    let Some(dir) = crate::instances::logwatch::logs_dir() else { return Ok(LogsCleaned::default()) };
+    let keep = s.tracker.live_logs();
+    blocking(move || crate::instances::logwatch::clean(&dir, &keep)).await
+}
+
+/// Seconds until the shutdown (pure): `in_secs`, else until `at_ms` (rounded up); 1 minute to 7 days.
+fn shutdown_secs(at_ms: Option<i64>, in_secs: Option<u32>, now_ms: i64) -> Result<u32> {
+    let secs = match (in_secs, at_ms) {
+        (Some(s), _) => i64::from(s),
+        (None, Some(at)) => (at - now_ms + 999).div_euclid(1000),
+        (None, None) => return Err(AppError::Invalid("Pick when to shut down.".into())),
+    };
+    if !(60..=7 * 24 * 3600).contains(&secs) {
+        return Err(AppError::Invalid("The shutdown must be 1 minute to 7 days from now.".into()));
+    }
+    Ok(secs as u32)
+}
+
+/// Runs System32\shutdown.exe without a window: its exit code and what it printed.
+fn shutdown_exe(args: &[&str]) -> Result<(i32, String)> {
+    use std::os::windows::process::CommandExt;
+    let root = std::env::var_os("SystemRoot").map(std::path::PathBuf::from).unwrap_or_else(|| r"C:\Windows".into());
+    let out = std::process::Command::new(root.join(r"System32\shutdown.exe")).args(args).creation_flags(0x0800_0000).output()?;
+    let text = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+    Ok((out.status.code().unwrap_or(-1), text))
+}
+
+/// The settings-table row with the scheduled shutdown's deadline (Unix ms), so RoALT still knows
+/// it (and can cancel it) after a restart; Windows keeps the timer either way.
+const SHUTDOWN_KEY: &str = "shutdown_at";
+
+/// The deadline of a shutdown scheduled before RoALT restarted, if it is still ahead (at start).
+pub fn pending_shutdown(db: &crate::storage::Db) -> Option<i64> {
+    db.setting_value(SHUTDOWN_KEY).ok().flatten()?.parse().ok().filter(|&at| at > now_ms())
+}
+
+/// Tells Windows to shut down in `in_secs` or at `at_ms` (`shutdown /s /t`, no admin rights;
+/// Windows then force-closes every app). Replaces one RoALT scheduled. `close_clients`: RoALT's
+/// clients are asked to close 30 s before (while RoALT keeps running). Returns the deadline
+/// (Unix ms), stored (`SHUTDOWN_KEY`) until it is called off or passes.
+#[tauri::command]
+pub fn shutdown_schedule(app: AppHandle, s: State<'_, App>, at_ms: Option<i64>, in_secs: Option<u32>, close_clients: bool) -> Result<Option<i64>> {
+    let secs = shutdown_secs(at_ms, in_secs, now_ms())?;
+    let mut at = s.shutdown.lock().unwrap_or_else(|e| e.into_inner());
+    if at.take().is_some() {
+        shutdown_exe(&["/a"])?;
+    }
+    let (code, text) = shutdown_exe(&["/s", "/t", &secs.to_string()])?;
+    if code != 0 {
+        // 1190: a shutdown is already scheduled (by another app or by hand).
+        return Err(AppError::Invalid(format!("Windows wouldn't schedule the shutdown: {text}")));
+    }
+    let deadline = now_ms() + i64::from(secs) * 1000;
+    *at = Some(deadline);
+    if let Err(e) = s.db.set_setting_value(SHUTDOWN_KEY, Some(&deadline.to_string())) {
+        log::warn!("the shutdown's deadline wasn't stored: {e}");
+    }
+    log::info!("shutdown scheduled in {secs} s");
+    if close_clients {
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(u64::from(secs.saturating_sub(30)))).await;
+            let s = app.state::<App>();
+            if *s.shutdown.lock().unwrap_or_else(|e| e.into_inner()) == Some(deadline)
+                && let Err(e) = close_running(&s, false).await
+            {
+                log::warn!("could not close the clients before the shutdown: {e}");
+            }
+        });
+    }
+    Ok(Some(deadline))
+}
+
+/// Calls off the shutdown RoALT scheduled (`shutdown /a`).
+#[tauri::command]
+pub fn shutdown_cancel(s: State<'_, App>) -> Result<Option<i64>> {
+    let mut at = s.shutdown.lock().unwrap_or_else(|e| e.into_inner());
+    if at.is_some() {
+        // 1116: none is scheduled any more (called off outside RoALT).
+        let (code, text) = shutdown_exe(&["/a"])?;
+        if code != 0 && code != 1116 {
+            return Err(AppError::Invalid(format!("Windows wouldn't call off the shutdown: {text}")));
+        }
+        log::info!("shutdown called off");
+    }
+    *at = None;
+    s.db.set_setting_value(SHUTDOWN_KEY, None)?;
+    Ok(None)
+}
+
+/// When the shutdown RoALT scheduled is due (Unix ms); None when there is none.
+#[tauri::command]
+pub fn shutdown_status(s: State<'_, App>) -> Option<i64> {
+    *s.shutdown.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Copies the database into `path` (a new folder or one without a roalt.db; not the current
 /// folder or inside it) with SQLite's `VACUUM INTO` (consistent while open), records it in
 /// `%LOCALAPPDATA%\RoALT\location.json` as `{"dataDir": path, "movedFrom": current}` and
@@ -836,7 +1102,16 @@ pub fn cores() -> u32 {
     std::thread::available_parallelism().map_or(1, |n| n.get() as u32)
 }
 
+/// An FPS cap the user can set: 0 (none, or the default for an account) or `launcher::fps::RANGE`.
+fn check_fps(f: u32) -> Result<()> {
+    if f != 0 && !crate::launcher::fps::RANGE.contains(&f) {
+        return Err(AppError::Invalid("The FPS cap must be 0 (off) or 5 to 360.".into()));
+    }
+    Ok(())
+}
+
 /// Limits the user can set: a CPU cap of 1-100 %, a trim every 0-1440 minutes, at least one core.
+
 fn check_limits(l: &Limits) -> Result<()> {
     if l.cpu_cap.is_some_and(|c| !(1..=100).contains(&c)) {
         return Err(AppError::Invalid("The CPU limit must be between 1 and 100 %.".into()));
@@ -866,7 +1141,8 @@ pub async fn instance_set_limits(app: AppHandle, s: State<'_, App>, id: String, 
         let s = app2.state::<App>();
         let v = s.db.settings().unwrap_or_default();
         let fg = if v.adaptive.enabled { crate::instances::process::foreground_pid() } else { None };
-        let plan = crate::instances::limits::plan(&s.tracker.clients(), &v, fg, cores());
+        let held = s.tracker.throttle(v.mem_throttle.mb).0;
+        let plan = crate::instances::limits::plan(&s.tracker.clients(), &v, fg, cores(), &held);
         match plan.into_iter().find(|c| c.0 == id) {
             Some((_, pid, t0, l)) => s.limiter.apply(&id, pid, t0, l).map_err(|e| (id, e)),
             None => Ok(()),
@@ -905,6 +1181,91 @@ pub async fn instance_trim(s: State<'_, App>, id: String) -> Result<()> {
     tauri::async_runtime::spawn_blocking(move || crate::instances::limits::trim(pid, t0))
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?
+}
+
+/// The pid of the running client `id` once it is known to be the client itself (None while
+/// only its bootstrapper is seen); NotFound when there is no such instance.
+fn client_pid(s: &App, id: &str) -> Result<Option<u32>> {
+    s.tracker.get(id).ok_or(AppError::NotFound)?;
+    Ok(s.tracker.clients().into_iter().find(|c| c.0 == id).map(|c| c.1))
+}
+
+fn not_started() -> AppError {
+    AppError::Invalid("That client hasn't started yet, or has closed.".into())
+}
+
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T> {
+    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| AppError::Internal(e.to_string()))
+}
+
+/// A picture of one client's window at most `max_w` (16..=1280) pixels wide, as raw bytes:
+/// width and height (u32 little-endian each), then RGBA rows top-down. Empty while it is
+/// minimized, has no window yet or is still behind its bootstrapper.
+#[tauri::command]
+pub async fn instance_thumbnail(s: State<'_, App>, id: String, max_w: u32) -> Result<tauri::ipc::Response> {
+    let Some(pid) = client_pid(&s, &id)? else { return Ok(tauri::ipc::Response::new(Vec::new())) };
+    let thumb = blocking(move || crate::instances::window::thumbnail(pid, max_w.clamp(16, 1280))).await?;
+    let bytes = thumb.map_or_else(Vec::new, |t| {
+        let mut b = Vec::with_capacity(8 + t.rgba.len());
+        b.extend(t.width.to_le_bytes());
+        b.extend(t.height.to_le_bytes());
+        b.extend(t.rgba);
+        b
+    });
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// Brings one client's window to the front, minimizes or restores it.
+#[tauri::command]
+pub async fn instance_show(s: State<'_, App>, id: String, what: crate::instances::window::Show) -> Result<()> {
+    let pid = client_pid(&s, &id)?.ok_or_else(not_started)?;
+    blocking(move || crate::instances::window::show(pid, what)).await?
+}
+
+/// Minimizes or restores every running client's window (focus is for one client).
+#[tauri::command]
+pub async fn instances_show_all(s: State<'_, App>, what: crate::instances::window::Show) -> Result<()> {
+    if what == crate::instances::window::Show::Focus {
+        return Err(AppError::Invalid("Only one client can be in front.".into()));
+    }
+    let pids: Vec<u32> = s.tracker.clients().into_iter().map(|c| c.1).collect();
+    // One without a window yet has nothing to show or hide.
+    blocking(move || {
+        for pid in pids {
+            let _ = crate::instances::window::show(pid, what);
+        }
+    })
+    .await
+}
+
+/// Makes one client's window small (`window::MICRO` client area) or puts it back as it was.
+/// Returns the client area it got: Roblox may keep it bigger than asked.
+#[tauri::command]
+pub async fn instance_micro(app: AppHandle, s: State<'_, App>, id: String, on: bool) -> Result<(u32, u32)> {
+    let pid = client_pid(&s, &id)?.ok_or_else(not_started)?;
+    let id2 = id.clone();
+    let size = blocking(move || crate::instances::window::micro(&id2, pid, on)).await??;
+    s.tracker.set_micro(&id, on);
+    instances_changed(&app);
+    Ok(size)
+}
+
+/// Lays every running client's window out in a grid on the monitor RoALT is on, `micro`-sized
+/// or as big as all fit (`window::tile`; minimized ones are left alone). How many it laid out.
+#[tauri::command]
+pub async fn instances_tile(app: AppHandle, s: State<'_, App>, micro: bool) -> Result<usize> {
+    let clients: Vec<(String, u32)> = s.tracker.clients().into_iter().map(|c| (c.0, c.1)).collect();
+    // As a number: a window handle can't cross threads.
+    let near = app.get_webview_window("main").and_then(|w| w.hwnd().ok()).map_or(0, |h| h.0 as isize);
+    let tiled = blocking(move || {
+        crate::instances::window::tile(&clients, windows::Win32::Foundation::HWND(near as *mut _), micro)
+    })
+    .await?;
+    for id in &tiled {
+        s.tracker.set_micro(id, micro);
+    }
+    instances_changed(&app);
+    Ok(tiled.len())
 }
 
 /// CPU, memory and IO of each running client (sampled at most every 2 s).
@@ -997,6 +1358,24 @@ pub fn multi_instance_set(s: State<'_, App>, enabled: bool) -> Result<MultiInsta
     Ok(s.multi.status(v.multi_instance, v.protect_shared_login))
 }
 
+/// Takes the multi-instance lock from the running Roblox (the UI asks first): closes Roblox's
+/// singleton event inside each client (`Multi::take_over`); the clients keep running.
+#[tauri::command]
+pub async fn multi_instance_take_over(app: AppHandle) -> Result<MultiInstanceStatus> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let s = app.state::<App>();
+        let v = s.db.settings()?;
+        if !v.multi_instance {
+            return Err(AppError::Invalid("Turn on multi-instance first.".into()));
+        }
+        s.multi.take_over()?;
+        protect_running(&s, &v);
+        Ok(s.multi.status(v.multi_instance, v.protect_shared_login))
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?
+}
+
 /// Closes every Roblox client, tracked or not (including Roblox's tray process), then takes
 /// the multi-instance lock if it is enabled.
 #[tauri::command]
@@ -1010,6 +1389,36 @@ pub async fn roblox_close_all(s: State<'_, App>, force: bool) -> Result<MultiIns
 #[tauri::command]
 pub async fn panic_kill(s: State<'_, App>) -> Result<MultiInstanceStatus> {
     kill_all(&s).await
+}
+
+/// Makes `key` the system-wide panic hotkey (Kill all) in place of `old`; "" for none. A key
+/// Windows won't give (another app holds it) is an error, and `old` stays (if it was registered:
+/// one refused at start is tried again when saved unchanged).
+pub fn set_panic_hotkey(app: &AppHandle, old: &str, key: &str) -> Result<()> {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
+    let parse = |k: &str| {
+        k.parse::<Shortcut>()
+            .map_err(|_| AppError::Invalid(format!("\"{k}\" isn't a key combination, like Ctrl+Shift+F12.")))
+    };
+    let new = if key.is_empty() { None } else { Some(parse(key)?) };
+    let gs = app.global_shortcut();
+    let old = parse(old).ok().filter(|&o| gs.is_registered(o));
+    if new == old {
+        return Ok(());
+    }
+    if let Some(o) = old {
+        let _ = gs.unregister(o);
+    }
+    if let Some(n) = new
+        && let Err(e) = gs.register(n)
+    {
+        if let Some(o) = old {
+            let _ = gs.register(o);
+        }
+        log::warn!("could not register the panic hotkey {key}: {e}");
+        return Err(AppError::Invalid(format!("Windows wouldn't give RoALT {key}: another app probably uses it. Pick another.")));
+    }
+    Ok(())
 }
 
 pub(crate) async fn kill_all(s: &App) -> Result<MultiInstanceStatus> {
@@ -1173,6 +1582,8 @@ pub fn lock_vault(app: &AppHandle) {
         }
     }
     let s = app.state::<App>();
+    // It runs only while the vault is open; `vault_unlock` starts it again.
+    s.remote.stop();
     s.vault.lock();
     let _ = app.emit("vault://locked", ());
     crate::tray::refresh(app);
@@ -1312,7 +1723,7 @@ pub fn settings_get(s: State<'_, App>) -> Result<Settings> {
 }
 
 #[tauri::command]
-pub fn settings_set(s: State<'_, App>, patch: SettingsPatch) -> Result<Settings> {
+pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> Result<Settings> {
     let mut v = s.db.settings()?;
     if let Some(t) = patch.theme { v.theme = t }
     if let Some(d) = patch.density { v.density = d }
@@ -1359,11 +1770,25 @@ pub fn settings_set(s: State<'_, App>, patch: SettingsPatch) -> Result<Settings>
         v.launch_args = a.trim().to_owned();
     }
     if let Some(c) = patch.close_to_tray { v.close_to_tray = c }
+    if let Some(f) = patch.fps_cap {
+        check_fps(f)?;
+        v.fps_cap = f;
+    }
+
     if let Some(m) = patch.mem_restart_mb {
         if m != 0 && !(512..=65_536).contains(&m) {
             return Err(AppError::Invalid("The memory limit must be 0 (off) or 512 to 65 536 MB.".into()));
         }
         v.mem_restart_mb = m;
+    }
+    if let Some(t) = patch.mem_throttle {
+        if t.mb != 0 && !(512..=65_536).contains(&t.mb) {
+            return Err(AppError::Invalid("The memory throttle must be 0 (off) or 512 to 65 536 MB.".into()));
+        }
+        if !(1..=100).contains(&t.cpu_cap) {
+            return Err(AppError::Invalid("The throttle's CPU limit must be 1 to 100 %.".into()));
+        }
+        v.mem_throttle = t;
     }
     if let Some(m) = patch.trim_every_min {
         if m > 24 * 60 {
@@ -1390,6 +1815,8 @@ pub fn settings_set(s: State<'_, App>, patch: SettingsPatch) -> Result<Settings>
         v.discord = d;
     }
     if let Some(a) = patch.auto_update { v.auto_update = a }
+    if let Some(m) = patch.minimize_on_launch { v.minimize_on_launch = m }
+    if let Some(c) = patch.clean_logs { v.clean_logs = c }
     if let Some(d) = patch.launch_delay_ms {
         if !(2_000..=60_000).contains(&d) {
             return Err(AppError::Invalid("The launch delay must be between 2 and 60 seconds.".into()));
@@ -1407,13 +1834,109 @@ pub fn settings_set(s: State<'_, App>, patch: SettingsPatch) -> Result<Settings>
             protect_running(&s, &v);
         }
     }
-    s.db.save_settings(&v)?;
+    // Last: it takes effect at once, so only once everything else is valid; put back if the
+    // web dashboard or the save then fails, so Windows and the settings agree.
+    let had = v.panic_hotkey.clone();
+    if let Some(k) = patch.panic_hotkey {
+        let k = k.trim();
+        set_panic_hotkey(&app, &had, k)?;
+        v.panic_hotkey = k.to_owned();
+    }
+    let rest = (|| {
+        if let Some(r) = patch.remote {
+            if r.port < 1024 {
+                return Err(AppError::Invalid("Use a port from 1024 to 65535 for the web dashboard.".into()));
+            }
+            if r.enabled {
+                crate::remote::start(&app, r.port)?;
+            } else {
+                s.remote.stop();
+            }
+            v.remote = r;
+        }
+        s.db.save_settings(&v)
+    })();
+    if rest.is_err() && v.panic_hotkey != had {
+        let _ = set_panic_hotkey(&app, &v.panic_hotkey, &had);
+    }
+    rest?;
     Ok(v)
+}
+
+// ---------- web dashboard ----------
+
+/// Whether the web dashboard runs and its LAN address(es); never the PIN.
+#[tauri::command]
+pub fn remote_status(s: State<'_, App>) -> Result<RemoteStatus> {
+    crate::remote::status(&s)
+}
+
+/// The web dashboard's PIN (made on first use). `Locked` while the vault is.
+#[tauri::command]
+pub fn remote_pin(s: State<'_, App>) -> Result<String> {
+    crate::remote::pin(&s)
+}
+
+/// A new PIN; every device signed in to the web dashboard has to enter it again.
+#[tauri::command]
+pub fn remote_pin_regenerate(s: State<'_, App>) -> Result<String> {
+    crate::remote::regenerate(&s)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{GameDetails, GameInfo, game_info_of, normalize_cookie};
+    use super::{GameDetails, GameInfo, find_cookies, game_info_of, normalize_cookie, ram_accounts, shutdown_secs};
+
+    const W: &str = "_|WARNING:-DO-NOT-SHARE-THIS.--Sharing-this-will-allow-someone-to-log-in-as-you-and-to-steal-your-ROBUX-and-items.|_";
+
+    #[test]
+    fn finds_cookies_in_pasted_lists() {
+        let (a, b) = (format!("{W}ABC123"), format!("{W}CAEaAh+/x="));
+        let text = format!("user:pass:{a}
+  {b}  
+.ROBLOSECURITY={a};
+\"{b}\", other
+nothing here
+{W}
+{a} {b}");
+        assert_eq!(find_cookies(&text), [a.clone(), b.clone()]);
+        assert_eq!(find_cookies(&format!("{a}:user:pass")), [a.clone()]);
+        assert_eq!(find_cookies(&format!("{a}\u{201d}\u{200b}")), [a], "a smart quote or zero-width space ends it");
+        assert!(find_cookies("no cookies").is_empty());
+    }
+
+    #[test]
+    fn reads_roblox_account_manager_json() {
+        let json = br#"[{"SecurityToken":"tok","Username":"u","Alias":"farm","Description":"note","Group":"Default"},{"SecurityToken":"","Alias":null}]"#;
+        let list = ram_accounts(json).unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!((list[0].0.as_deref(), list[0].1.alias.as_str(), list[0].1.notes.as_str()), (Some("tok"), "farm", "note"));
+        assert!(list[1].0.is_none() && list[1].1.alias.is_empty());
+        let bom = [b"\xEF\xBB\xBF".as_slice(), b"[]"].concat();
+        assert!(ram_accounts(&bom).unwrap().is_empty());
+        assert!(ram_accounts(b"{}").is_err());
+    }
+
+    #[test]
+    fn shutdown_delays() {
+        let now = 1_000_000_000_000;
+        assert_eq!(shutdown_secs(None, Some(3600), now).unwrap(), 3600);
+        // `in_secs` wins; a time is rounded up to the next second.
+        assert_eq!(shutdown_secs(Some(now + 5_000_000), Some(60), now).unwrap(), 60);
+        assert_eq!(shutdown_secs(Some(now + 90_001), None, now).unwrap(), 91);
+        for bad in [(None, None), (None, Some(59)), (Some(now - 1000), None), (Some(now + 59_000), None), (None, Some(7 * 24 * 3600 + 1))] {
+            assert!(shutdown_secs(bad.0, bad.1, now).is_err(), "{bad:?}");
+        }
+        assert_eq!(shutdown_secs(None, Some(7 * 24 * 3600), now).unwrap(), 7 * 24 * 3600);
+    }
+
+    #[test]
+    fn the_suggested_panic_hotkey_parses() {
+        assert!(crate::model::Settings::default().panic_hotkey.is_empty(), "off until the user picks one");
+        let k = "Ctrl+Shift+F12";
+        assert!(k.parse::<tauri_plugin_global_shortcut::Shortcut>().is_ok(), "{k}");
+        assert!("Ctrl+Shift+".parse::<tauri_plugin_global_shortcut::Shortcut>().is_err());
+    }
 
     #[test]
     fn game_info_keeps_the_asked_place() {

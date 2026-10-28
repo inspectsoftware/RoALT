@@ -1,12 +1,15 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { api, asError, type AccountSummary } from "../../api";
+import { open as openFile } from "@tauri-apps/plugin-dialog";
+import { api, asError, type AccountSummary, type ImportReport } from "../../api";
 import { qk } from "../../data";
 import { Dialog } from "../../ui/Dialog";
 import { Icon } from "../../ui/Icon";
 import { friendly, toast } from "../../ui/Toast";
 
-type Tab = "login" | "cookie";
+type Tab = "login" | "cookie" | "many";
+
+const RAM_FILTER = [{ name: "Roblox Account Manager", extensions: ["json"] }];
 
 export function AddAccountDialog({ open, onClose, onAdded }: {
   open: boolean;
@@ -18,11 +21,13 @@ export function AddAccountDialog({ open, onClose, onAdded }: {
   const [waiting, setWaiting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [cookie, setCookie] = useState("");
+  const [many, setMany] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) return;
     setCookie("");
+    setMany("");
     setError(null);
   }, [open]);
 
@@ -63,7 +68,45 @@ export function AddAccountDialog({ open, onClose, onAdded }: {
     }
   }
 
-  const tabBtn = (t: Tab, label: string, icon: "signin" | "key") => (
+  const imported = (r: ImportReport) => {
+    qc.invalidateQueries({ queryKey: qk.accounts });
+    qc.invalidateQueries({ queryKey: qk.vault });
+    const parts = [`${r.added} added`, r.updated && `${r.updated} refreshed`, r.skipped && `${r.skipped} repeated`, r.failed && `${r.failed} failed`];
+    toast(`Import: ${parts.filter(Boolean).join(", ")}.`);
+    if (r.added + r.updated > 0) onClose();
+  };
+
+  /** Pasted lists and Roblox Account Manager files both go one cookie at a time. */
+  async function runImport(run: () => Promise<ImportReport>) {
+    setError(null);
+    setBusy(true);
+    try {
+      imported(await run());
+    } catch (e) {
+      setError(friendly(asError(e)));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function pasteMany(e: FormEvent) {
+    e.preventDefault();
+    const value = many;
+    setMany(""); // as with one cookie, the field never keeps what was submitted
+    if (!value.trim() || busy) return;
+    runImport(() => api.accountsImportCookies(value));
+  }
+
+  async function fromRam() {
+    if (busy) return;
+    const path = await openFile({ multiple: false, directory: false, filters: RAM_FILTER, title: "Choose Roblox Account Manager's AccountData.json" }).catch((e) => {
+      setError(friendly(asError(e)));
+      return null;
+    });
+    if (path) runImport(() => api.accountsImportRam(path));
+  }
+
+  const tabBtn = (t: Tab, label: string, icon: "signin" | "key" | "upload") => (
     <button
       type="button"
       role="tab"
@@ -88,6 +131,7 @@ export function AddAccountDialog({ open, onClose, onAdded }: {
       <div role="tablist" aria-label="How to add" className="flex px-5 border-b border-line">
         {tabBtn("login", "Sign in", "signin")}
         {tabBtn("cookie", "Paste cookie", "key")}
+        {tabBtn("many", "Paste many", "upload")}
       </div>
 
       {tab === "login" ? (
@@ -112,6 +156,38 @@ export function AddAccountDialog({ open, onClose, onAdded }: {
           )}
           {error && <div role="alert" className="alert">{error}</div>}
         </div>
+      ) : tab === "many" ? (
+        <form key="many" role="tabpanel" id="add-panel-many" aria-labelledby="add-tab-many" onSubmit={pasteMany} className="enter flex flex-col gap-3 p-5">
+          <label className="flex flex-col gap-1.5">
+            <span className="label">Cookies, one per line</span>
+            <textarea
+              className="field secret mono text-xs"
+              rows={6}
+              value={many}
+              onChange={(e) => setMany(e.target.value)}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              placeholder="_|WARNING:-DO-NOT-SHARE-THIS…  or  user:pass:_|WARNING:…"
+            />
+          </label>
+          <p className="text-xs text-dim">
+            Every .ROBLOSECURITY cookie in the text is checked with Roblox one by one, so a long list takes a while.
+            Lines like <span className="mono">user:pass:cookie</span> work too; only the cookie is kept.
+          </p>
+          {busy && <div className="live-bar" role="status" aria-label="Importing" />}
+          {error && <div role="alert" className="alert">{error}</div>}
+          <div className="flex justify-between gap-2 pt-1">
+            <button type="button" className="btn" onClick={fromRam} disabled={busy} title="Its AccountData.json; one locked with a RAM password can't be read">
+              <Icon name="upload" size={14} />
+              Import from Roblox Account Manager
+            </button>
+            <button type="submit" className="btn btn-primary" disabled={busy || !many.trim()}>
+              {busy ? "Importing…" : "Import"}
+            </button>
+          </div>
+        </form>
       ) : (
         <form key="cookie" role="tabpanel" id="add-panel-cookie" aria-labelledby="add-tab-cookie" onSubmit={paste} className="enter flex flex-col gap-3 p-5">
           <label className="flex flex-col gap-1.5">

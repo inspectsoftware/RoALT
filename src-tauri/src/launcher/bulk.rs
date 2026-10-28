@@ -738,6 +738,8 @@ mod tests {
             limits: Default::default(),
             anti_afk: true,
             afk_at: None,
+            throttled: false,
+            micro: false,
         }
     }
 
@@ -1007,6 +1009,9 @@ mod tests {
             created_at: 0,
             allow_disconnect: false,
             launch_args: None,
+            discord_muted: false,
+            fps_cap: None,
+
         };
         assert_eq!(name_of(&a), "Alt 01");
         a.alias.clear();

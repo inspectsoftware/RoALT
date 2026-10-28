@@ -8,4 +8,8 @@ export type AccountPatch = { alias?: string, notes?: string, color?: string, fav
 /**
  * `Some("")` goes back to the default from Settings.
  */
-launchArgs?: string, };
+launchArgs?: string, discordMuted?: boolean, 
+/**
+ * `Some(0)` goes back to the default from Settings; else 5..=360.
+ */
+fpsCap?: number, };

@@ -4,7 +4,7 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, asError, type AccountInfo, type AccountPatch, type AccountSummary, type Group, type Presence, type VaultMode } from "../../api";
 import { groupColor, qk, useAccountInfo, useUpdateAccount } from "../../data";
-import { Switch, TextField } from "../../ui/controls";
+import { NumberField, Switch, TextField } from "../../ui/controls";
 import { Icon } from "../../ui/Icon";
 import { friendly, toast, toastError } from "../../ui/Toast";
 import { PasswordDialog } from "../vault/PasswordDialog";
@@ -263,10 +263,25 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
           </span>
           <Switch label="Allow disconnects" checked={a.allowDisconnect} onChange={(v) => save({ allowDisconnect: v })} />
         </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="flex flex-col gap-0.5">
+            <span>Mute Discord alerts</span>
+            <span className="text-xs text-dim">No alerts about this account's clients; batch and status summaries still go.</span>
+          </span>
+          <Switch label="Mute Discord alerts" checked={a.discordMuted} onChange={(v) => save({ discordMuted: v })} />
+        </div>
         <label className="flex flex-col gap-1.5">
           <span className="label">Launch arguments</span>
           <TextField label="Launch arguments" placeholder="The default from Settings" value={a.launchArgs ?? ""} onCommit={(launchArgs) => update.mutateAsync({ id: a.id, patch: { launchArgs } })} />
         </label>
+        <div className="flex items-center justify-between gap-2">
+          <span className="flex flex-col gap-0.5">
+            <span>FPS cap</span>
+            <span className="text-xs text-dim">Set when its client starts, 5 to 360. 0 uses the default from Settings.</span>
+          </span>
+          <NumberField unit="FPS, 0 for the default" short="FPS" min={0} max={360} value={a.fpsCap ?? 0} onCommit={(fpsCap) => save({ fpsCap })} />
+        </div>
+
       </Section>
 
       <Section>

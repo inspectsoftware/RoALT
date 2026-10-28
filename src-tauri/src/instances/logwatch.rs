@@ -85,6 +85,44 @@ pub fn find_log(dir: &Path, browser_tracker_id: i64, since: SystemTime) -> Optio
     candidates.into_iter().map(|(_, p)| p).find(|p| names_tracker(p, browser_tracker_id))
 }
 
+/// `clean` deletes logs last written over a day ago ...
+const CLEAN_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+/// ... or bigger than this.
+const CLEAN_BYTES: u64 = 50 << 20;
+
+/// Which of `files` (path, size, last written) `clean` deletes (pure): `.log` files written over
+/// 24 h before `now` or over 50 MB, never one in `keep` (a live client's).
+pub fn stale(files: Vec<(PathBuf, u64, SystemTime)>, now: SystemTime, keep: &[PathBuf]) -> Vec<(PathBuf, u64)> {
+    files
+        .into_iter()
+        .filter(|(p, _, _)| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("log")) && !keep.contains(p))
+        .filter(|&(_, len, modified)| len > CLEAN_BYTES || now.duration_since(modified).is_ok_and(|age| age > CLEAN_AGE))
+        .map(|(p, len, _)| (p, len))
+        .collect()
+}
+
+/// Deletes the logs `stale` picks in `dir` (not its subfolders). A file Windows won't let go
+/// of (a client still writing it) is skipped. What it deleted.
+pub fn clean(dir: &Path, keep: &[PathBuf]) -> crate::model::LogsCleaned {
+    let files = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let m = e.metadata().ok().filter(|m| m.is_file())?;
+            Some((e.path(), m.len(), m.modified().ok()?))
+        })
+        .collect();
+    let mut done = crate::model::LogsCleaned::default();
+    for (path, len) in stale(files, SystemTime::now(), keep) {
+        if std::fs::remove_file(&path).is_ok() {
+            done.files += 1;
+            done.bytes += len;
+        }
+    }
+    done
+}
+
 fn names_tracker(path: &Path, browser_tracker_id: i64) -> bool {
     let mut head = Vec::new();
     if open_shared(path).and_then(|f| f.take(HEAD_BYTES).read_to_end(&mut head)).is_err() {
@@ -233,6 +271,37 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("roalt-logwatch-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn stale_logs_are_old_or_huge_and_never_live() {
+        let now = SystemTime::now();
+        let hours = |h: u64| now - Duration::from_secs(h * 3600);
+        let f = |name: &str, len: u64, at: SystemTime| (PathBuf::from(name), len, at);
+        let live = PathBuf::from(r"L:\live_Player_last.log");
+        let files = vec![
+            f(r"L:\old_Player_last.log", 10, hours(25)),
+            f(r"L:\new_Player_last.log", 10, hours(23)),
+            f(r"L:\huge.LOG", CLEAN_BYTES + 1, hours(0)),
+            f(r"L:\edge.log", CLEAN_BYTES, hours(0)),
+            f(r"L:\old.txt", CLEAN_BYTES + 1, hours(48)),
+            f(r"L:\future.log", 10, now + Duration::from_secs(3600)),
+            (live.clone(), CLEAN_BYTES + 1, hours(48)),
+        ];
+        let picked: Vec<_> = stale(files, now, &[live]).into_iter().map(|(p, _)| p.display().to_string()).collect();
+        assert_eq!(picked, [r"L:\old_Player_last.log", r"L:\huge.LOG"]);
+    }
+
+    #[test]
+    fn clean_deletes_only_stale_logs() {
+        let dir = temp_dir();
+        std::fs::write(dir.join("big.log"), vec![b'x'; CLEAN_BYTES as usize + 1]).unwrap();
+        std::fs::write(dir.join("small.log"), b"x").unwrap();
+        std::fs::write(dir.join("live.log"), vec![b'x'; CLEAN_BYTES as usize + 1]).unwrap();
+        let done = clean(&dir, &[dir.join("live.log")]);
+        assert_eq!(done, crate::model::LogsCleaned { files: 1, bytes: CLEAN_BYTES + 1 });
+        assert!(!dir.join("big.log").exists() && dir.join("small.log").exists() && dir.join("live.log").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

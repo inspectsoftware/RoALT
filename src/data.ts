@@ -50,8 +50,8 @@ export const useAccounts = () => useQuery({ queryKey: qk.accounts, queryFn: api.
 export const useGroups = () => useQuery({ queryKey: qk.groups, queryFn: api.groupsList, select: bySortOrder });
 export const useFavourites = () => useQuery({ queryKey: qk.favourites, queryFn: api.favouritesList, select: bySortOrder });
 
-/** Refreshed by instances://changed. */
-export const useInstances = () => useQuery({ queryKey: qk.instances, queryFn: api.instancesList });
+/** Refreshed by instances://changed, and every 5 s in case an event was missed. */
+export const useInstances = () => useQuery({ queryKey: qk.instances, queryFn: api.instancesList, refetchInterval: 5_000 });
 /** Refreshed by instances://changed (an ending client may add one). */
 export const useCrashes = () => useQuery({ queryKey: qk.crashes, queryFn: api.crashesList });
 /** Polled every 2 s while a caller is mounted and the window is visible. */

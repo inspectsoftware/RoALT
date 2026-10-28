@@ -134,7 +134,8 @@ fn args_for(s: &App, account_id: i64) -> Result<Vec<String>> {
 /// URI with a fresh `browsertrackerid` → start the client (`client::find` + `client::start`,
 /// with the account's or the default launch arguments after the URI). Just before the client
 /// starts, the account's or the default FPS cap goes into Roblox's flag file (`fps`, put back
-/// `fps::SETTLE` after the start; launches wait for each other meanwhile), unless a
+/// once the client has loaded its flags, `fps::wait_until_read`; launches wait for each other
+/// meanwhile), unless a
 /// bootstrapper manages the client (logged).
 /// `AppError::Locked` when the vault is locked; cookie errors as the API client maps them.
 pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget) -> Result<LaunchInfo> {
@@ -161,10 +162,11 @@ pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget) -> Result<L
     } else {
         fps::apply(&exe.path, fps)
     };
+    let since = std::time::SystemTime::now();
     let started = client::start(&exe, &uri::player_uri(&ticket, started_at, &place), &args);
     if let Some(undo) = undo {
         if started.is_ok() {
-            tokio::time::sleep(fps::SETTLE).await;
+            fps::wait_until_read(browser_tracker_id, since).await;
         }
         undo.put_back();
     }

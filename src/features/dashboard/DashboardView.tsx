@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, type AccountSummary, type ClientMetrics, type Instance, type Limits, type WindowShow } from "../../api";
-import { qk, useInstances, useMetrics, useSettings } from "../../data";
+import { qk, queryClient, useInstances, useMetrics, useSettings } from "../../data";
 import { Icon, type IconName } from "../../ui/Icon";
 import { toast, toastError } from "../../ui/Toast";
 import { accountName, Avatar, plural } from "../accounts/shared";
@@ -314,6 +314,16 @@ export function DashboardView({ accounts, onLaunch }: { accounts: AccountSummary
           <div className="w-40">
             <KillAllButton />
           </div>
+          <button
+            className="btn btn-sm"
+            title="Ask again which clients run"
+            onClick={() => {
+              for (const queryKey of [qk.instances, qk.metrics, qk.multi]) void queryClient.invalidateQueries({ queryKey });
+            }}
+          >
+            <Icon name="refresh" size={12} />
+            Refresh
+          </button>
           <span className="mono ml-auto text-xs text-dim" style={{ fontVariantNumeric: "tabular-nums" }}>
             {running.length} running · {inGame} in game · CPU {pct(cpu)} · {mb(mem)}
           </span>

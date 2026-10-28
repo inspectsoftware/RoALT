@@ -1,7 +1,8 @@
 //! FPS cap through Roblox's own flag file, `<version folder>\ClientSettings\ClientAppSettings.json`:
 //! `DFIntTaskSchedulerTargetFps` (on Roblox's flag allowlist) sets the client's target frame
 //! rate. The client reads the file once, at start, so a launch writes its cap just before the
-//! client starts and puts the file back as it was `SETTLE` later: Roblox started any other way
+//! client starts and puts the file back once that client has loaded its flags (`wait_until_read`;
+//! that can take 5 s or more after the process starts): Roblox started any other way
 //! (the website, another manager) sees the user's own flags. Launches hold `LOCK` from the write
 //! to the put-back, so one never reads another's cap. Other keys in the file are kept; a cap of
 //! 0 writes nothing. Never under a bootstrapper (Bloxstrap, Fishstrap, ... write this file
@@ -18,8 +19,32 @@ const KEY: &str = "DFIntTaskSchedulerTargetFps";
 /// Accepted caps; 0 means "leave Roblox alone".
 pub const RANGE: RangeInclusive<u32> = 5..=360;
 
-/// How long a starting client gets to read the file before it is put back.
-pub const SETTLE: Duration = Duration::from_secs(3);
+/// After the client's log names its browser tracker id (it does so just after "Successfully
+/// loaded flags"), a margin before the file is put back ...
+const AFTER_READ: Duration = Duration::from_secs(2);
+/// ... and the longest a launch waits for that log (an update or a slow PC); then it is put back.
+const READ_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Waits until the client launched with `browser_tracker_id` at `since` has loaded its flags:
+/// its log names that id (`logwatch::find_log`), which Roblox writes after loading them.
+pub async fn wait_until_read(browser_tracker_id: i64, since: std::time::SystemTime) {
+    let Some(dir) = crate::instances::logwatch::logs_dir() else { return tokio::time::sleep(AFTER_READ).await };
+    let deadline = tokio::time::Instant::now() + READ_TIMEOUT;
+    loop {
+        let d = dir.clone();
+        let found = tokio::task::spawn_blocking(move || crate::instances::logwatch::find_log(&d, browser_tracker_id, since).is_some())
+            .await
+            .unwrap_or(false);
+        if found {
+            return tokio::time::sleep(AFTER_READ).await;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            log::warn!("FPS cap: the client's log didn't show up in {} s; putting the flag file back", READ_TIMEOUT.as_secs());
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
 
 /// Held by each launch from `apply` until its client has started (and, after a write, until
 /// `Undo::put_back`), so concurrent launches (batch, rejoin, tray) never cross caps.

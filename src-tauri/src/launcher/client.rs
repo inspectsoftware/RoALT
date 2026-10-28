@@ -3,8 +3,9 @@
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::SystemTime;
 
-use windows::Win32::System::Registry::{HKEY, HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, RRF_RT_REG_SZ, RegGetValueW};
+use windows::Win32::System::Registry::{HKEY, HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
 use windows::core::{HSTRING, PCWSTR};
 
 use crate::error::{AppError, Result};
@@ -19,21 +20,98 @@ pub struct ClientExe {
     pub bootstrapper: bool,
 }
 
-/// Roblox's own client: `HKCU\Software\ROBLOX Corporation\Environments\roblox-player` value
-/// `clientExe`, if that file exists; else the `roblox-player` protocol handler
-/// (`HKCU\Software\Classes\roblox-player\shell\open\command`, then HKCR), parsed out of its
-/// command line; `bootstrapper` = its file name isn't RobloxPlayerBeta.exe.
-/// Nothing found → `AppError::Invalid("Roblox isn't installed. Install it from roblox.com, then try again.")`.
+/// Where Roblox records its install: per user (HKCU) or for all users (HKLM, 64- and 32-bit views).
+const ENVIRONMENTS: [(HKEY, &str); 3] = [
+    (HKEY_CURRENT_USER, r"Software\ROBLOX Corporation\Environments\roblox-player"),
+    (HKEY_LOCAL_MACHINE, r"SOFTWARE\ROBLOX Corporation\Environments\roblox-player"),
+    (HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\ROBLOX Corporation\Environments\roblox-player"),
+];
+
+/// The first that exists of:
+/// 1. Roblox's own `clientExe` (`ENVIRONMENTS`, quotes trimmed);
+/// 2. the `roblox-player` protocol handler (`HKCU\Software\Classes\roblox-player\shell\open\command`,
+///    then HKCR), parsed out of its command line (how a bootstrapper is found);
+/// 3. `Versions\<version>\RobloxPlayerBeta.exe` from the registry's `version`;
+/// 4. the newest `RobloxPlayerBeta.exe` under a `Roblox\Versions` folder (`%LOCALAPPDATA%`,
+///    Program Files (x86), Program Files): the registry can still name a version folder Roblox
+///    deleted when it updated itself.
+///
+/// `bootstrapper` = its file name isn't RobloxPlayerBeta.exe. Nothing found → `AppError::Invalid`.
 pub fn find() -> Result<ClientExe> {
-    let own = reg_string(HKEY_CURRENT_USER, r"Software\ROBLOX Corporation\Environments\roblox-player", Some("clientExe"));
-    let handlers = [
+    let own = ENVIRONMENTS.into_iter().filter_map(|(root, key)| reg_string(root, key, Some("clientExe")).map(unquote));
+    let named = ENVIRONMENTS
+        .into_iter()
+        .filter_map(|(root, key)| reg_string(root, key, Some("version")))
+        .flat_map(|v| versions_dirs().into_iter().map(move |d| d.join(&v).join(PLAYER)));
+    let path = own
+        .chain(handlers())
+        .chain(named)
+        .find(|p| p.is_file() && !in_store(p))
+        .or_else(|| newest(versions_dirs().iter().flat_map(|d| players_in(d)).filter(|(p, _)| !in_store(p))));
+    let path = path.ok_or_else(|| {
+        AppError::Invalid(
+            "Roblox isn't installed. Install it from roblox.com, then try again. (The Microsoft Store version can't be used: install the one from roblox.com.)"
+                .into(),
+        )
+    })?;
+    Ok(ClientExe { bootstrapper: !is_player(&path), path })
+}
+
+/// The `roblox-player` protocol handlers' programs (HKCU, then HKCR). Roblox's own launcher or
+/// installer there (older installs) stands for the RobloxPlayerBeta.exe beside it, so it is never
+/// taken for a bootstrapper.
+fn handlers() -> impl Iterator<Item = PathBuf> {
+    [
         (HKEY_CURRENT_USER, r"Software\Classes\roblox-player\shell\open\command"),
         (HKEY_CLASSES_ROOT, r"roblox-player\shell\open\command"),
-    ];
-    let handler = handlers.into_iter().filter_map(|(root, key)| handler_exe(&reg_string(root, key, None)?));
-    let path = own.map(PathBuf::from).into_iter().chain(handler).find(|p| p.is_file());
-    let path = path.ok_or_else(|| AppError::Invalid("Roblox isn't installed. Install it from roblox.com, then try again.".into()))?;
-    Ok(ClientExe { bootstrapper: !is_player(&path), path })
+    ]
+    .into_iter()
+    .filter_map(|(root, key)| handler_exe(&reg_string(root, key, None)?))
+    .map(|h| {
+        let player = h.with_file_name(PLAYER);
+        if is_roblox_launcher(&h) && player.is_file() { player } else { h }
+    })
+}
+
+/// RobloxPlayerLauncher.exe or RobloxPlayerInstaller.exe: Roblox's, not a bootstrapper (pure).
+fn is_roblox_launcher(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|n| ["RobloxPlayerLauncher.exe", "RobloxPlayerInstaller.exe"].iter().any(|r| n.eq_ignore_ascii_case(r)))
+}
+
+/// The Microsoft Store build (under `WindowsApps`), which can't be started with a launch URI (pure).
+fn in_store(path: &Path) -> bool {
+    path.components().any(|c| c.as_os_str().eq_ignore_ascii_case("WindowsApps"))
+}
+
+/// The `Versions` folders clients live in: Roblox's own (per user first), then Bloxstrap's and
+/// Fishstrap's copies.
+fn versions_dirs() -> Vec<PathBuf> {
+    let roblox = ["LOCALAPPDATA", "ProgramFiles(x86)", "ProgramFiles"].iter().filter_map(std::env::var_os).map(|d| PathBuf::from(d).join("Roblox"));
+    let strap = std::env::var_os("LOCALAPPDATA").into_iter().flat_map(|d| ["Bloxstrap", "Fishstrap"].map(|b| PathBuf::from(&d).join(b)));
+    roblox.chain(strap).map(|d| d.join("Versions")).collect()
+}
+
+/// Every `<dir>\<version>\RobloxPlayerBeta.exe` with its last-write time.
+fn players_in(dir: &Path) -> Vec<(PathBuf, SystemTime)> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    entries
+        .filter_map(|e| {
+            let exe = e.ok()?.path().join(PLAYER);
+            let modified = std::fs::metadata(&exe).ok()?.modified().ok()?;
+            Some((exe, modified))
+        })
+        .collect()
+}
+
+/// The most recently written (pure).
+fn newest(found: impl IntoIterator<Item = (PathBuf, SystemTime)>) -> Option<PathBuf> {
+    found.into_iter().max_by_key(|(_, t)| *t).map(|(p, _)| p)
+}
+
+/// A registry path without the quotes some installs keep around it (pure).
+fn unquote(s: String) -> PathBuf {
+    PathBuf::from(s.trim().trim_matches('"'))
 }
 
 /// Starts the client with the URI as its first argument, then `extra` (`launcher::launch_args`),
@@ -78,13 +156,7 @@ fn handler_exe(command: &str) -> Option<PathBuf> {
 /// bootstrapper, sits under a `Bloxstrap`/`Fishstrap` folder (they set `clientExe` to their own
 /// `Versions` copy), or the `roblox-player` protocol handler isn't RobloxPlayerBeta.exe.
 pub fn managed_by_bootstrapper(exe: &ClientExe) -> bool {
-    let handler = [
-        (HKEY_CURRENT_USER, r"Software\Classes\roblox-player\shell\open\command"),
-        (HKEY_CLASSES_ROOT, r"roblox-player\shell\open\command"),
-    ]
-    .into_iter()
-    .filter_map(|(root, key)| handler_exe(&reg_string(root, key, None)?))
-    .find(|p| p.is_file());
+    let handler = handlers().find(|p| p.is_file());
     exe.bootstrapper || in_bootstrapper_folder(&exe.path) || handler.is_some_and(|h| !is_player(&h))
 }
 
@@ -139,6 +211,39 @@ mod tests {
         assert!(in_bootstrapper_folder(Path::new(r"C:\Users\you\AppData\Local\Bloxstrap\Versions\version-9ac8595712b447a7\RobloxPlayerBeta.exe")));
         assert!(in_bootstrapper_folder(Path::new(r"D:\FISHSTRAP\Versions\x\RobloxPlayerBeta.exe")));
         assert!(!in_bootstrapper_folder(Path::new(roblox)));
+    }
+
+    #[test]
+    fn picks_the_newest_client_and_trims_quotes() {
+        let t = |s: u64| SystemTime::UNIX_EPOCH + Duration::from_secs(s);
+        let found = vec![(PathBuf::from("old"), t(10)), (PathBuf::from("new"), t(30)), (PathBuf::from("mid"), t(20))];
+        assert_eq!(newest(found), Some(PathBuf::from("new")));
+        assert_eq!(newest(Vec::new()), None);
+        let exe = r"C:\R\RobloxPlayerBeta.exe";
+        assert_eq!(unquote(format!(" \"{exe}\" ")), PathBuf::from(exe));
+        assert_eq!(unquote(exe.into()), PathBuf::from(exe));
+
+        assert!(is_roblox_launcher(Path::new(r"C:\R\Versions\v\RobloxPlayerLauncher.exe")));
+        assert!(is_roblox_launcher(Path::new(r"C:\R\Versions\v\robloxplayerinstaller.EXE")));
+        assert!(!is_roblox_launcher(Path::new(r"C:\B\Bloxstrap.exe")) && !is_roblox_launcher(Path::new(exe)));
+        assert!(in_store(Path::new(r"C:\Program Files\WindowsApps\ROBLOXCORPORATION.ROBLOX_2.6_x64\Windows10Universal.exe")));
+        assert!(!in_store(Path::new(exe)));
+    }
+
+    #[test]
+    fn finds_clients_in_a_versions_folder() {
+        let dir = std::env::temp_dir().join(format!("roalt-test-{}", uuid::Uuid::new_v4()));
+        for v in ["version-a", "version-b", "not-a-client"] {
+            std::fs::create_dir_all(dir.join(v)).unwrap();
+        }
+        std::fs::write(dir.join("version-a").join(PLAYER), b"").unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        std::fs::write(dir.join("version-b").join(PLAYER), b"").unwrap();
+        let found = players_in(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(found.len(), 2, "the folder without a client is skipped");
+        assert_eq!(newest(found), Some(dir.join("version-b").join(PLAYER)));
+        assert!(players_in(&dir.join("missing")).is_empty());
     }
 
     #[test]

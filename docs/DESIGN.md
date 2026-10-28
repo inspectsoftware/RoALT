@@ -367,7 +367,7 @@ doesn't retry a version that failed. Fallback: open roblox.com/download.
   `ci.yml` runs `cargo test`, clippy and `tsc` on every push.
 - No Authenticode signing yet: SmartScreen will warn on first run.
 - Self-update (`self_update.rs`, setting `selfUpdate`, default on): `api.github.com/.../releases/latest`
-  (published, non-draft, non-prerelease) 10 s after start and every 6 h; a strictly newer `vX.Y.Z` tag with
+  (published, non-draft, non-prerelease) at start and every 6 h; a strictly newer `vX.Y.Z` tag with
   both assets is offered in a banner (Later hides it until the next start) and by Settings → Check now.
   Turning the switch off forgets the found version (the banner hides); on checks at once.
   Update now (asks first while tracked clients run: they keep running, untracked after the restart) asks

@@ -209,7 +209,7 @@ launch accounts, signed in with an 8-digit PIN.
 > compare its SHA-256 with `SHA256SUMS.txt` on the release page, then choose **More info → Run anyway**.
 >
 > ```powershell
-> Get-FileHash .\RoALT-Setup-0.6.2.exe -Algorithm SHA256
+> Get-FileHash .\RoALT-Setup-0.6.3.exe -Algorithm SHA256
 > ```
 
 Your accounts and settings live in `%LOCALAPPDATA%\RoALT`. Uninstalling keeps them unless you tick
@@ -323,8 +323,8 @@ In **Settings → Launching**, turn on **Auto-rejoin** (and, if you like, **Auto
   Nothing is sent while the vault is locked.
 - **Roblox updates** come from Roblox only: the version from `clientsettingscdn.roblox.com`, the installer from
   `setup.rbxcdn.com`, run only when its signature checks out as Roblox Corporation's.
-- **RoALT updates** are looked up on GitHub (`api.github.com`, this repository's latest published release) 10 seconds
-  after start and every 6 hours, unless you turn *Check for RoALT updates* off in Settings. The request carries only
+- **RoALT updates** are looked up on GitHub (`api.github.com`, this repository's latest published release) as soon
+  as RoALT starts and every 6 hours, unless you turn *Check for RoALT updates* off in Settings. The request carries only
   `RoALT/<version>` as its user agent. When you click Update now, the installer and its `.sig` are downloaded from
   `github.com` (GitHub's own download hosts only), and the installer runs only if its ECDSA P-256 signature checks out
   against the public key built into RoALT. The signature covers the version too, so the release must be newer than

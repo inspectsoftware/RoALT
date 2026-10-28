@@ -23,7 +23,9 @@ export const unhideUpdate = () => hide(null);
 
 /** "RoALT x.y.z is ready" under the title bar while a newer release is known (self_update). */
 export function UpdateBanner() {
-  const version = useQuery({ queryKey: qk.appUpdate, queryFn: api.selfUpdateStatus }).data?.available;
+  // The start-up check can finish before the app://update listener exists: ask the cached
+  // result again (no network) until an update is known.
+  const version = useQuery({ queryKey: qk.appUpdate, queryFn: api.selfUpdateStatus, refetchInterval: (q) => (q.state.data?.available ? false : 5_000) }).data?.available;
   const running = useInstances().data?.filter(isRunning).length ?? 0;
   const later = useSyncExternalStore(subscribe, () => hidden);
   const [confirm, setConfirm] = useState(false);

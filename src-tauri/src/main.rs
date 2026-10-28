@@ -343,6 +343,8 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
     if let Err(e) = tray::setup(app.handle()) {
         log::warn!("no tray icon: {e}");
     }
+    // Before anything else is started, so a newer RoALT is offered as soon as possible.
+    self_update::spawn(app.handle().clone());
     main_window(app, data_dir, theme).map_err(|e| {
         format!(
             "RoALT can't open its window ({e}).\n\nIt needs the Microsoft Edge WebView2 Runtime: \
@@ -355,7 +357,6 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
     discord::spawn(app.handle().clone());
     rpc::spawn(app.handle().clone());
     launcher::update::spawn(app.handle().clone());
-    self_update::spawn(app.handle().clone());
     remind_bandwidth(app.handle().clone());
     Ok(())
 }

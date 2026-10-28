@@ -1,7 +1,7 @@
 //! RoALT's own updates (Roblox's are `launcher::update`).
 //!
 //! - Check: `GET api.github.com/repos/inspectsoftware/RoALT/releases/latest` (published releases
-//!   only, never a draft or prerelease) 10 s after start and every 6 h while `self_update` is on,
+//!   only, never a draft or prerelease) at start and every 6 h while `self_update` is on,
 //!   or on Check now. A `vX.Y.Z` tag newer than this build (`newer`: never the same or older)
 //!   with the assets `RoALT-Setup-X.Y.Z.exe` and `.exe.sig` is an update; `app://update` says so.
 //! - Install (`install`, only on the user's click): asks GitHub again, downloads both (https only,
@@ -43,7 +43,6 @@ use crate::model::AppUpdate;
 pub const UPDATE_EVENT: &str = "app://update";
 const CURRENT: &str = env!("CARGO_PKG_VERSION");
 const LATEST: &str = "https://api.github.com/repos/inspectsoftware/RoALT/releases/latest";
-const FIRST_CHECK: Duration = Duration::from_secs(10);
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 const MAX_JSON: u64 = 1_000_000;
 const MAX_INSTALLER: u64 = 200_000_000;
@@ -341,11 +340,11 @@ pub fn switched(app: &AppHandle, on: bool) {
     });
 }
 
-/// Deletes what earlier updates left in %TEMP%, then checks 10 s after start and every 6 hours
+/// Deletes what earlier updates left in %TEMP%, then checks at start and every 6 hours
 /// while `settings.self_update` is on; `app://update` when there is a newer version.
 pub fn spawn(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(FIRST_CHECK).await;
+        // First thing at start: no delay before the first check.
         tauri::async_runtime::spawn_blocking(sweep);
         loop {
             if app.state::<App>().db.settings().is_ok_and(|v| v.self_update) {

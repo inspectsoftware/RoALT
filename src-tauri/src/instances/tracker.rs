@@ -7,7 +7,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 use super::logwatch::{self, LogFacts};
-use super::metrics::{MEM_STRIKES, mem_strikes};
+use super::metrics::{MEM_STRIKES, mem_strikes, mem_throttled};
 use super::process::{self, ProcInfo};
 use crate::model::{CrashKind, Instance, InstanceState, LaunchInfo, LaunchTarget, Limits};
 
@@ -95,6 +95,8 @@ struct Entry {
     mem_mb: u64,
     /// RoALT is closing it for its memory (`mark_restart`): its exit is recorded as `Mem`.
     mem_restart: bool,
+    /// Its main window has been seen (`first_windows`), so "Minimize on launch" is done with it.
+    window_seen: bool,
 }
 
 impl Entry {
@@ -143,6 +145,8 @@ impl Tracker {
             limits: Default::default(),
             anti_afk: true,
             afk_at: None,
+            throttled: false,
+            micro: false,
         };
         self.entries().push(Entry {
             inst: inst.clone(),
@@ -164,6 +168,7 @@ impl Tracker {
             mem_strikes: 0,
             mem_mb: 0,
             mem_restart: false,
+            window_seen: false,
         });
         inst
     }
@@ -250,6 +255,11 @@ impl Tracker {
         Some(Claim { tracker: self, account_id })
     }
 
+    /// The logs of clients that haven't ended (`logwatch::clean` leaves them).
+    pub fn live_logs(&self) -> Vec<PathBuf> {
+        self.entries().iter().filter(|e| e.inst.state != InstanceState::Exited).filter_map(|e| e.log.clone()).collect()
+    }
+
     /// True while a client RoALT started hasn't ended.
     pub fn any_running(&self) -> bool {
         self.entries().iter().any(|e| e.inst.state != InstanceState::Exited)
@@ -290,6 +300,37 @@ impl Tracker {
                 let (pid, _) = client_of(e)?;
                 Some(super::afk::AfkClient { id: e.inst.id.clone(), pid, since: e.inst.afk_at.or(e.in_game_at)? })
             })
+            .collect()
+    }
+
+    /// Marks a running client's window as made small (or back to normal); false when there is
+    /// no such client.
+    pub fn set_micro(&self, id: &str, on: bool) -> bool {
+        let mut entries = self.entries();
+        let Some(e) = entries.iter_mut().find(|e| e.inst.id == id && e.inst.state != InstanceState::Exited) else { return false };
+        e.inst.micro = on;
+        true
+    }
+
+    /// Pids of running clients whose main window `has_window` sees for the first time (each
+    /// returned once per instance, also while "Minimize on launch" is off, so turning it on
+    /// later leaves clients already up alone). Windows are looked for outside the lock.
+    pub fn first_windows(&self, has_window: &dyn Fn(u32) -> bool) -> Vec<u32> {
+        let waiting: Vec<(String, u32)> = self
+            .entries()
+            .iter()
+            .filter(|e| !e.window_seen && e.inst.state != InstanceState::Exited)
+            .filter_map(|e| client_of(e).map(|(pid, _)| (e.inst.id.clone(), pid)))
+            .collect();
+        let seen: Vec<(String, u32)> = waiting.into_iter().filter(|&(_, pid)| has_window(pid)).collect();
+        let mut entries = self.entries();
+        seen.into_iter()
+            .filter(|(id, pid)| {
+                let Some(e) = entries.iter_mut().find(|e| e.inst.id == *id && e.inst.pid == *pid && !e.window_seen) else { return false };
+                e.window_seen = true;
+                true
+            })
+            .map(|(_, pid)| pid)
             .collect()
     }
 
@@ -365,6 +406,21 @@ impl Tracker {
         }
     }
 
+    /// Brings each running client's `throttled` to its last memory sample against `limit_mb`
+    /// (`metrics::mem_throttled`; 0: off). The ids held, and whether any changed.
+    pub fn throttle(&self, limit_mb: u32) -> (Vec<String>, bool) {
+        let (mut held, mut changed) = (Vec::new(), false);
+        for e in self.entries().iter_mut().filter(|e| e.inst.state != InstanceState::Exited) {
+            let t = mem_throttled(e.inst.throttled, e.mem_mb, limit_mb);
+            changed |= t != e.inst.throttled;
+            e.inst.throttled = t;
+            if t {
+                held.push(e.inst.id.clone());
+            }
+        }
+        (held, changed)
+    }
+
     /// Forgets ended entries.
     pub fn clear_ended(&self) {
         self.entries().retain(|e| e.inst.state != InstanceState::Exited);
@@ -384,7 +440,8 @@ impl Tracker {
     /// (`via_bootstrapper`): the started PID is the bootstrapper; bind to the client by log.
     /// Each poll also brings the clients to their limits (`limits::plan`: the adaptive manager
     /// by the window in front, default trim, auto-spread), and every 10 s samples their memory
-    /// for the memory restart (not while a launch or batch runs).
+    /// for the memory restart (not while a launch or batch runs). With `clean_logs`, Roblox's old
+    /// logs go hourly (`logwatch::clean`).
     pub fn spawn(app: AppHandle) {
         tauri::async_runtime::spawn(async move {
             let mut tick: u64 = 0;
@@ -392,7 +449,7 @@ impl Tracker {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 tick += 1;
                 let handle = app.clone();
-                let (moved, rejoins) = tauri::async_runtime::spawn_blocking(move || {
+                let (moved, rejoins, throttle_moved) = tauri::async_runtime::spawn_blocking(move || {
                     let s = handle.state::<crate::App>();
                     let v = s.db.settings().unwrap_or_default();
                     let user_of = |account_id| s.db.account(account_id).ok().map(|a| a.user_id);
@@ -401,14 +458,29 @@ impl Tracker {
                     s.multi.release_if(|| !s.tracker.any_running());
                     // Also gives a client re-adopted under a new pid its limits again.
                     let clients = s.tracker.clients();
+                    let (held, throttle_moved) = s.tracker.throttle(v.mem_throttle.mb);
                     if !clients.is_empty() {
                         let fg = if v.adaptive.enabled { process::foreground_pid() } else { None };
-                        s.limiter.sync(&super::limits::plan(&clients, &v, fg, crate::commands::cores()));
+                        s.limiter.sync(&super::limits::plan(&clients, &v, fg, crate::commands::cores(), &held));
+                    }
+                    // Once per client, without taking the focus (anti-AFK then skips it).
+                    for pid in s.tracker.first_windows(&|pid| process::main_window(pid).is_some()) {
+                        if v.minimize_on_launch {
+                            super::window::minimize_quietly(pid);
+                        }
                     }
                     // Skipped (not reset) while a launch, batch or rejoin runs.
                     if tick.is_multiple_of(10) && !clients.is_empty() && !s.bulk.any_busy() {
                         let mb = |pid, t0| super::metrics::read(pid, t0).map(|r| r.private >> 20);
                         s.tracker.check_memory(v.mem_restart_mb, &mb);
+                    }
+                    // Roblox's own logs: 30 s after start, then hourly.
+                    if v.clean_logs
+                        && tick % 3600 == 30
+                        && let Some(dir) = logwatch::logs_dir()
+                    {
+                        let done = logwatch::clean(&dir, &s.tracker.live_logs());
+                        log::info!("cleaned {} Roblox logs ({} MB)", done.files, done.bytes >> 20);
                     }
                     for c in s.tracker.take_crashes() {
                         let row = crate::storage::NewCrash {
@@ -425,11 +497,11 @@ impl Tracker {
                             log::warn!("could not record the end of instance {}: {e}", c.instance_id);
                         }
                     }
-                    (moved, s.tracker.take_rejoins())
+                    (moved, s.tracker.take_rejoins(), throttle_moved)
                 })
                 .await
                 .unwrap_or_default();
-                if !moved.is_empty() {
+                if !moved.is_empty() || throttle_moved {
                     crate::commands::instances_changed(&app);
                     crate::discord::transitions(&app, &moved);
                 }
@@ -468,6 +540,7 @@ impl Tracker {
             e.inst.rejoins = old.inst.rejoins;
             e.inst.limits = old.inst.limits;
             (e.inst.anti_afk, e.inst.afk_at) = (old.inst.anti_afk, old.inst.afk_at);
+            (e.inst.throttled, e.inst.micro, e.window_seen) = (old.inst.throttled, old.inst.micro, old.window_seen);
             e.gave_up = old.gave_up;
             (e.mem_strikes, e.mem_mb, e.mem_restart) = (old.mem_strikes, old.mem_mb, old.mem_restart);
             if let Some(kind) = settle(e, now) {
@@ -820,6 +893,20 @@ mod tests {
         assert!(t.claim(2).is_some());
         t.entries().iter_mut().find(|e| e.inst.id == id).unwrap().inst.state = Disconnected;
         assert!(!t.has_live_client(1) && t.claim(1).is_some());
+    }
+
+    #[test]
+    fn each_clients_first_window_is_handed_out_once() {
+        let t = Tracker::new();
+        let a = t.register(&LaunchInfo { pid_start: Some(50), ..info(900, now_ms(), false) }, target()).id;
+        let b = t.register(&LaunchInfo { pid_start: Some(60), ..info(901, now_ms(), true) }, target()).id;
+        assert_eq!(t.first_windows(&|_| false), Vec::<u32>::new(), "no window yet");
+        assert_eq!(t.first_windows(&|_| true), [900], "a bootstrapper isn't the client");
+        assert_eq!(t.first_windows(&|_| true), Vec::<u32>::new(), "once");
+        t.entries().iter_mut().find(|e| e.inst.id == b).unwrap().adopted = true;
+        assert_eq!(t.first_windows(&|_| true), [901]);
+        assert!(t.set_micro(&a, true) && t.get(&a).unwrap().micro);
+        assert!(!t.set_micro("nope", true));
     }
 
     fn temp_dir() -> PathBuf {

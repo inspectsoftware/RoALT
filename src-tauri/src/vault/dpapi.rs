@@ -23,7 +23,12 @@ pub fn protect(data: &[u8]) -> Result<Vec<u8>> {
 }
 
 pub fn unprotect(blob_in: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
-    let (input, entropy) = (blob(blob_in)?, blob(ENTROPY)?);
+    unprotect_with(blob_in, ENTROPY)
+}
+
+/// `unprotect` with another app's entropy (an import from it).
+pub fn unprotect_with(blob_in: &[u8], entropy: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
+    let (input, entropy) = (blob(blob_in)?, blob(entropy)?);
     let mut out = CRYPT_INTEGER_BLOB::default();
     // SAFETY: as in `protect`.
     unsafe { CryptUnprotectData(&input, None, Some(&entropy), None, None, CRYPTPROTECT_UI_FORBIDDEN, &mut out) }

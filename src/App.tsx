@@ -4,6 +4,7 @@ import { api, asError, events, type Favourite, type SameServer, type Settings, t
 import { qk, queryClient, useAccounts, useGroups, useInstances, useSetSettings, useSettings, useVault } from "./data";
 import { AccountsView } from "./features/accounts/AccountsView";
 import { AddAccountDialog } from "./features/accounts/AddAccountDialog";
+import { DashboardView } from "./features/dashboard/DashboardView";
 import { DiscordView } from "./features/discord/DiscordView";
 import { GroupsNav } from "./features/accounts/GroupsNav";
 import { plural } from "./features/accounts/shared";
@@ -109,7 +110,8 @@ function Root() {
     <div className="h-full flex flex-col">
       <TitleBar
         dark={dark}
-        onToggleTheme={s ? () => setSettings.mutate({ theme: dark ? "light" : "dark" }) : undefined}
+        // Flips light and dark only: a named palette (Neon, Sakura, Bricks) is changed in Settings.
+        onToggleTheme={s && ["dark", "light", "system"].includes(s.theme) ? () => setSettings.mutate({ theme: dark ? "light" : "dark" }) : undefined}
         onLock={unlocked && v.mode === "master" ? lock : undefined}
         onRefresh={unlocked ? refresh : undefined}
       />
@@ -138,7 +140,7 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
   const accounts = useAccounts();
   const groups = useGroups();
   const running = useInstances().data?.filter(isRunning).length ?? 0;
-  const [view, setView] = useState<"accounts" | "launch" | "servers" | "monitor" | "discord" | "settings">("accounts");
+  const [view, setView] = useState<"dashboard" | "accounts" | "launch" | "servers" | "monitor" | "discord" | "settings">("dashboard");
   const [group, setGroup] = useState<number | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   // The Launch view's accounts; the last one launched until something else is picked.
@@ -171,19 +173,20 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
     setView("servers");
   };
 
-  // Re-bound each render: Ctrl+3 needs the current draft. Alt is left alone (AltGr types characters).
+  // Re-bound each render: Ctrl+4 needs the current draft. Alt is left alone (AltGr types characters).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey || document.querySelector("dialog[open]")) return;
       const k = e.key.toLowerCase();
       // By key position, so Ctrl+1 works on layouts where the digits need Shift.
       const views: Record<string, () => void> = {
-        Digit1: () => setView("accounts"),
-        Digit2: () => setView("launch"),
-        Digit3: openServers,
-        Digit4: () => setView("settings"),
-        Digit5: () => setView("monitor"),
-        Digit6: () => setView("discord"),
+        Digit1: () => setView("dashboard"),
+        Digit2: () => setView("accounts"),
+        Digit3: () => setView("launch"),
+        Digit4: openServers,
+        Digit5: () => setView("settings"),
+        Digit6: () => setView("monitor"),
+        Digit7: () => setView("discord"),
       };
       const go = views[e.code];
       if (go) {
@@ -236,6 +239,15 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
     <div className="flex-1 flex min-h-0">
       <nav aria-label="Sections" style={{ width: nav.width }} className="flex-none flex flex-col px-2 py-3 bg-panel border-r border-line">
         <div className="flex flex-col gap-0.5">
+          <button className="nav-item" aria-current={view === "dashboard" ? "page" : undefined} onClick={() => setView("dashboard")}>
+            <Icon name="grid" />
+            <span className="flex-1">Dashboard</span>
+            {running > 0 && (
+              <span className="mono text-xs text-accent-text" title={`${running} running`}>
+                {running}
+              </span>
+            )}
+          </button>
           <button className="nav-item" aria-current={view === "accounts" ? "page" : undefined} onClick={showAll}>
             <Icon name="accounts" />
             <span className="flex-1">Accounts</span>
@@ -299,7 +311,9 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
       </nav>
       <Divider panel={nav} side="left" label="Sidebar width" />
 
-      {view === "accounts" ? (
+      {view === "dashboard" ? (
+        <DashboardView accounts={accounts.data} onLaunch={() => setView("launch")} />
+      ) : view === "accounts" ? (
         <AccountsView
           accounts={accounts.data}
           groups={groups.data}
@@ -359,16 +373,21 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
   );
 }
 
-/** Applies the theme to <html>; "system" follows prefers-color-scheme live. Returns whether it is dark. */
+/** Palettes on a light background (the rest are dark). */
+const LIGHT_THEMES = ["light", "sakura"];
+
+/** Applies the theme to <html> (`data-theme`, one block per palette in theme.css); "system"
+ * follows prefers-color-scheme live. Returns whether it is dark. */
 function useTheme(theme: Theme | undefined) {
-  const [dark, setDark] = useState(() => document.documentElement.dataset.theme !== "light");
+  const [dark, setDark] = useState(() => !LIGHT_THEMES.includes(document.documentElement.dataset.theme ?? ""));
   useEffect(() => {
     if (!theme) return;
     const mq = matchMedia("(prefers-color-scheme: dark)");
     const apply = () => {
       const t = theme === "system" ? (mq.matches ? "dark" : "light") : theme;
       document.documentElement.dataset.theme = t;
-      setDark(t === "dark");
+      setDark(!LIGHT_THEMES.includes(t));
+
       try {
         localStorage.setItem(THEME_KEY, t);
       } catch {

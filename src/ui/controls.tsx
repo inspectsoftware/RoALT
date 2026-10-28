@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { toast } from "./Toast";
 
 export function Switch({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
@@ -11,7 +11,8 @@ export function Switch({ checked, onChange, label }: { checked: boolean; onChang
 export function Segmented<T extends string | number>({ label, value, options, onChange, mono }: {
   label: string;
   value: T;
-  options: { value: T; label: string; disabled?: boolean; title?: string }[];
+  options: { value: T; label: ReactNode; disabled?: boolean; title?: string }[];
+
   onChange: (v: T) => void;
   mono?: boolean;
 }) {

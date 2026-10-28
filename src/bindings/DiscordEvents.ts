@@ -13,6 +13,10 @@ restart: boolean,
  */
 breaker: boolean, batchDone: boolean, 
 /**
+ * A client first got into a game (not after a rejoin, restart or reconnect).
+ */
+launch: boolean, 
+/**
  * A summary of the running clients every this many minutes (0: off, else 5..=1440).
  */
 statusEveryMin: number, };

@@ -63,18 +63,22 @@ let accounts: AccountSummary[] = seed.map(([alias, displayName, username, userId
   createdAt: now - (40 - i * 3) * DAY,
   allowDisconnect: false,
   launchArgs: null,
+  discordMuted: false,
+  fpsCap: i === 1 ? 15 : null,
 }));
 
 let settings: Settings = {
   theme: "dark", density: "detailed", autoLockMinutes: 15, clipboardClearSeconds: 30, cacheMinutes: 10,
   multiInstance: false, protectSharedLogin: true, launchDelayMs: 6000, autoRejoin: false, autoRestartOnCrash: false,
   breakerMax: 3, breakerWindowMin: 10, closeGraceS: 5, launchArgs: "", closeToTray: false,
-  memRestartMb: 0, trimEveryMin: 0, autoSpread: false,
+  memRestartMb: 0, memThrottle: { mb: 0, cpuCap: 10 }, trimEveryMin: 0, autoSpread: false,
   adaptive: { enabled: false, background: { cpuCap: 25, eco: true, trimEveryMin: null, affinity: null } }, bandwidthKbps: 0,
-  antiAfk: { enabled: false, intervalMin: 15 },
-  discord: { crash: true, hang: true, memRestart: true, disconnect: true, restart: true, breaker: true, batchDone: true, statusEveryMin: 0 },
-  autoUpdate: false,
+  antiAfk: { enabled: false, intervalMin: 15, mode: "focus" },
+  discord: { crash: true, hang: true, memRestart: true, disconnect: true, restart: true, breaker: true, batchDone: true, launch: false, statusEveryMin: 0 },
+  autoUpdate: false, minimizeOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0,
+  remote: { enabled: false, port: 47800 },
 };
+let remotePin = "48213907";
 
 // Outdated, so Settings offers the update and the Launch view warns before a batch.
 let robloxClient: RobloxClient = {
@@ -87,6 +91,7 @@ let robloxClient: RobloxClient = {
 /** The fake vault's Discord webhook (the real one is encrypted; the UI only ever sees its id's end). */
 /** `roblox_install` runs: launches and a second install are refused, as in Rust. */
 let installing = false;
+let shutdownAt: number | null = null;
 const INSTALLING = "Roblox is being installed. Launch again once it is done.";
 let webhook: { id: string; token: string } | null = null;
 const WEBHOOK = /^https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api\/webhooks\/(\d{1,25})\/([A-Za-z0-9_-]{1,128})$/;
@@ -109,6 +114,29 @@ function fakeMetrics() {
       writeBps: age < 2 ? null : 5_000 + 60_000 * wave(9),
     };
   });
+}
+/** Clients whose fake window is minimized (no picture). */
+const minimized = new Set<string>();
+/** A fake 4:3 picture of a client's window: a moving sky over a green baseplate. */
+function fakeThumb(i: Instance, w: number) {
+  const h = Math.round((w * 3) / 4);
+  const buf = new ArrayBuffer(8 + w * h * 4);
+  const head = new DataView(buf);
+  head.setUint32(0, w, true);
+  head.setUint32(4, h, true);
+  const px = new Uint8ClampedArray(buf, 8);
+  const shift = (Date.now() / 40 + i.accountId * 60) % w;
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const o = (y * w + x) * 4;
+      const ground = y > h * 0.62;
+      const block = !ground && Math.abs(((x + shift) % w) - w / 2) < w / 14 && y > h * 0.45;
+      px[o] = ground ? 70 : block ? 200 : 110 + (y / h) * 80;
+      px[o + 1] = ground ? 150 : block ? 60 : 170 + (y / h) * 60;
+      px[o + 2] = ground ? 70 : block ? 60 : 240;
+      px[o + 3] = 255;
+    }
+  return buf;
 }
 const crashes: Crash[] = [];
 // Instances: a stranger client blocks multi-instance until "Close Roblox".
@@ -147,7 +175,7 @@ function track(accountId: number, pid: number, target: LaunchTarget, placeId: nu
   const i: Instance = {
     id: crypto.randomUUID(), accountId, pid, state: "starting", target, placeId, jobId: null,
     startedAt: Date.now(), endedAt: null, viaBootstrapper, note: null, rejoins, limits: { cpuCap: null, eco: false, trimEveryMin: null, affinity: null },
-    antiAfk: true, afkAt: null,
+    antiAfk: true, afkAt: null, throttled: false, micro: false,
   };
   instances.push(i);
   if (!lockHeld) eventHolder = i.id;
@@ -201,7 +229,7 @@ function addFake(username: string): AccountSummary {
   const a: AccountSummary = {
     id, userId: 6000000000 + id, username, displayName: username.replace(/_/g, " "), alias: "", notes: "", color: null,
     favourite: false, sortOrder: accounts.length, groupIds: [], status: "valid", statusCheckedAt: Date.now(), createdAt: Date.now(),
-    allowDisconnect: false, launchArgs: null,
+    allowDisconnect: false, launchArgs: null, discordMuted: false, fpsCap: null,
   };
   accounts.push(a);
   changed();
@@ -576,6 +604,18 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       await sleep(700);
       if (/bad/i.test(args.cookie)) return fail("cookieInvalid", "This cookie is not valid or has expired. Sign in again.");
       return addFake(`pasted_${accounts.length + 1}`);
+    case "accounts_import_cookies": {
+      const found = [...new Set(String(args.text).match(/_\|WARNING:-DO-NOT-SHARE-THIS\.[^\s"';,:]*/g) ?? [])];
+      if (!found.length) return fail("invalid", "No .ROBLOSECURITY cookies found. Each starts with _|WARNING:-DO-NOT-SHARE-THIS.");
+      await sleep(400 * found.length);
+      const bad = found.filter((c) => /bad/i.test(c)).length;
+      found.slice(bad).forEach(() => addFake(`imported_${accounts.length + 1}`));
+      return { added: found.length - bad, updated: 0, skipped: 0, failed: bad };
+    }
+    case "accounts_import_ram":
+      await sleep(1200);
+      ["ram_alt_1", "ram_alt_2", "ram_alt_3"].forEach(addFake);
+      return { added: 3, updated: 1, skipped: 0, failed: 1 };
     case "account_add_login":
       await sleep(3500);
       return addFake(`fresh_login_${accounts.length + 1}`);
@@ -584,7 +624,8 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       if (!a) return fail("notFound", "Not found.");
       const p = args.patch;
       if (/["'&|<>^]/.test(p.launchArgs ?? "")) return fail("invalid", "Launch arguments can't contain that character.");
-      Object.assign(a, p, p.color === undefined ? {} : { color: p.color || null }, p.launchArgs === undefined ? {} : { launchArgs: p.launchArgs.trim() || null });
+      if (p.fpsCap && p.fpsCap < 5) return fail("invalid", "The FPS cap must be 0 (off) or 5 to 360.");
+      Object.assign(a, p, p.color === undefined ? {} : { color: p.color || null }, p.launchArgs === undefined ? {} : { launchArgs: p.launchArgs.trim() || null }, p.fpsCap === undefined ? {} : { fpsCap: p.fpsCap || null });
       changed();
       return structuredClone(a);
     }
@@ -767,7 +808,7 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "backup_import":
       await sleep(800);
       if (args.password !== "password") return fail("wrongPassword", "Wrong password.");
-      return { added: 2, updated: args.onConflict === "replace" ? 7 : 0, skipped: args.onConflict === "skip" ? 7 : 0 };
+      return { added: 2, updated: args.onConflict === "replace" ? 7 : 0, skipped: args.onConflict === "skip" ? 7 : 0, failed: 0 };
 
     case "instances_list":
       return structuredClone(instances);
@@ -797,6 +838,38 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "instance_trim":
       await sleep(300);
       return instances.some((x) => x.id === args.id && x.state !== "exited") ? null : fail("notFound", "Not found.");
+    case "instance_thumbnail": {
+      const i = instances.find((x) => x.id === args.id);
+      if (!i) return fail("notFound", "Not found.");
+      if (i.state === "exited" || i.state === "starting" || minimized.has(i.id)) return new ArrayBuffer(0);
+      return fakeThumb(i, Math.min(args.maxW, i.micro ? 320 : 800));
+    }
+    case "instance_show": {
+      const i = instances.find((x) => x.id === args.id && x.state !== "exited");
+      if (!i) return fail("notFound", "Not found.");
+      if (args.what === "minimize") minimized.add(i.id);
+      else minimized.delete(i.id);
+      return null;
+    }
+    case "instances_show_all":
+      if (args.what === "focus") return fail("invalid", "Only one client can be in front.");
+      for (const i of instances) if (args.what === "minimize") minimized.add(i.id); else minimized.delete(i.id);
+      return null;
+    case "instance_micro": {
+      const i = instances.find((x) => x.id === args.id && x.state !== "exited");
+      if (!i) return fail("notFound", "Not found.");
+      if (i.state === "starting") return fail("invalid", "That client hasn't started yet, or has closed.");
+      i.micro = args.on;
+      minimized.delete(i.id);
+      instancesChanged();
+      return args.on ? [320, 240] : [800, 600];
+    }
+    case "instances_tile": {
+      const shown = instances.filter((i) => i.state !== "exited" && i.state !== "starting" && !minimized.has(i.id));
+      if (args.micro) shown.forEach((i) => { i.micro = true; });
+      instancesChanged();
+      return shown.length;
+    }
     case "instances_metrics":
       return fakeMetrics();
     case "bandwidth_status":
@@ -819,6 +892,13 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       settings.multiInstance = args.enabled;
       if (args.enabled) retakeLock();
       else lockHeld = false;
+      return multiStatus();
+    case "multi_instance_take_over":
+      await sleep(600);
+      if (!settings.multiInstance) return fail("invalid", "Turn on multi-instance first.");
+      strangerRunning = false;
+      eventHolder = null;
+      lockHeld = true;
       return multiStatus();
     case "roblox_close_all":
       await sleep(1200);
@@ -884,7 +964,29 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "data_dir_info":
       return { path: "C:\\Users\\you\\AppData\\Local\\RoALT", default: true, overridden: false };
     case "data_dir_open":
+    case "logs_open":
       return null;
+    case "logs_clean":
+      await sleep(400);
+      return { files: 7, bytes: 183_500_800 };
+    case "shutdown_schedule": {
+      const secs = args.inSecs ?? Math.ceil((args.atMs - Date.now()) / 1000);
+      if (!(secs >= 60 && secs <= 7 * 24 * 3600)) return fail("invalid", "The shutdown must be 1 minute to 7 days from now.");
+      shutdownAt = Date.now() + secs * 1000;
+      return shutdownAt;
+    }
+    case "shutdown_cancel":
+      shutdownAt = null;
+      return null;
+    case "shutdown_status":
+      return shutdownAt;
+    case "remote_status":
+      return { running: settings.remote.enabled, urls: [`http://192.168.1.20:${settings.remote.port}`] };
+    case "remote_pin":
+      return remotePin;
+    case "remote_pin_regenerate":
+      remotePin = String(Math.floor(Math.random() * 1e8)).padStart(8, "0");
+      return remotePin;
     case "data_dir_move":
       await sleep(1200);
       if (batch && !batch.done) return fail("invalid", MOVE_BUSY);
@@ -897,10 +999,15 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "settings_set":
       if (/["'&|<>^]/.test(args.patch.launchArgs ?? "")) return fail("invalid", "Launch arguments can't contain that character.");
       if (args.patch.memRestartMb && args.patch.memRestartMb < 512) return fail("invalid", "The memory limit must be 0 (off) or 512 to 65 536 MB.");
+      if (args.patch.fpsCap && args.patch.fpsCap < 5) return fail("invalid", "The FPS cap must be 0 (off) or 5 to 360.");
+      if (args.patch.remote && args.patch.remote.port < 1024) return fail("invalid", "Use a port from 1024 to 65535 for the web dashboard.");
+
       if (args.patch.antiAfk && (args.patch.antiAfk.intervalMin < 1 || args.patch.antiAfk.intervalMin > 19))
         return fail("invalid", "Anti-AFK must press a key every 1 to 19 minutes.");
       if (args.patch.discord && args.patch.discord.statusEveryMin !== 0 && (args.patch.discord.statusEveryMin < 5 || args.patch.discord.statusEveryMin > 1440))
         return fail("invalid", "The status summary must be off (0) or every 5 minutes to 24 hours.");
+      if (args.patch.panicHotkey && !/^((ctrl|shift|alt|super)\+)*[^+]+$/i.test(args.patch.panicHotkey))
+        return fail("invalid", `"${args.patch.panicHotkey}" isn't a key combination, like Ctrl+Shift+F12.`);
       settings = { ...settings, ...args.patch };
       return { ...settings };
 

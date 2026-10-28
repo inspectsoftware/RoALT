@@ -7,7 +7,9 @@ import App, { THEME_KEY } from "./App";
 
 try {
   const t = localStorage.getItem(THEME_KEY);
-  if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  // A resolved palette name (never "system"); an unknown one matches no block and stays dark.
+  if (t && /^[a-z]+$/.test(t)) document.documentElement.dataset.theme = t;
+
 } catch {
   // No storage: the default (dark) applies until settings load.
 }

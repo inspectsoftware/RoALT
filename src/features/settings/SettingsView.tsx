@@ -12,10 +12,21 @@ import { plural } from "../accounts/shared";
 import { useMultiToggle } from "../launch/Running";
 import { PasswordDialog } from "../vault/PasswordDialog";
 
+/** The theme picker: value, name, and the swatch's background and accent (theme.css). */
+const THEMES: [Settings["theme"], string, string, string][] = [
+  ["dark", "Dark", "#050506", "#c6f432"],
+  ["light", "Light", "#f2f3f0", "#3b5400"],
+  ["system", "System", "#050506", "#f2f3f0"],
+  ["neon", "Neon", "#07050f", "#ff4fd8"],
+  ["sakura", "Sakura", "#fdf2f6", "#f48fb8"],
+  ["bricks", "Bricks", "#140d0b", "#e2603f"],
+];
+
 export const SETTINGS_SECTIONS = [
   ["general", "General"],
   ["launching", "Launching"],
   ["performance", "Performance"],
+  ["automation", "Automation"],
   ["security", "Security"],
   ["data", "Data"],
   ["shortcuts", "Shortcuts"],
@@ -23,12 +34,13 @@ export const SETTINGS_SECTIONS = [
 ] as const;
 
 const SHORTCUTS = [
-  ["Go to Accounts", "Ctrl 1"],
-  ["Go to Launch", "Ctrl 2"],
-  ["Go to Servers", "Ctrl 3"],
-  ["Go to Settings", "Ctrl 4"],
-  ["Go to Monitor", "Ctrl 5"],
-  ["Go to Discord", "Ctrl 6"],
+  ["Go to Dashboard", "Ctrl 1"],
+  ["Go to Accounts", "Ctrl 2"],
+  ["Go to Launch", "Ctrl 3"],
+  ["Go to Servers", "Ctrl 4"],
+  ["Go to Settings", "Ctrl 5"],
+  ["Go to Monitor", "Ctrl 6"],
+  ["Go to Discord", "Ctrl 7"],
   ["Add account", "Ctrl N"],
   ["Filter accounts", "Ctrl F"],
   ["Select all shown", "Ctrl A"],
@@ -109,11 +121,20 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
         <h1 className="text-xl font-semibold tracking-[-0.01em] mb-2">Settings</h1>
 
         <Heading id="general">General</Heading>
-        <Row title="Theme" hint="System follows Windows.">
+        <Row title="Theme" hint="System follows Windows (dark or light).">
+
           <Segmented
             label="Theme"
             value={settings.theme}
-            options={[{ value: "dark", label: "Dark" }, { value: "light", label: "Light" }, { value: "system", label: "System" }]}
+            options={THEMES.map(([value, name, bg, accent]) => ({
+              value,
+              label: (
+                <span className="flex items-center gap-1.5">
+                  <span aria-hidden="true" className="w-2.5 h-2.5 border border-line-strong" style={{ background: `linear-gradient(135deg, ${bg} 50%, ${accent} 50%)` }} />
+                  {name}
+                </span>
+              ),
+            }))}
             onChange={(theme) => set.mutate({ theme })}
           />
         </Row>
@@ -158,6 +179,12 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
             onCommit={(s) => set.mutate({ launchDelayMs: Math.round(s * 1000) })}
           />
         </Row>
+        <Row
+          title="Minimize on launch"
+          hint="Each client is minimized once, when its window first appears, without taking the focus. Anti-AFK in focus mode skips minimized clients; restore one from the Dashboard."
+        >
+          <Switch label="Minimize on launch" checked={settings.minimizeOnLaunch} onChange={(minimizeOnLaunch) => set.mutate({ minimizeOnLaunch })} />
+        </Row>
         <Row title="Auto-rejoin" hint="Relaunch a client Roblox disconnects (kicked, server shut down, connection lost) into the same target.">
           <Switch label="Auto-rejoin" checked={settings.autoRejoin} onChange={(autoRejoin) => set.mutate({ autoRejoin })} />
         </Row>
@@ -173,10 +200,30 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
         </Row>
         <Row
           title="Anti-AFK"
-          hint="So Roblox doesn't disconnect idle clients after 20 minutes: each client in a game is brought to the front for a moment, gets a Space press, and the window you had in front comes back. Only after 5 s without keyboard or mouse input; minimized clients are skipped. A client can opt out under its limits in Launch."
+          hint="So Roblox doesn't disconnect idle clients after 20 minutes, each client in a game gets a Space press. A client can opt out under its limits in Launch."
         >
           <Switch label="Anti-AFK" checked={settings.antiAfk.enabled} onChange={(enabled) => set.mutate({ antiAfk: { ...settings.antiAfk, enabled } })} />
         </Row>
+        {settings.antiAfk.enabled && (
+          <Row
+            title="How"
+            hint={
+              settings.antiAfk.mode === "focus"
+                ? "Each client is brought to the front for a moment and the window you had in front comes back. Only after 5 s without keyboard or mouse input; minimized clients are skipped."
+                : "The key is sent to each client's window without moving the focus, so you can keep using the PC, and minimized clients get it too. Roblox may not count it as activity in every game; auto-rejoin after a disconnect stays the fallback."
+            }
+          >
+            <Segmented
+              label="Anti-AFK mode"
+              value={settings.antiAfk.mode}
+              options={[
+                { value: "focus", label: "Bring to front" },
+                { value: "background", label: "In the background" },
+              ]}
+              onChange={(mode) => set.mutate({ antiAfk: { ...settings.antiAfk, mode } })}
+            />
+          </Row>
+        )}
         {settings.antiAfk.enabled && (
           <Row title="Press a key every" hint="Roblox disconnects after 20 idle minutes, so 1 to 19.">
             <NumberField
@@ -221,6 +268,12 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
             onCommit={(launchArgs) => set.mutateAsync({ launchArgs })}
           />
         </Row>
+        <Row
+          title="FPS cap"
+          hint="The frame rate Roblox is started with (its DFIntTaskSchedulerTargetFps flag, read once when a client starts), unless the account has its own. It applies to that launch only; a batch sets it before each launch. Not with a bootstrapper such as Bloxstrap, which manages Roblox's flags. 0 leaves Roblox alone."
+        >
+          <NumberField unit="FPS, 0 for off" short="FPS" min={0} max={360} value={settings.fpsCap} onCommit={(fpsCap) => set.mutate({ fpsCap })} />
+        </Row>
         <ClientRow client={client} />
         <Row
           title="Update Roblox automatically"
@@ -235,6 +288,28 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
           hint="Close and relaunch a client whose private memory stays over this for 30 s, into the same game, within the restart limit above. Not during a batch. 0 turns it off."
         >
           <NumberField unit="MB, 0 for off" short="MB" min={0} max={65536} value={settings.memRestartMb} onCommit={(memRestartMb) => set.mutate({ memRestartMb })} />
+        </Row>
+        <Row
+          title="Throttle on high memory"
+          hint="While a client's private memory is over this, hold it to the CPU limit beside it, which lowers its frame rate. Lifted once it is back under 90 %. Tightens a client's own limit, never loosens it. 0 turns it off."
+        >
+          <div className="flex flex-wrap items-center gap-3">
+            <NumberField
+              unit="MB, 0 for off"
+              short="MB"
+              min={0}
+              max={65536}
+              value={settings.memThrottle.mb}
+              onCommit={(mb) => set.mutate({ memThrottle: { ...settings.memThrottle, mb } })}
+            />
+            <Segmented
+              mono
+              label="Throttle CPU limit"
+              value={settings.memThrottle.cpuCap}
+              options={[25, 10, 5, 2].map((c) => ({ value: c, label: `${c}%` }))}
+              onChange={(cpuCap) => set.mutate({ memThrottle: { ...settings.memThrottle, cpuCap } })}
+            />
+          </div>
         </Row>
         <Row
           title="Trim memory every"
@@ -287,6 +362,30 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
         )}
         <BandwidthRow />
 
+        <Heading id="automation">Automation</Heading>
+        <Row
+          title="Panic hotkey"
+          hint="Works from any app, even a game in front: kills every Roblox client at once, like Kill all. Modifiers and one key, like Ctrl+Shift+F12. Empty turns it off."
+        >
+          <TextField
+            label="Panic hotkey"
+            className="w-48"
+            placeholder="off"
+            value={settings.panicHotkey}
+            onCommit={(panicHotkey) => set.mutateAsync({ panicHotkey })}
+          />
+        </Row>
+        <ShutdownRow />
+        <Row
+          title="Clean Roblox logs"
+          hint="Delete Roblox's client logs over a day old or over 50 MB, at start and every hour. A running client's log is kept."
+        >
+          <div className="flex items-center gap-3">
+            <CleanLogsButton />
+            <Switch label="Clean Roblox logs" checked={settings.cleanLogs} onChange={(cleanLogs) => set.mutate({ cleanLogs })} />
+          </div>
+        </Row>
+
         <Heading id="security">Security</Heading>
         <Row
           title="Cookie encryption"
@@ -332,11 +431,13 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
             onCommit={(clipboardClearSeconds) => set.mutate({ clipboardClearSeconds })}
           />
         </Row>
+        <RemoteRows settings={settings} />
 
         <Heading id="data">Data</Heading>
         <Row title="Data folder" hint={dataDir ? <PathHint path={dataDir.path} /> : ""}>
           <div className="flex gap-2">
             <button className="btn" onClick={() => api.dataDirOpen().catch(toastError)}>Open</button>
+            <button className="btn" title="RoALT's own logs, for a bug report" onClick={() => api.logsOpen().catch(toastError)}>Open logs</button>
             {dataDir && !dataDir.overridden && <button className="btn" onClick={pickDataDir}>Move…</button>}
           </div>
         </Row>
@@ -599,6 +700,178 @@ function BandwidthRow() {
         )}
       </div>
     </Row>
+  );
+}
+
+const SHUTDOWN_PRESETS = [30, 60, 120, 240, 480];
+
+/** "1 h 05 min" style, for a preset or what is left. */
+function duration(secs: number) {
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = Math.floor(secs % 60);
+  return h ? `${h} h ${String(m).padStart(2, "0")} min` : m ? `${m} min ${String(s).padStart(2, "0")} s` : `${s} s`;
+}
+
+/** The next time the clock shows `hhmm` ("21:30"), as Unix ms. */
+function nextAt(hhmm: string) {
+  const [h, m] = hhmm.split(":").map(Number);
+  const at = new Date();
+  at.setHours(h, m, 0, 0);
+  if (at.getTime() <= Date.now()) at.setDate(at.getDate() + 1);
+  return at.getTime();
+}
+
+/** Auto-shutdown: Windows' own timer (shutdown /s), with a countdown and Cancel. */
+function ShutdownRow() {
+  const qc = useQueryClient();
+  const at = useQuery({ queryKey: qk.shutdown, queryFn: api.shutdownStatus, staleTime: 0 }).data ?? null;
+  const [time, setTime] = useState("");
+  const [closeClients, setCloseClients] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (at === null) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [at]);
+  const run = (p: Promise<number | null>, done: (at: number | null) => string) => {
+    setBusy(true);
+    p.then((a) => {
+      qc.setQueryData(qk.shutdown, a);
+      toast(done(a));
+    }, toastError).finally(() => setBusy(false));
+  };
+  const schedule = (when: { atMs?: number; inSecs?: number }) =>
+    run(api.shutdownSchedule(when, closeClients), (a) => `Windows shuts down at ${new Date(a ?? 0).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`);
+  return (
+    <Row
+      title="Shut down the PC"
+      hint={
+        <>
+          Windows' own shutdown timer. When it runs out, Windows closes every app without asking, so unsaved work elsewhere is lost.
+          {closeClients ? " RoALT's clients are closed 30 s before (if RoALT hasn't restarted since)." : ""} Cancel it here, even after a restart of RoALT.
+        </>
+      }
+    >
+      {at !== null ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="mono" role="timer">
+            in {duration(Math.max(0, (at - now) / 1000))} · {new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          </span>
+          <button className="btn" disabled={busy} onClick={() => run(api.shutdownCancel(), () => "The shutdown is off.")}>Cancel</button>
+        </div>
+      ) : (
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {SHUTDOWN_PRESETS.map((m) => (
+              <button key={m} className="btn btn-sm mono" disabled={busy} onClick={() => schedule({ inSecs: m * 60 })}>
+                {m < 60 ? `${m}m` : `${m / 60}h`}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <input className="field mono" type="time" aria-label="Shut down at" value={time} onChange={(e) => setTime(e.target.value)} />
+            <button className="btn btn-sm" disabled={busy || !time} onClick={() => schedule({ atMs: nextAt(time) })}>At this time</button>
+            <label className="flex items-center gap-2">
+              <span className="text-xs text-dim">Close clients first</span>
+              <Switch label="Close clients first" checked={closeClients} onChange={setCloseClients} />
+            </label>
+          </div>
+        </div>
+      )}
+    </Row>
+  );
+}
+
+/** The LAN web dashboard: on/off (confirmed), its address, port and PIN (hidden until Reveal). */
+function RemoteRows({ settings }: { settings: Settings }) {
+  const qc = useQueryClient();
+  const set = useSetSettings();
+  const status = useQuery({ queryKey: qk.remote, queryFn: api.remoteStatus, staleTime: 0 }).data;
+  const [pin, setPin] = useState<string | null>(null);
+  const [confirmOn, setConfirmOn] = useState(false);
+  const remote = settings.remote;
+  const save = (r: Settings["remote"]) => set.mutate({ remote: r }, { onSettled: () => qc.invalidateQueries({ queryKey: qk.remote }) });
+  const reveal = () => (pin ? setPin(null) : api.remotePin().then(setPin, toastError));
+  const regenerate = () =>
+    api.remotePinRegenerate().then((p) => {
+      setPin(p);
+      toast("New PIN. Every signed-in device has to enter it again.");
+    }, toastError);
+  return (
+    <>
+      <Row
+        title="Web dashboard"
+        hint={
+          <>
+            See, launch and close clients from a phone or another PC on your network, in a browser. Anyone on the network with the PIN
+            can launch and close your clients. Runs only while the vault is unlocked.
+          </>
+        }
+      >
+        <Switch label="Web dashboard" checked={remote.enabled} onChange={(enabled) => (enabled ? setConfirmOn(true) : save({ ...remote, enabled }))} />
+      </Row>
+      {remote.enabled && (
+        <>
+          <Row title="Address" hint={status?.running ? "Open it on a device on the same network." : "Not running. Unlock the vault, or pick another port."}>
+            <div className="flex flex-col items-end gap-1">
+              {status?.urls.length ? (
+                status.urls.map((u) => <span key={u} className="mono selectable">{u}</span>)
+              ) : (
+                <span className="text-dim">No network found.</span>
+              )}
+            </div>
+          </Row>
+          <Row title="Port" hint="1024 to 65535. Changing it restarts the dashboard.">
+            <NumberField unit="port number" short="" min={1024} max={65535} value={remote.port} onCommit={(port) => save({ ...remote, port })} />
+          </Row>
+          <Row title="PIN" hint="Asked once on each device. Regenerating signs every device out.">
+            <div className="flex items-center gap-2">
+              <span className="mono selectable" aria-live="polite">{pin ?? "••••••••"}</span>
+              <button className="btn btn-sm" onClick={reveal}>{pin ? "Hide" : "Reveal"}</button>
+              <button className="btn btn-sm" onClick={regenerate}>Regenerate</button>
+            </div>
+          </Row>
+        </>
+      )}
+      <ConfirmDialog
+        open={confirmOn}
+        onClose={() => setConfirmOn(false)}
+        onConfirm={() => {
+          setConfirmOn(false);
+          save({ ...remote, enabled: true });
+        }}
+        title="Turn on the web dashboard?"
+        text={
+          <>
+            Anyone on your network who has the PIN can see your clients, launch your accounts and close or kill clients. It never shows
+            cookies or other secrets. Windows Firewall asks to allow RoALT the first time: allow private networks only, never public ones.
+          </>
+        }
+        confirmLabel="Turn on"
+      />
+    </>
+  );
+}
+
+/** Deletes old Roblox logs now and says how much it freed. */
+function CleanLogsButton() {
+  const [busy, setBusy] = useState(false);
+  const clean = () => {
+    setBusy(true);
+    api
+      .logsClean()
+      .then(
+        (r) => toast(r.files ? `Deleted ${plural(r.files, "Roblox log")}, ${(r.bytes / 1048576).toFixed(1)} MB.` : "No Roblox log to delete."),
+        toastError,
+      )
+      .finally(() => setBusy(false));
+  };
+  return (
+    <button className="btn btn-sm" disabled={busy} onClick={clean}>
+      {busy ? "Cleaning…" : "Clean now"}
+    </button>
   );
 }
 

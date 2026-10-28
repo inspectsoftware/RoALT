@@ -79,6 +79,10 @@ pub struct AccountSummary {
     pub allow_disconnect: bool,
     /// Extra client arguments, used instead of `Settings.launch_args`; None: the default.
     pub launch_args: Option<String>,
+    /// No Discord alerts about this account's clients (batch summaries and status still go).
+    pub discord_muted: bool,
+    /// Target FPS for its launches, used instead of `Settings.fps_cap`; None: the default.
+    pub fps_cap: Option<u32>,
 }
 
 /// Partial update from the UI; `None` leaves a field as it is.
@@ -102,6 +106,11 @@ pub struct AccountPatch {
     /// `Some("")` goes back to the default from Settings.
     #[ts(optional)]
     pub launch_args: Option<String>,
+    #[ts(optional)]
+    pub discord_muted: Option<bool>,
+    /// `Some(0)` goes back to the default from Settings; else 5..=360.
+    #[ts(optional)]
+    pub fps_cap: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
@@ -134,7 +143,14 @@ pub enum Theme {
     Dark,
     Light,
     System,
+    /// Dark, neon accents.
+    Neon,
+    /// Light, pastel pink.
+    Sakura,
+    /// Dark, warm brick.
+    Bricks,
 }
+
 
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
@@ -184,6 +200,8 @@ pub struct Settings {
     /// Restart a client whose private memory stays over this many MB (3 samples, 10 s apart),
     /// within the breaker; 0: off, else 512..=65 536.
     pub mem_restart_mb: u32,
+    /// Hold a client to a CPU cap (lowering its frame rate) while its private memory is over a limit.
+    pub mem_throttle: MemThrottle,
     /// Trim each client's working set this often (minutes, 0: off) unless its own limits say.
     pub trim_every_min: u32,
     /// Give each client its own share of the CPU cores (round-robin) unless its limits say.
@@ -198,22 +216,94 @@ pub struct Settings {
     /// Install a new Roblox version on its own once no client runs and no launch or batch does
     /// (never over a bootstrapper; the installer is signature-checked as always).
     pub auto_update: bool,
+    /// Minimize each client (without taking the focus) once, when its window first appears.
+    pub minimize_on_launch: bool,
+    /// System-wide key combination for Kill all, like "Ctrl+Shift+F12"; "" for none.
+    pub panic_hotkey: String,
+    /// Delete old or huge Roblox client logs at start and every hour (`logwatch::clean`).
+    pub clean_logs: bool,
+    /// Target FPS written to Roblox's `ClientAppSettings.json` before each launch
+    /// (`launcher::fps`), unless the account has its own; 0: leave Roblox alone, else 5..=360.
+    pub fps_cap: u32,
+    /// The LAN web dashboard (`remote`); its PIN is in the vault, not here.
+    pub remote: RemoteAccess,
+}
+
+/// The LAN web dashboard: served on every network address at `port` while `enabled` and the
+/// vault is unlocked.
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export)]
+pub struct RemoteAccess {
+    pub enabled: bool,
+    /// 1024..=65 535.
+    pub port: u16,
+}
+
+impl Default for RemoteAccess {
+    fn default() -> Self {
+        Self { enabled: false, port: 47_800 }
+    }
+}
+
+/// The web dashboard as the UI shows it (`remote_status`); never its PIN.
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RemoteStatus {
+    pub running: bool,
+    /// Where other devices open it: this PC's LAN address(es).
+    pub urls: Vec<String>,
+}
+
+/// The memory throttle: a client whose private memory is over `mb` at a 10 s sample gets at
+/// most `cpu_cap` percent of the CPU (its frame rate drops with it) until it is back under 90 %
+/// of `mb`. Tightens a client's own cap, never loosens it; the window in front too.
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export)]
+pub struct MemThrottle {
+    /// 0: off, else 512..=65 536.
+    pub mb: u32,
+    /// 1..=100.
+    pub cpu_cap: u8,
+}
+
+impl Default for MemThrottle {
+    fn default() -> Self {
+        Self { mb: 0, cpu_cap: 10 }
+    }
 }
 
 /// Anti-AFK: every `interval_min` (1..=19) minutes each client in a game that hasn't opted out
-/// is brought to the front for a moment and gets a Space key press (`instances::afk`).
+/// gets a Space key press (`instances::afk`), the way `mode` says.
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", default)]
 #[ts(export)]
 pub struct AntiAfk {
     pub enabled: bool,
     pub interval_min: u32,
+    pub mode: AfkMode,
 }
 
 impl Default for AntiAfk {
     fn default() -> Self {
-        Self { enabled: false, interval_min: 15 }
+        Self { enabled: false, interval_min: 15, mode: AfkMode::Focus }
     }
+}
+
+/// How anti-AFK presses Space.
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum AfkMode {
+    /// Brings the client to the front for a moment and presses Space through `SendInput`; only
+    /// while the user is away, never in minimized clients.
+    #[default]
+    Focus,
+    /// Posts the key to the client's window without changing the focus, also while the user is
+    /// at the PC and in minimized clients. Roblox may ignore posted input in some games.
+    Background,
 }
 
 /// Events sent to the Discord webhook (`discord`), each on or off.
@@ -230,13 +320,15 @@ pub struct DiscordEvents {
     /// The crash breaker gave up on an account.
     pub breaker: bool,
     pub batch_done: bool,
+    /// A client first got into a game (not after a rejoin, restart or reconnect).
+    pub launch: bool,
     /// A summary of the running clients every this many minutes (0: off, else 5..=1440).
     pub status_every_min: u32,
 }
 
 impl Default for DiscordEvents {
     fn default() -> Self {
-        Self { crash: true, hang: true, mem_restart: true, disconnect: true, restart: true, breaker: true, batch_done: true, status_every_min: 0 }
+        Self { crash: true, hang: true, mem_restart: true, disconnect: true, restart: true, breaker: true, batch_done: true, launch: false, status_every_min: 0 }
     }
 }
 
@@ -285,6 +377,7 @@ impl Default for Settings {
             launch_args: String::new(),
             close_to_tray: false,
             mem_restart_mb: 0,
+            mem_throttle: MemThrottle::default(),
             trim_every_min: 0,
             auto_spread: false,
             adaptive: Adaptive::default(),
@@ -292,6 +385,11 @@ impl Default for Settings {
             anti_afk: AntiAfk::default(),
             discord: DiscordEvents::default(),
             auto_update: false,
+            minimize_on_launch: false,
+            panic_hotkey: String::new(),
+            clean_logs: false,
+            fps_cap: 0,
+            remote: RemoteAccess::default(),
         }
     }
 }
@@ -331,6 +429,8 @@ pub struct SettingsPatch {
     #[ts(optional)]
     pub mem_restart_mb: Option<u32>,
     #[ts(optional)]
+    pub mem_throttle: Option<MemThrottle>,
+    #[ts(optional)]
     pub trim_every_min: Option<u32>,
     #[ts(optional)]
     pub auto_spread: Option<bool>,
@@ -342,6 +442,26 @@ pub struct SettingsPatch {
     pub discord: Option<DiscordEvents>,
     #[ts(optional)]
     pub auto_update: Option<bool>,
+    #[ts(optional)]
+    pub minimize_on_launch: Option<bool>,
+    #[ts(optional)]
+    pub panic_hotkey: Option<String>,
+    #[ts(optional)]
+    pub clean_logs: Option<bool>,
+    #[ts(optional)]
+    pub fps_cap: Option<u32>,
+    #[ts(optional)]
+    pub remote: Option<RemoteAccess>,
+}
+
+/// What a Roblox log clean-up deleted (`logs_clean`).
+#[derive(Serialize, TS, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LogsCleaned {
+    pub files: u32,
+    #[ts(type = "number")]
+    pub bytes: u64,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
@@ -459,6 +579,8 @@ pub struct ImportReport {
     pub added: u32,
     pub updated: u32,
     pub skipped: u32,
+    /// Cookies Roblox refused, or entries without one.
+    pub failed: u32,
 }
 
 /// Where to launch. Ids are numbers; codes stay strings (link codes can be 25-32 digits).
@@ -611,6 +733,11 @@ pub struct Instance {
     pub anti_afk: bool,
     /// Unix ms of its last anti-AFK key press.
     pub afk_at: Option<i64>,
+    /// Held to `Settings.mem_throttle`'s CPU cap: its memory is over that limit.
+    pub throttled: bool,
+    /// Its window was made small by RoALT (`instance_micro`, `instances_tile`); "Normal size"
+    /// puts it back.
+    pub micro: bool,
 }
 
 /// What Windows holds one client to (instances::limits). Lasts as long as the client.

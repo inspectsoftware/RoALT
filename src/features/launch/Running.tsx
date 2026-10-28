@@ -267,6 +267,8 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
                       <span className="flex items-center gap-2 min-w-0 font-sans">
                         {a && <Avatar account={a} size={20} />}
                         <span className="truncate">{name}</span>
+                        {a?.fpsCap && <span className="mono flex-none text-dim" title="This account's FPS cap, set when its client starts">{a.fpsCap} FPS</span>}
+
                         {i.rejoins > 0 && (
                           <span className="mono flex-none text-dim" title={`Rejoined ${plural(i.rejoins, "time")}`}>
                             <span aria-hidden="true">↻{i.rejoins}</span>
@@ -290,10 +292,10 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
                       {live && (
                         <span className="flex">
                         <button
-                          className={`wc w-9 h-8 ${limited(i.limits) ? "text-accent-text" : ""}`}
+                          className={`wc w-9 h-8 ${i.throttled ? "text-orange" : limited(i.limits) ? "text-accent-text" : ""}`}
                           aria-label={`Limits for ${name}'s client`}
                           aria-expanded={tuning === i.id}
-                          title={limited(i.limits) ? `Limited${i.limits.cpuCap ? ` to ${i.limits.cpuCap}% CPU` : ""}${i.limits.eco ? ", efficiency mode" : ""}${i.limits.trimEveryMin !== null ? ", trim" : ""}${i.limits.affinity !== null ? ", cores" : ""}` : "CPU limit, efficiency mode, trimming and cores"}
+                          title={(i.throttled ? "Throttled: over the memory limit. " : "") + (limited(i.limits) ? `Limited${i.limits.cpuCap ? ` to ${i.limits.cpuCap}% CPU` : ""}${i.limits.eco ? ", efficiency mode" : ""}${i.limits.trimEveryMin !== null ? ", trim" : ""}${i.limits.affinity !== null ? ", cores" : ""}` : "CPU limit, efficiency mode, trimming and cores")}
                           onClick={() => setTuning((t) => (t === i.id ? null : i.id))}
                         >
                           <Icon name="sliders" size={12} />
@@ -476,18 +478,17 @@ export function useMultiToggle(onStatus?: (s: MultiInstanceStatus) => void) {
 export function MultiInstanceSwitch() {
   const qc = useQueryClient();
   const status = useMultiStatus().data;
-  const [confirm, setConfirm] = useState(false);
+  const [confirm, setConfirm] = useState<"close" | "takeOver" | null>(null);
   const [busy, setBusy] = useState(false);
   const apply = (s: MultiInstanceStatus) => qc.setQueryData(qk.multi, s);
   const { toggle, dialog } = useMultiToggle();
-  const closeRoblox = () => {
+  const run = () => {
     setBusy(true);
-    api
-      .robloxCloseAll(false)
+    (confirm === "takeOver" ? api.multiInstanceTakeOver() : api.robloxCloseAll(false))
       .then(apply, toastError)
       .finally(() => {
         setBusy(false);
-        setConfirm(false);
+        setConfirm(null);
       });
   };
 
@@ -503,20 +504,42 @@ export function MultiInstanceSwitch() {
         <div className="enter flex flex-col items-start gap-2 font-sans text-xs">
           <span role="alert" className="alert">{status.message}</span>
           {status.blockedBy.length > 0 && (
-            <button className="btn btn-sm" onClick={() => setConfirm(true)}>
-              Close Roblox…
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button className="btn btn-sm" onClick={() => setConfirm("close")}>
+                Close Roblox…
+              </button>
+              <button className="btn btn-sm" onClick={() => setConfirm("takeOver")}>
+                Take over…
+              </button>
+            </div>
           )}
         </div>
       )}
       <ConfirmDialog
-        open={confirm}
-        onClose={() => !busy && setConfirm(false)}
-        onConfirm={closeRoblox}
+        open={confirm === "close"}
+        onClose={() => !busy && setConfirm(null)}
+        onConfirm={run}
         busy={busy}
         title="Close Roblox?"
         text={<>Every running Roblox client closes ({status.blockedBy.length} process{status.blockedBy.length === 1 ? "" : "es"}), including ones RoALT didn't start. Unsaved progress in those games is lost.</>}
         confirmLabel="Close Roblox"
+      />
+      <ConfirmDialog
+        open={confirm === "takeOver"}
+        onClose={() => !busy && setConfirm(null)}
+        onConfirm={run}
+        busy={busy}
+        title="Take over from the running Roblox?"
+        text={
+          <>
+            RoALT closes Roblox's own "already running" marker inside the running client
+            {status.blockedBy.length === 1 ? "" : "s"} ({status.blockedBy.length} process{status.blockedBy.length === 1 ? "" : "es"}) with
+            a standard Windows call, so new clients can start next to it without closing it. Nothing in the client's memory is changed,
+            but this reaches into a running Roblox: if a client misbehaves afterwards, close Roblox instead. Roblox's anti-cheat may see
+            the access.
+          </>
+        }
+        confirmLabel="Take over"
       />
       {dialog}
     </>

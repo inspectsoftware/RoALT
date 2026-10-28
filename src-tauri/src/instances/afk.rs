@@ -1,28 +1,38 @@
 //! Anti-AFK. Roblox disconnects a player after 20 minutes without input (reason 267). Every
 //! `Settings.anti_afk.interval_min` minutes, each client in a game that hasn't opted out
-//! (`Instance.anti_afk`) is brought to the front for a moment, gets one Space press through
-//! `SendInput` (by scan code, as a keyboard sends it), and the window that was in front gets the
-//! focus back. One client at a time, about 100 ms each. Only while nobody has touched the
-//! keyboard or mouse for 5 s (`GetLastInputInfo`); otherwise it tries again 30 s later.
-//! Minimized clients are skipped. Nothing is injected into or read from the client; auto-rejoin
-//! on the 267 kick stays the fallback.
+//! (`Instance.anti_afk`) gets one Space press, the way `Settings.anti_afk.mode` says:
+//! - Focus: the client is brought to the front for a moment, gets the press through `SendInput`
+//!   (by scan code, as a keyboard sends it), and the window that was in front gets the focus
+//!   back. One client at a time, about 100 ms each. Only while nobody has touched the keyboard or
+//!   mouse for 5 s (`GetLastInputInfo`); otherwise it tries again 30 s later. Minimized clients
+//!   are skipped.
+//! - Background: WM_ACTIVATE, then WM_KEYDOWN/WM_KEYUP for Space are posted to the client's
+//!   window; the focus never moves, so it runs while the user is at the PC and in minimized
+//!   clients too. Roblox may not count posted input as activity in every game.
+//!
+//! Nothing is injected into or read from the client; auto-rejoin on the 267 kick stays the
+//! fallback.
 
 use std::thread::sleep;
 use std::time::Duration;
 
 use tauri::{AppHandle, Manager};
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::SystemInformation::GetTickCount;
 use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetLastInputInfo, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP,
     KEYEVENTF_SCANCODE, LASTINPUTINFO, MOUSEEVENTF_MOVE, MOUSEINPUT, SendInput, VIRTUAL_KEY,
 };
-use windows::Win32::UI::WindowsAndMessaging::{BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow};
+use windows::Win32::UI::WindowsAndMessaging::{
+    BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, PostMessageW, SetForegroundWindow, WA_ACTIVE, WA_INACTIVE,
+    WM_ACTIVATE, WM_KEYDOWN, WM_KEYUP,
+};
 
 use super::process;
 use crate::App;
 use crate::commands::{instances_changed, now_ms};
+use crate::model::AfkMode;
 
 /// No keyboard or mouse input for this long counts as the user being away.
 const IDLE_MS: u32 = 5_000;
@@ -32,6 +42,7 @@ const RETRY: Duration = Duration::from_secs(30);
 const BETWEEN: Duration = Duration::from_millis(100);
 /// Space's set-1 scan code.
 const SPACE: u16 = 0x39;
+const VK_SPACE: usize = 0x20;
 
 /// A client anti-AFK may press keys in (`Tracker::afk_clients`).
 #[derive(Clone, Debug, PartialEq)]
@@ -53,14 +64,14 @@ pub enum Plan {
     Press(Vec<String>),
 }
 
-/// Which clients are due (`interval_min` since their `since`), gated on the user having been
-/// idle for 5 s (pure).
-pub fn plan(clients: &[AfkClient], now: i64, interval_min: u32, idle_ms: u32) -> Plan {
+/// Which clients are due (`interval_min` since their `since`); in focus mode gated on the user
+/// having been idle for 5 s, in background mode not (pure).
+pub fn plan(clients: &[AfkClient], now: i64, interval_min: u32, idle_ms: u32, mode: AfkMode) -> Plan {
     let every = i64::from(interval_min) * 60_000;
     let due: Vec<String> = clients.iter().filter(|c| now - c.since >= every).map(|c| c.id.clone()).collect();
     if due.is_empty() {
         Plan::Wait
-    } else if idle_ms < IDLE_MS {
+    } else if mode == AfkMode::Focus && idle_ms < IDLE_MS {
         Plan::Retry
     } else {
         Plan::Press(due)
@@ -87,11 +98,23 @@ fn tick(app: &AppHandle) -> Duration {
         return TICK;
     }
     let clients = s.tracker.afk_clients();
-    let ids = match plan(&clients, now_ms(), v.anti_afk.interval_min, idle_ms()) {
+    let ids = match plan(&clients, now_ms(), v.anti_afk.interval_min, idle_ms(), v.anti_afk.mode) {
         Plan::Wait => return TICK,
         Plan::Retry => return RETRY,
         Plan::Press(ids) => ids,
     };
+    if v.anti_afk.mode == AfkMode::Background {
+        for c in clients.iter().filter(|c| ids.contains(&c.id)) {
+            let Some((hwnd, _)) = process::main_window(c.pid) else { continue };
+            if post_press(hwnd) {
+                s.tracker.mark_afk(&c.id, now_ms());
+            } else {
+                log::info!("anti-AFK: couldn't post a key to instance {}", c.id);
+            }
+        }
+        instances_changed(app);
+        return TICK;
+    }
     let mut failed = false;
     // Our own SendInput moves GetLastInputInfo too, so "the user came back" is any input newer
     // than our last injection.
@@ -176,11 +199,33 @@ fn press(hwnd: HWND) -> Pressed {
     }
 }
 
+/// Space posted to `hwnd` without touching the focus: WM_ACTIVATE(WA_ACTIVE) first, since a
+/// client that thinks it is in the background may drop keys, and WA_INACTIVE after unless it
+/// really is in front. False if Windows wouldn't queue the messages (window gone or hung).
+fn post_press(hwnd: HWND) -> bool {
+    // lParam: repeat count 1, scan code in bits 16-23; key up also sets the previous-state and
+    // transition bits (30, 31).
+    let down = LPARAM(1 | ((SPACE as isize) << 16));
+    let up = LPARAM(down.0 | (1 << 30) | (1 << 31));
+    // SAFETY: PostMessageW only queues a message to a top-level window handle; one that is gone
+    // just fails. None of these messages carries a pointer.
+    let post = |msg, w: usize, l: LPARAM| unsafe { PostMessageW(Some(hwnd), msg, WPARAM(w), l) }.is_ok();
+    // SAFETY: reads which window is in front.
+    let front = unsafe { GetForegroundWindow() } == hwnd;
+    let ok = (front || post(WM_ACTIVATE, WA_ACTIVE as usize, LPARAM(0))) && post(WM_KEYDOWN, VK_SPACE, down);
+    sleep(Duration::from_millis(40));
+    let ok = ok && post(WM_KEYUP, VK_SPACE, up);
+    if !front {
+        post(WM_ACTIVATE, WA_INACTIVE as usize, LPARAM(0));
+    }
+    ok
+}
+
 /// Brings `hwnd` to the front: plainly; else attached to the input of the window in front
 /// (whose thread may hand the focus over); else after a zero-movement mouse input, which makes
 /// this process the last input source and so lifts Windows' foreground lock without any window
 /// reacting (an ALT tap would open menus).
-fn to_front(hwnd: HWND) -> bool {
+pub(super) fn to_front(hwnd: HWND) -> bool {
     // SAFETY: reads which window is in front.
     let front = || unsafe { GetForegroundWindow() } == hwnd;
     // SAFETY: a window-manager call on a top-level window handle; one that is gone just fails.
@@ -236,16 +281,19 @@ mod tests {
         let clients = [client("a", 0), client("b", 10 * min), client("c", 15 * min + 1)];
         let ids = |v: &[&str]| Plan::Press(v.iter().map(|s| s.to_string()).collect());
         // Nobody due yet.
-        assert_eq!(plan(&clients, 15 * min - 1, 15, 60_000), Plan::Wait);
-        assert_eq!(plan(&[], 99 * min, 15, 60_000), Plan::Wait);
+        assert_eq!(plan(&clients, 15 * min - 1, 15, 60_000, AfkMode::Focus), Plan::Wait);
+        assert_eq!(plan(&[], 99 * min, 15, 60_000, AfkMode::Focus), Plan::Wait);
         // Due exactly at the interval.
-        assert_eq!(plan(&clients, 15 * min, 15, 60_000), ids(&["a"]));
-        assert_eq!(plan(&clients, 25 * min, 15, 5_000), ids(&["a", "b"]));
+        assert_eq!(plan(&clients, 15 * min, 15, 60_000, AfkMode::Focus), ids(&["a"]));
+        assert_eq!(plan(&clients, 25 * min, 15, 5_000, AfkMode::Focus), ids(&["a", "b"]));
         // The user touched the keyboard or mouse within 5 s: later.
-        assert_eq!(plan(&clients, 25 * min, 15, 4_999), Plan::Retry);
-        assert_eq!(plan(&clients, 25 * min, 15, 0), Plan::Retry);
+        assert_eq!(plan(&clients, 25 * min, 15, 4_999, AfkMode::Focus), Plan::Retry);
+        assert_eq!(plan(&clients, 25 * min, 15, 0, AfkMode::Focus), Plan::Retry);
         // Nobody due wins over a busy user: nothing to retry.
-        assert_eq!(plan(&clients, 5 * min, 15, 0), Plan::Wait);
-        assert_eq!(plan(&clients, 31 * min, 1, 10_000), ids(&["a", "b", "c"]));
+        assert_eq!(plan(&clients, 5 * min, 15, 0, AfkMode::Focus), Plan::Wait);
+        assert_eq!(plan(&clients, 31 * min, 1, 10_000, AfkMode::Focus), ids(&["a", "b", "c"]));
+        // Background mode doesn't wait for the user to be away; nobody due is still nothing.
+        assert_eq!(plan(&clients, 25 * min, 15, 0, AfkMode::Background), ids(&["a", "b"]));
+        assert_eq!(plan(&clients, 5 * min, 15, 0, AfkMode::Background), Plan::Wait);
     }
 }

@@ -151,14 +151,7 @@ fn on_menu(app: &AppHandle, id: &str) {
                 }
             });
         }
-        "kill-all" => {
-            let app = app.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = commands::kill_all(&app.state::<App>()).await {
-                    notice(&app, true, format!("Couldn't kill every Roblox client: {e}"));
-                }
-            });
-        }
+        "kill-all" => kill_all(app),
         "lock" if app.state::<App>().vault.mode() == VaultMode::Master => commands::lock_vault(app),
         "quit" => app.exit(0),
         _ => {
@@ -167,6 +160,16 @@ fn on_menu(app: &AppHandle, id: &str) {
             }
         }
     }
+}
+
+/// `commands::kill_all` in the background (tray menu, panic hotkey); a failure is a notice.
+pub fn kill_all(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = commands::kill_all(&app.state::<App>()).await {
+            notice(&app, true, format!("Couldn't kill every Roblox client: {e}"));
+        }
+    });
 }
 
 /// Launches a favourite from the tray with its stored accounts that have a valid cookie: one →

@@ -104,8 +104,10 @@ async fn rejoin(app: &AppHandle, r: Rejoin, user_id: Option<i64>) {
         s.tracker.give_up(&r.from, format!("Gave up after {n} {again}"));
         commands::instances_changed(app);
         notice(app, true, format!("{name} wasn't {done}: it needed {n} {again} in {} minutes, so RoALT gave up.", v.breaker_window_min));
-        let name = crate::discord::name_of(account.as_ref(), r.account_id);
-        crate::discord::notify(app, crate::discord::Event::Breaker { name, count: n, window_min: v.breaker_window_min });
+        if !account.as_ref().is_some_and(|a| a.discord_muted) {
+            let name = crate::discord::name_of(account.as_ref(), r.account_id);
+            crate::discord::notify(app, crate::discord::Event::Breaker { name, count: n, window_min: v.breaker_window_min });
+        }
         return;
     }
     with_recent(r.account_id, |t| t.push_back(Instant::now()));
@@ -136,8 +138,10 @@ async fn rejoin(app: &AppHandle, r: Rejoin, user_id: Option<i64>) {
             s.tracker.set_rejoins(&inst.id, r.rejoins);
             commands::instances_changed(app);
             log::info!("auto-{again} ({}/{} in the window): instance {} relaunched as {}", n + 1, v.breaker_max, r.from, inst.id);
-            let name = crate::discord::name_of(account.as_ref(), r.account_id);
-            crate::discord::notify(app, crate::discord::Event::Restart { name, cause: r.cause });
+            if !account.as_ref().is_some_and(|a| a.discord_muted) {
+                let name = crate::discord::name_of(account.as_ref(), r.account_id);
+                crate::discord::notify(app, crate::discord::Event::Restart { name, cause: r.cause });
+            }
         }
         Err(e) => {
             log::warn!("auto-{again} of instance {} failed: {e}", r.from);

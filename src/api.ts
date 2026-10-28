@@ -27,10 +27,12 @@ import type { JoinCandidate } from "./bindings/JoinCandidate";
 import type { LaunchInfo } from "./bindings/LaunchInfo";
 import type { LaunchTarget } from "./bindings/LaunchTarget";
 import type { Limits } from "./bindings/Limits";
+import type { LogsCleaned } from "./bindings/LogsCleaned";
 import type { MultiInstanceStatus } from "./bindings/MultiInstanceStatus";
 import type { Notice } from "./bindings/Notice";
 import type { ParsedInput } from "./bindings/ParsedInput";
 import type { PrivateServerPage } from "./bindings/PrivateServerPage";
+import type { RemoteStatus } from "./bindings/RemoteStatus";
 import type { RobloxClient } from "./bindings/RobloxClient";
 import type { ServerOrder } from "./bindings/ServerOrder";
 import type { ServerPage } from "./bindings/ServerPage";
@@ -43,12 +45,13 @@ import type { VaultStatus } from "./bindings/VaultStatus";
 export type {
   AccountInfo, AccountPresence, Headshot,
   Favourite, FavouriteInput, JoinCandidate, LaunchInfo, LaunchTarget, ParsedInput, UserRef,
-  BandwidthStatus, ClientMetrics, Crash, DiscordStatus, Instance, MultiInstanceStatus, BulkProgress, BulkRequest, ServerOrder, ServerPage, GameInfo, PrivateServerPage, DataDir, Notice, RobloxClient,
+  BandwidthStatus, ClientMetrics, Crash, DiscordStatus, Instance, MultiInstanceStatus, BulkProgress, BulkRequest, ServerOrder, ServerPage, GameInfo, PrivateServerPage, DataDir, LogsCleaned, Notice, RemoteStatus, RobloxClient,
   AccountPatch, AccountSummary, ConflictPolicy, ErrorPayload, Group, GroupInput,
   ImportReport, InstallProgress, Settings, SettingsPatch, VaultMode, VaultStatus,
 };
 export type { AccountStatus } from "./bindings/AccountStatus";
 export type { Adaptive } from "./bindings/Adaptive";
+export type { AfkMode } from "./bindings/AfkMode";
 export type { AntiAfk } from "./bindings/AntiAfk";
 export type { BulkItem } from "./bindings/BulkItem";
 export type { BulkStage } from "./bindings/BulkStage";
@@ -64,6 +67,9 @@ export type { Presence } from "./bindings/Presence";
 export type { PresenceKind } from "./bindings/PresenceKind";
 export type { Subscription } from "./bindings/Subscription";
 export type { Theme } from "./bindings/Theme";
+
+/** What instance_show does with a client's window (window::Show). */
+export type WindowShow = "focus" | "minimize" | "restore";
 
 /** Rejected invokes carry an ErrorPayload; anything else becomes an "internal" one. */
 export function asError(e: unknown): ErrorPayload {
@@ -81,6 +87,10 @@ export const api = {
 
   accountsList: () => invoke<AccountSummary[]>("accounts_list"),
   accountAddCookie: (cookie: string) => invoke<AccountSummary>("account_add_cookie", { cookie }),
+  /** Every .ROBLOSECURITY in the text, added one by one (slow: each is checked with Roblox). */
+  accountsImportCookies: (text: string) => invoke<ImportReport>("accounts_import_cookies", { text }),
+  /** Roblox Account Manager's AccountData.json (plain or DPAPI, not password-locked). */
+  accountsImportRam: (path: string) => invoke<ImportReport>("accounts_import_ram", { path }),
   /** Opens the Roblox sign-in window; resolves once the cookie is captured. */
   accountAddLogin: () => invoke<AccountSummary>("account_add_login"),
   accountUpdate: (id: number, patch: AccountPatch) => invoke<AccountSummary>("account_update", { id, patch }),
@@ -125,14 +135,26 @@ export const api = {
   instanceTrim: (id: string) => invoke<void>("instance_trim", { id }),
   /** Opts one running client in or out of anti-AFK. */
   instanceSetAntiAfk: (id: string, enabled: boolean) => invoke<void>("instance_set_anti_afk", { id, enabled }),
+  /** A picture of the client's window at most maxW wide: width, height (u32 LE), then RGBA; empty while minimized or windowless. */
+  instanceThumbnail: (id: string, maxW: number) => invoke<ArrayBuffer>("instance_thumbnail", { id, maxW }),
+  /** Brings the client's window to the front, minimizes or restores it. */
+  instanceShow: (id: string, what: WindowShow) => invoke<void>("instance_show", { id, what }),
+  /** Minimizes or restores every running client's window. */
+  instancesShowAll: (what: Exclude<WindowShow, "focus">) => invoke<void>("instances_show_all", { what }),
+  /** Makes the client's window 320×240 (or puts it back); resolves to the client area it got, [w, h]. */
+  instanceMicro: (id: string, on: boolean) => invoke<[number, number]>("instance_micro", { id, on }),
+  /** Lays every running, unminimized client out in a grid on RoALT's monitor; how many it laid out. */
+  instancesTile: (micro: boolean) => invoke<number>("instances_tile", { micro }),
   /** CPU, memory and IO of each running client (sampled at most every 2 s). */
-  instancesMetrics: () => invoke<ClientMetrics[]>("instances_metrics"),
+  instancesMetrics:() => invoke<ClientMetrics[]>("instances_metrics"),
   /** The Roblox bandwidth limit and whether it is in force now. */
   bandwidthStatus: () => invoke<BandwidthStatus>("bandwidth_status"),
   /** Sets the outbound limit for all Roblox clients (0 removes it); Windows asks for admin rights. */
   bandwidthApply: (kbps: number) => invoke<BandwidthStatus>("bandwidth_apply", { kbps }),
   multiInstanceStatus: () => invoke<MultiInstanceStatus>("multi_instance_status"),
   multiInstanceSet: (enabled: boolean) => invoke<MultiInstanceStatus>("multi_instance_set", { enabled }),
+  /** Takes the lock from the running Roblox by closing its singleton event in each client (ask first). */
+  multiInstanceTakeOver: () => invoke<MultiInstanceStatus>("multi_instance_take_over"),
   /** Every Roblox client, tracked or not; then takes the multi-instance lock if enabled. */
   robloxCloseAll: (force: boolean) => invoke<MultiInstanceStatus>("roblox_close_all", { force }),
   /** Panic button: cancels the batch, no rejoins or restarts, terminates every Roblox client. */
@@ -178,6 +200,23 @@ export const api = {
   dataDirOpen: () => invoke<void>("data_dir_open"),
   /** Copies the database to `path` and restarts RoALT to use it (resolves only on failure). */
   dataDirMove: (path: string) => invoke<void>("data_dir_move", { path }),
+  /** RoALT's own log folder (data folder\logs) in Explorer. */
+  logsOpen: () => invoke<void>("logs_open"),
+  /** Deletes Roblox client logs over a day old or 50 MB, never a running client's. */
+  logsClean: () => invoke<LogsCleaned>("logs_clean"),
+  /** Windows shuts down in `inSecs` or at `atMs` (1 min to 7 days); the deadline (Unix ms). */
+  shutdownSchedule: (when: { atMs?: number; inSecs?: number }, closeClients: boolean) =>
+    invoke<number | null>("shutdown_schedule", { atMs: when.atMs ?? null, inSecs: when.inSecs ?? null, closeClients }),
+  shutdownCancel: () => invoke<number | null>("shutdown_cancel"),
+  /** The deadline of the shutdown RoALT scheduled, or null. */
+  shutdownStatus: () => invoke<number | null>("shutdown_status"),
+
+  /** Whether the LAN web dashboard runs, and its address(es); never the PIN. */
+  remoteStatus: () => invoke<RemoteStatus>("remote_status"),
+  /** The web dashboard's PIN (made on first use). */
+  remotePin: () => invoke<string>("remote_pin"),
+  /** A new PIN; signed-in devices have to enter it again. */
+  remotePinRegenerate: () => invoke<string>("remote_pin_regenerate"),
 
   settingsGet: () => invoke<Settings>("settings_get"),
   settingsSet: (patch: SettingsPatch) => invoke<Settings>("settings_set", { patch }),

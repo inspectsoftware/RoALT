@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
-import { api, asError, events, type Favourite, type SameServer, type Settings, type Theme, type VaultStatus } from "./api";
+import { QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, asError, events, type Favourite, type SameServer, type Settings, type VaultStatus } from "./api";
 import { qk, queryClient, useAccounts, useGroups, useInstances, useSetSettings, useSettings, useVault } from "./data";
 import { AccountsView } from "./features/accounts/AccountsView";
 import { AddAccountDialog } from "./features/accounts/AddAccountDialog";
@@ -38,7 +38,7 @@ function Root() {
   const vault = useVault();
   const settings = useSettings();
   const setSettings = useSetSettings();
-  const dark = useTheme(settings.data?.theme);
+  const dark = useTheme(settings.data);
   const [lockReason, setLockReason] = useState<LockReason>("start");
   const manualLockAt = useRef(0);
   const v = vault.data;
@@ -110,8 +110,7 @@ function Root() {
     <div className="h-full flex flex-col">
       <TitleBar
         dark={dark}
-        // Flips light and dark only: a named palette (Neon, Sakura, Bricks) is changed in Settings.
-        onToggleTheme={s && ["dark", "light", "system"].includes(s.theme) ? () => setSettings.mutate({ theme: dark ? "light" : "dark" }) : undefined}
+        onToggleTheme={s ? () => setSettings.mutate({ theme: dark ? "light" : "dark" }) : undefined}
         onLock={unlocked && v.mode === "master" ? lock : undefined}
         onRefresh={unlocked ? refresh : undefined}
       />
@@ -373,21 +372,58 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
   );
 }
 
-/** Palettes on a light background (the rest are dark). */
-const LIGHT_THEMES = ["light", "sakura"];
+/** Surfaces that turn see-through over a background image (the rest stay solid). */
+const SEE_THROUGH = ["--bg", "--panel", "--raised"];
 
-/** Applies the theme to <html> (`data-theme`, one block per palette in theme.css); "system"
- * follows prefers-color-scheme live. Returns whether it is dark. */
-function useTheme(theme: Theme | undefined) {
-  const [dark, setDark] = useState(() => !LIGHT_THEMES.includes(document.documentElement.dataset.theme ?? ""));
+/** Text on the accent: ink on a light accent, white on a dark one. */
+function onAccent(hex: string) {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  return 0.299 * r + 0.587 * g + 0.114 * b > 150 ? "#0a0b0d" : "#ffffff";
+}
+
+/** Applies the theme to <html>: `data-theme` (dark or light, "system" follows Windows live), the
+ * accent colour (`data-accent`, theme.css) and the background image. Returns whether it is dark. */
+function useTheme(s: Settings | undefined) {
+  const [dark, setDark] = useState(() => document.documentElement.dataset.theme !== "light");
+  const theme = s?.theme;
+  const accent = s?.accent ?? "";
+  const dim = s?.backgroundDim ?? 80;
+  const bytes = useQuery({ queryKey: qk.background, queryFn: api.backgroundGet, staleTime: Infinity, enabled: !!s }).data;
+  const [image, setImage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!bytes?.byteLength) return setImage(null);
+    const url = URL.createObjectURL(new Blob([bytes]));
+    setImage(url);
+    return () => URL.revokeObjectURL(url);
+  }, [bytes]);
+
   useEffect(() => {
     if (!theme) return;
+    const root = document.documentElement;
     const mq = matchMedia("(prefers-color-scheme: dark)");
     const apply = () => {
       const t = theme === "system" ? (mq.matches ? "dark" : "light") : theme;
-      document.documentElement.dataset.theme = t;
-      setDark(!LIGHT_THEMES.includes(t));
-
+      root.dataset.theme = t;
+      setDark(t !== "light");
+      if (accent) {
+        root.dataset.accent = "";
+        root.style.setProperty("--user-accent", accent);
+        root.style.setProperty("--user-on-accent", onAccent(accent));
+      } else {
+        delete root.dataset.accent;
+      }
+      // The window's colour covers the picture by `dim`; panels on top are half see-through.
+      for (const v of SEE_THROUGH) root.style.removeProperty(v);
+      if (image) {
+        const css = getComputedStyle(root);
+        root.style.setProperty("--bg-dim", `color-mix(in srgb, ${css.getPropertyValue("--bg").trim()} ${dim}%, transparent)`);
+        for (const v of SEE_THROUGH) root.style.setProperty(v, `color-mix(in srgb, ${css.getPropertyValue(v).trim()} 50%, transparent)`);
+        root.style.setProperty("--bg-image", `url("${image}")`);
+        root.dataset.bg = "";
+      } else {
+        delete root.dataset.bg;
+      }
       try {
         localStorage.setItem(THEME_KEY, t);
       } catch {
@@ -397,7 +433,7 @@ function useTheme(theme: Theme | undefined) {
     apply();
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
-  }, [theme]);
+  }, [theme, accent, image, dim]);
   return dark;
 }
 

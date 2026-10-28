@@ -139,16 +139,13 @@ pub struct GroupInput {
 #[serde(rename_all = "lowercase")]
 #[ts(export)]
 pub enum Theme {
+    /// `neon` and `bricks` were dark palettes in 0.5.0; their colours are now an accent.
     #[default]
+    #[serde(alias = "neon", alias = "bricks")]
     Dark,
+    #[serde(alias = "sakura")]
     Light,
     System,
-    /// Dark, neon accents.
-    Neon,
-    /// Light, pastel pink.
-    Sakura,
-    /// Dark, warm brick.
-    Bricks,
 }
 
 
@@ -168,6 +165,10 @@ pub enum Density {
 #[ts(export)]
 pub struct Settings {
     pub theme: Theme,
+    /// `#rrggbb`, or "" for the theme's own lime.
+    pub accent: String,
+    /// How much of the theme's background covers a custom background image, 0-95 %.
+    pub background_dim: u8,
     pub density: Density,
     /// Master-password mode only.
     pub auto_lock_minutes: u32,
@@ -362,6 +363,8 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             theme: Theme::Dark,
+            accent: String::new(),
+            background_dim: 80,
             density: Density::Detailed,
             auto_lock_minutes: 15,
             clipboard_clear_seconds: 30,
@@ -400,6 +403,10 @@ impl Default for Settings {
 pub struct SettingsPatch {
     #[ts(optional)]
     pub theme: Option<Theme>,
+    #[ts(optional)]
+    pub accent: Option<String>,
+    #[ts(optional)]
+    pub background_dim: Option<u8>,
     #[ts(optional)]
     pub density: Option<Density>,
     #[ts(optional)]

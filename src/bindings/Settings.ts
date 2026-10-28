@@ -11,7 +11,15 @@ import type { Theme } from "./Theme";
  * App settings, stored as one JSON value. New fields need `#[serde(default)]` semantics,
  * which the struct-level default gives.
  */
-export type Settings = { theme: Theme, density: Density, 
+export type Settings = { theme: Theme, 
+/**
+ * `#rrggbb`, or "" for the theme's own lime.
+ */
+accent: string, 
+/**
+ * How much of the theme's background covers a custom background image, 0-95 %.
+ */
+backgroundDim: number, density: Density, 
 /**
  * Master-password mode only.
  */

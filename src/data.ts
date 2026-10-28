@@ -26,6 +26,7 @@ export const qk = {
   client: ["client"],
   dataDir: ["dataDir"],
   shutdown: ["shutdown"],
+  background: ["background"],
   remote: ["remote"],
 } as const;
 

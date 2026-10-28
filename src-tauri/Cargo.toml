@@ -1,6 +1,6 @@
 [package]
 name = "roalt"
-version = "0.5.0"
+version = "0.5.1"
 description = "Local-only Roblox account manager"
 authors = ["inspectsoftware"]
 edition = "2024"

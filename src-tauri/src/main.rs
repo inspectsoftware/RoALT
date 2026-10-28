@@ -201,12 +201,9 @@ fn remove_old_db(data_dir: &Path, old: &Path) -> bool {
 }
 
 fn main_window(app: &TauriApp, data_dir: &Path, theme: Theme) -> tauri::Result<()> {
-    // Each palette's --bg (theme.css); System paints dark until the UI applies it.
+    // Each theme's --bg (theme.css); System paints dark until the UI applies it.
     let bg = match theme {
         Theme::Light => Color(242, 243, 240, 255),
-        Theme::Sakura => Color(253, 242, 246, 255),
-        Theme::Neon => Color(7, 5, 15, 255),
-        Theme::Bricks => Color(20, 13, 11, 255),
         Theme::Dark | Theme::System => Color(5, 5, 6, 255),
     };
 
@@ -492,6 +489,9 @@ fn main() {
             commands::data_dir_move,
             commands::logs_open,
             commands::logs_clean,
+            commands::background_set,
+            commands::background_clear,
+            commands::background_get,
             commands::shutdown_schedule,
             commands::shutdown_cancel,
             commands::shutdown_status,

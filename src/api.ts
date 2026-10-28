@@ -202,6 +202,9 @@ export const api = {
   dataDirMove: (path: string) => invoke<void>("data_dir_move", { path }),
   /** RoALT's own log folder (data folder\logs) in Explorer. */
   logsOpen: () => invoke<void>("logs_open"),
+  backgroundSet: (path: string) => invoke<void>("background_set", { path }),
+  backgroundClear: () => invoke<void>("background_clear"),
+  backgroundGet: () => invoke<ArrayBuffer>("background_get"),
   /** Deletes Roblox client logs over a day old or 50 MB, never a running client's. */
   logsClean: () => invoke<LogsCleaned>("logs_clean"),
   /** Windows shuts down in `inSecs` or at `atMs` (1 min to 7 days); the deadline (Unix ms). */

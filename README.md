@@ -185,7 +185,7 @@ launch accounts, signed in with an 8-digit PIN.
 | 💤 **Anti-AFK** | Off by default. While you are away from the PC, every few minutes each client is briefly brought to the front and gets one Space press, so Roblox doesn't kick it after 20 idle minutes. Stops the moment you touch the mouse. Or **in the background**: the Space press is posted to the window without bringing it to the front, even when minimized (Roblox may not count it in every game; auto-rejoin stays the fallback). Per-client opt-out. |
 | 🔔 **Discord** | Crash, disconnect, restart and batch alerts, plus an opt-in alert when a client gets into a game. Mute alerts per account. |
 | 📱 **Web dashboard** | Opt-in, off by default. A small page on your PC's LAN address: running clients with Close and Force, Kill all, and launch ticked accounts into a pasted link. 8-digit PIN, 30-day sign-in, rate-limited. |
-| 🧰 **Comfort** | Tray menu with favourites, close to tray, relaunch an ended client in one click, movable data folder, keyboard shortcuts. Themes: Dark, Light, System, Neon, Sakura and Bricks. |
+| 🧰 **Comfort** | Tray menu with favourites, close to tray, relaunch an ended client in one click, movable data folder, keyboard shortcuts. Dark, light or system theme, any accent colour, and your own background image. |
 
 </details>
 
@@ -208,7 +208,7 @@ launch accounts, signed in with an 8-digit PIN.
 > compare its SHA-256 with `SHA256SUMS.txt` on the release page, then choose **More info → Run anyway**.
 >
 > ```powershell
-> Get-FileHash .\RoALT-Setup-0.5.0.exe -Algorithm SHA256
+> Get-FileHash .\RoALT-Setup-0.5.1.exe -Algorithm SHA256
 > ```
 
 Your accounts and settings live in `%LOCALAPPDATA%\RoALT`. Uninstalling keeps them unless you tick

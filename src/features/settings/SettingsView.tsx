@@ -12,15 +12,19 @@ import { plural } from "../accounts/shared";
 import { useMultiToggle } from "../launch/Running";
 import { PasswordDialog } from "../vault/PasswordDialog";
 
-/** The theme picker: value, name, and the swatch's background and accent (theme.css). */
-const THEMES: [Settings["theme"], string, string, string][] = [
-  ["dark", "Dark", "#050506", "#c6f432"],
-  ["light", "Light", "#f2f3f0", "#3b5400"],
-  ["system", "System", "#050506", "#f2f3f0"],
-  ["neon", "Neon", "#07050f", "#ff4fd8"],
-  ["sakura", "Sakura", "#fdf2f6", "#f48fb8"],
-  ["bricks", "Bricks", "#140d0b", "#e2603f"],
+/** Accent presets: value ("" is the theme's own lime) and name. Any other colour comes from the picker. */
+const ACCENTS: [string, string][] = [
+  ["", "Lime"],
+  ["#ff4fd8", "Neon"],
+  ["#f48fb8", "Sakura"],
+  ["#e2603f", "Brick"],
+  ["#ff9a3c", "Orange"],
+  ["#ffd23f", "Gold"],
+  ["#2ee6c5", "Mint"],
+  ["#4f8cff", "Blue"],
+  ["#a66bff", "Violet"],
 ];
+const PICKER_FILTER = [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }];
 
 export const SETTINGS_SECTIONS = [
   ["general", "General"],
@@ -122,22 +126,17 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
 
         <Heading id="general">General</Heading>
         <Row title="Theme" hint="System follows Windows (dark or light).">
-
           <Segmented
             label="Theme"
             value={settings.theme}
-            options={THEMES.map(([value, name, bg, accent]) => ({
-              value,
-              label: (
-                <span className="flex items-center gap-1.5">
-                  <span aria-hidden="true" className="w-2.5 h-2.5 border border-line-strong" style={{ background: `linear-gradient(135deg, ${bg} 50%, ${accent} 50%)` }} />
-                  {name}
-                </span>
-              ),
-            }))}
+            options={[{ value: "dark", label: "Dark" }, { value: "light", label: "Light" }, { value: "system", label: "System" }]}
             onChange={(theme) => set.mutate({ theme })}
           />
         </Row>
+        <Row title="Accent colour" hint="Buttons, switches and highlights. Pick a preset or any colour.">
+          <AccentPicker value={settings.accent} onChange={(accent) => set.mutate({ accent })} />
+        </Row>
+        <BackgroundRow dim={settings.backgroundDim} onDim={(backgroundDim) => set.mutate({ backgroundDim })} />
         <Row title="Density" hint="Row height in the accounts list.">
           <Segmented
             label="Density"
@@ -984,6 +983,59 @@ function ClientStatus({ client }: { client: RobloxClient }) {
       <span aria-hidden="true" className="w-1.5 h-1.5 flex-none" style={{ background: color }} />
       {label}
     </span>
+  );
+}
+
+function AccentPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const custom = !!value && !ACCENTS.some(([v]) => v === value);
+  return (
+    <div role="group" aria-label="Accent colour" className="flex flex-wrap items-center gap-1.5">
+      {ACCENTS.map(([v, name]) => (
+        <button
+          key={name}
+          type="button"
+          title={name}
+          aria-label={name}
+          aria-pressed={v === value}
+          className={`w-6 h-6 border ${v === value ? "border-text outline outline-1 outline-text outline-offset-1" : "border-line-strong"}`}
+          style={{ background: v || "#c6f432" }}
+          onClick={() => v !== value && onChange(v)}
+        />
+      ))}
+      <label title="Any colour" className={`relative w-6 h-6 border cursor-pointer ${custom ? "border-text outline outline-1 outline-text outline-offset-1" : "border-line-strong"}`}
+        style={{ background: custom ? value : "conic-gradient(red, yellow, lime, cyan, blue, magenta, red)" }}>
+        <span className="sr-only">Custom colour</span>
+        <input type="color" className="absolute inset-0 opacity-0 cursor-pointer" value={value || "#c6f432"} onChange={(e) => onChange(e.target.value)} />
+      </label>
+    </div>
+  );
+}
+
+/** Pick, replace or remove the window's background image, and how much the theme covers it. */
+function BackgroundRow({ dim, onDim }: { dim: number; onDim: (v: number) => void }) {
+  const qc = useQueryClient();
+  const has = !!useQuery({ queryKey: qk.background, queryFn: api.backgroundGet, staleTime: Infinity }).data?.byteLength;
+  const done = () => qc.invalidateQueries({ queryKey: qk.background });
+  const pick = async () => {
+    const path = await openFile({ multiple: false, directory: false, filters: PICKER_FILTER, title: "Choose a background image" }).catch(toastError);
+    if (path) api.backgroundSet(path).then(done, toastError);
+  };
+  return (
+    <Row title="Background image" hint="Your own picture behind the app (PNG, JPEG, WebP or GIF, up to 8 MB). It is kept in RoALT's data.">
+      <div className="flex flex-wrap items-center gap-2">
+        {has && (
+          <Segmented
+            label="How much the theme covers the picture"
+            value={dim}
+            options={[50, 70, 80, 90].map((v) => ({ value: v, label: `${v}%`, title: `The theme covers ${v}% of the picture` }))}
+            onChange={onDim}
+            mono
+          />
+        )}
+        <button className="btn" onClick={pick}>{has ? "Change…" : "Choose…"}</button>
+        {has && <button className="btn" onClick={() => api.backgroundClear().then(done, toastError)}>Remove</button>}
+      </div>
+    </Row>
   );
 }
 

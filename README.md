@@ -146,6 +146,22 @@ it is signed by Roblox Corporation. Optional auto-update when no client runs.
 
 </td>
 </tr>
+<tr>
+<td valign="top">
+
+### 🖥️ Dashboard
+Every running client as a live window thumbnail. Right-click one to focus, minimize, shrink it to a
+micro window, limit it or close it. Tile all clients in a grid in one click.
+
+</td>
+<td valign="top">
+
+### 📱 LAN web dashboard
+Opt-in. Open RoALT from your phone on the same network: see running clients, close them, Kill all or
+launch accounts, signed in with an 8-digit PIN.
+
+</td>
+</tr>
 </table>
 
 <details>
@@ -155,23 +171,23 @@ it is signed by Roblox Corporation. Optional auto-update when no client runs.
 | Area | What you get |
 |---|---|
 | 🔐 **Vault** | DPAPI by default (opens silently). Optional master password with auto-lock after idle. Encrypted `.roalt` backups you can export and import. Copied cookies are kept out of clipboard history and cleared after 30 s. |
-| 👥 **Accounts** | Add through Roblox's sign-in page (passkeys and security keys work) or by pasting a cookie. Groups, alias, notes, colour, favourite, drag to reorder. Presence, Robux, Plus / Premium (legacy), friend and follower counts, join date, email and 2-step status. "Open on roblox.com" signed in as that account. |
+| 👥 **Accounts** | Add through Roblox's sign-in page (passkeys and security keys work), by pasting a cookie, by pasting many cookies at once, or by importing from Roblox Account Manager (an unlocked `AccountData.json`). Groups, alias, notes, colour, favourite, drag to reorder. Presence, Robux, Plus / Premium (legacy), friend and follower counts, join date, email and 2-step status. "Open on roblox.com" signed in as that account. |
 | 🚀 **Launch** | Game links, place IDs, `roblox://` links, job IDs, private server links, `roblox.com/share` links (both formats), universes, profiles, `@username`. Join a friend or one of your other accounts. Favourites in the sidebar and tray. `Ctrl+Enter` to launch. |
 | 🪟 **Batches** | Accounts launch strictly one after another with a stagger (default 6 s). **Same server**: *Pick a server* finds one with room for everyone first; *Follow the first* sends the rest to wherever the first account landed. Cancel at any time; one click re-picks the accounts that didn't launch. |
 | 🔁 **Recovery** | Auto-rejoin after kicks, shutdowns and lost connections (not after you leave on purpose). Opt-in auto-restart for crashes, frozen windows (30 s) and a memory limit. Crash breaker: default 3 relaunches in 10 minutes, with growing backoff. Per-account "Allow disconnect". Crash history with the log's reason. |
-| 🛑 **Kill all** | Hold one button in the sidebar (or use the tray) to end every Roblox process and stop pending launches and rejoins. |
+| 🖥️ **Dashboard** | Live thumbnail per client (refreshed every 2 s while the view is open), with state, game, uptime, CPU and RAM. Right-click, the menu key or `Shift+F10` for focus, minimize, restore, micro window (320×240) and back, CPU limit, efficiency mode, anti-AFK, close. **Tile** fits all clients in a grid on the screen; **Tile micro** lays out micro windows. Minimize all, Restore all. |
+| 🛑 **Kill all** | Hold one button in the sidebar, use the tray, or press a global **panic hotkey** you choose (off by default) to end every Roblox process and stop pending launches and rejoins. |
+| ⏲️ **Automation** | Minimize each new client on launch. Auto-shutdown timer: close the clients and shut the PC down at a set time (survives a RoALT restart, can be cancelled). Hourly Roblox log cleaner (logs older than a day or over 50 MB). Open logs button; RoALT's own logs rotate at 5 MB. |
 | ⚙️ **Launch control** | Custom launch arguments (default and per account, checked before use and never logged), a cooldown between launches, a configurable close grace (1–60 s). |
-| 🎚️ **Limits** | Per client: CPU cap, efficiency mode, core affinity, working-set trim (every N minutes or "Trim now"). Adaptive manager for background clients; your manual limits always win. |
+| 🎚️ **Limits** | Per client: CPU cap, efficiency mode, core affinity, working-set trim (every N minutes or "Trim now"). Adaptive manager for background clients; your manual limits always win. **Memory throttle**: a client over a RAM limit gets a CPU cap, which lowers its frame rate, until it drops under 90 % of the limit. |
+| 🎞️ **FPS cap** | A default frame-rate cap (5–360) and a per-account override, written to Roblox's `ClientAppSettings.json` just before each launch and put back a few seconds later. Skipped when a bootstrapper such as Bloxstrap manages Roblox. |
 | 📶 **Bandwidth** | One upload cap for all Roblox clients through a Windows QoS policy. Applied only when you click Apply (admin prompt); cleared when Windows restarts. |
-| 💤 **Anti-AFK** | Off by default. While you are away from the PC, every few minutes each client is briefly brought to the front and gets one Space press, so Roblox doesn't kick it after 20 idle minutes. Stops the moment you touch the mouse. Per-client opt-out. |
-| 🧰 **Comfort** | Tray menu with favourites, close to tray, relaunch an ended client in one click, movable data folder, dark and light themes, keyboard shortcuts. |
+| 💤 **Anti-AFK** | Off by default. While you are away from the PC, every few minutes each client is briefly brought to the front and gets one Space press, so Roblox doesn't kick it after 20 idle minutes. Stops the moment you touch the mouse. Or **in the background**: the Space press is posted to the window without bringing it to the front, even when minimized (Roblox may not count it in every game; auto-rejoin stays the fallback). Per-client opt-out. |
+| 🔔 **Discord** | Crash, disconnect, restart and batch alerts, plus an opt-in alert when a client gets into a game. Mute alerts per account. |
+| 📱 **Web dashboard** | Opt-in, off by default. A small page on your PC's LAN address: running clients with Close and Force, Kill all, and launch ticked accounts into a pasted link. 8-digit PIN, 30-day sign-in, rate-limited. |
+| 🧰 **Comfort** | Tray menu with favourites, close to tray, relaunch an ended client in one click, movable data folder, keyboard shortcuts. Themes: Dark, Light, System, Neon, Sakura and Bricks. |
 
 </details>
-
-> [!TIP]
-> **New in development:** a **memory throttle** (Settings → Performance): a client over a RAM limit gets a CPU cap,
-> which lowers its frame rate until its memory drops again. A **dashboard** with every running client as a live
-> window thumbnail, with a right-click menu, is on the way too.
 
 <br>
 
@@ -225,7 +241,7 @@ password in **Settings**. RoALT then asks for it on start and locks itself after
 <summary><b>3. Launch a game</b></summary>
 <br>
 
-Go to **Launch** (`Ctrl+2`), paste a game link, tick an account and press **Launch** (`Ctrl+Enter`).
+Go to **Launch** (`Ctrl+3`), paste a game link, tick an account and press **Launch** (`Ctrl+Enter`).
 Tick several accounts to launch a batch. Turn on **Same server** to put them all in one server.
 
 </details>
@@ -235,7 +251,8 @@ Tick several accounts to launch a batch. Turn on **Same server** to put them all
 <br>
 
 Turn on **Multi-instance** in the sidebar before you start Roblox. If Roblox is already open, RoALT says so and offers
-**Close Roblox**. Every client RoALT starts shows up under Running, with its state, server and uptime.
+**Close Roblox** or **Take over**. Every client RoALT starts shows up under Running and on the **Dashboard**
+(`Ctrl+1`), with its state, server and uptime.
 
 </details>
 
@@ -244,7 +261,7 @@ Turn on **Multi-instance** in the sidebar before you start Roblox. If Roblox is 
 <br>
 
 In **Settings → Launching**, turn on **Auto-rejoin** (and, if you like, **Auto-restart**). Open **Monitor**
-(`Ctrl+5`) to see what each client uses, and **Discord** (`Ctrl+6`) to get alerts on your phone.
+(`Ctrl+6`) to see what each client uses, and **Discord** (`Ctrl+7`) to get alerts on your phone.
 
 </details>
 
@@ -254,7 +271,7 @@ In **Settings → Launching**, turn on **Auto-rejoin** (and, if you like, **Auto
 
 | Keys | Action |
 |---|---|
-| `Ctrl+1` … `Ctrl+6` | Accounts, Launch, Servers, Settings, Monitor, Discord |
+| `Ctrl+1` … `Ctrl+7` | Dashboard, Accounts, Launch, Servers, Settings, Monitor, Discord |
 | `Ctrl+N` | Add account |
 | `Ctrl+F` | Search accounts |
 | `Ctrl+Enter` | Launch |
@@ -272,7 +289,7 @@ In **Settings → Launching**, turn on **Auto-rejoin** (and, if you like, **Auto
 
 #### ✅ What RoALT does
 
-- Talks **only** to `*.roblox.com` and `*.rbxcdn.com`.
+- Talks **only** to `*.roblox.com` and `*.rbxcdn.com` (plus your Discord webhook, and your LAN if you turn on the web dashboard).
 - Encrypts every cookie with **AES-256-GCM** under a key protected by **Windows DPAPI**, plus your master password if you set one.
 - Signs you in through **Roblox's own page**, in a throw-away browser profile.
 - Installs Roblox updates **only** when the installer is signed by Roblox Corporation.
@@ -283,7 +300,7 @@ In **Settings → Launching**, turn on **Auto-rejoin** (and, if you like, **Auto
 
 #### 🚫 What RoALT never does
 
-- **Never** reads or modifies the Roblox client or its memory.
+- **Never** reads or writes the Roblox client's memory or files, except the opt-in FPS cap in `ClientAppSettings.json`.
 - **Never** sends telemetry. There is no RoALT server and no RoALT account.
 - **Never** writes cookies, tickets or launch arguments to its logs.
 - **Never** changes Windows settings, except the opt-in bandwidth limit.
@@ -306,7 +323,16 @@ In **Settings → Launching**, turn on **Auto-rejoin** (and, if you like, **Auto
   sign-in files while its clients run, so clients can't sign each other out.
 - **Limits** go through Windows itself (job objects, priority, affinity). RoALT only ever opens a client with the
   narrow rights a change needs, never to read its memory.
-- **Anti-AFK (opt-in)** briefly brings a client to the front and presses Space the way a keyboard does.
+- **Take over (on request)** closes the one "Roblox is already running" lock inside an open Roblox, so RoALT's clients
+  can run next to it. It needs to copy that one handle (`PROCESS_DUP_HANDLE`) and never reads or writes the client's memory.
+- **Anti-AFK (opt-in)** briefly brings a client to the front and presses Space the way a keyboard does, or, in background
+  mode, posts the key press to its window.
+- **Window tools** (thumbnails, minimize, micro, tile) use ordinary Windows window calls (`PrintWindow`, `ShowWindow`,
+  `SetWindowPos`).
+- **Web dashboard (opt-in)** listens on your LAN only while turned on and the vault is unlocked. It uses plain HTTP, so
+  turn it on only on a network you trust. The PIN is kept encrypted, sessions use an HttpOnly cookie, every POST needs a
+  custom header, wrong PINs are rate-limited, and requests by host name are refused (open it by IP). It returns names,
+  states and usage only, never a cookie or webhook.
 - **Bandwidth limit (opt-in)** adds a Windows QoS policy named `RoALT-Roblox` through an admin prompt, only when you click
   Apply. Windows drops it on restart. It is the only change RoALT makes to Windows.
 
@@ -344,7 +370,7 @@ The installer isn't code-signed yet, so SmartScreen doesn't recognise it. Check 
 <br>
 
 Roblox's tray app or an open client already holds the lock RoALT needs. Click **Close Roblox** when RoALT offers it, then
-launch from RoALT.
+launch from RoALT. To keep that client open, click **Take over** instead.
 
 </details>
 
@@ -413,6 +439,8 @@ flowchart LR
     CMD --> LAUNCH["launcher<br/>target · uri · bulk · update"]
     CMD --> INST["instances<br/>tracker · limits · rejoin · metrics"]
     CMD --> DISC["discord<br/>webhook alerts"]
+    PHONE(["Phone on LAN"]) -- "HTTP + PIN" --> REMOTE["remote<br/>web dashboard"]
+    REMOTE --> CMD
     VAULT --> DB[("SQLite<br/>roalt.db")]
     LAUNCH --> API
     LAUNCH --> RBX["RobloxPlayerBeta.exe"]
@@ -425,9 +453,10 @@ flowchart LR
 |---|---|
 | [`vault/`](src-tauri/src/vault) | Envelope encryption: one random data key encrypts every secret (AES-256-GCM, row-bound AAD). The key is wrapped with DPAPI, or with an Argon2id key from the master password and then DPAPI. Windows Hello re-auth, `.roalt` backups. |
 | [`roblox_api/`](src-tauri/src/roblox_api) | The one typed Roblox client. Every URL in `endpoints.rs`. CSRF from the real request's 403, per-route queues driven by `x-ratelimit-*`, rotated `.ROBLOSECURITY` saved atomically, three error-body shapes parsed. |
-| [`launcher/`](src-tauri/src/launcher) | `target.rs` parses any pasted link locally; `uri.rs` builds the `roblox-player:` URI exactly like the website; `bulk.rs` runs batches and same-server; `update.rs` + `authenticode.rs` install Roblox updates after `WinVerifyTrust`. |
-| [`instances/`](src-tauri/src/instances) | `tracker.rs` ties each client to its account by PID, start time and log file; `logwatch.rs` reads job IDs and disconnects; `rejoin.rs` and the crash breaker; `limits.rs` CPU caps, affinity, efficiency mode, trims; `metrics.rs`; `multi.rs` the singleton lock; `qos.rs`; `afk.rs`. |
+| [`launcher/`](src-tauri/src/launcher) | `target.rs` parses any pasted link locally; `uri.rs` builds the `roblox-player:` URI exactly like the website; `bulk.rs` runs batches and same-server; `fps.rs` the FPS cap; `update.rs` + `authenticode.rs` install Roblox updates after `WinVerifyTrust`. |
+| [`instances/`](src-tauri/src/instances) | `tracker.rs` ties each client to its account by PID, start time and log file; `logwatch.rs` reads job IDs and disconnects; `rejoin.rs` and the crash breaker; `limits.rs` CPU caps, affinity, efficiency mode, trims; `metrics.rs`; `multi.rs` the singleton lock and take-over; `window.rs` thumbnails, micro and tile; `qos.rs`; `afk.rs`. |
 | [`discord.rs`](src-tauri/src/discord.rs) | Webhook alerts: host-checked URL, events coalesced every 2 s, `retry_after` honoured. |
+| [`remote.rs`](src-tauri/src/remote.rs) | Opt-in LAN web dashboard (axum): PIN login, session cookie, CSRF header, rate limit, Host check, one embedded page (`remote.html`). |
 | [`webview.rs`](src-tauri/src/webview.rs) | Sign-in and session windows on temporary WebView2 profiles, deleted after use. |
 | [`storage/`](src-tauri/src/storage) | SQLite through `rusqlite` with numbered migrations. Running clients live in memory only. |
 
@@ -451,7 +480,8 @@ flowchart LR
 
 Every sample or change opens a short-lived handle checked against the client's start time, with only the right it
 needs: `PROCESS_QUERY_LIMITED_INFORMATION` for metrics, `PROCESS_SET_QUOTA` for trims, `PROCESS_SET_INFORMATION` for
-affinity and efficiency mode. Never `PROCESS_VM_READ` or `PROCESS_DUP_HANDLE`; only the CPU-cap job handle is kept.
+affinity and efficiency mode. Never `PROCESS_VM_READ`; `PROCESS_DUP_HANDLE` only for a take-over you start. Only the
+CPU-cap job handle is kept.
 
 </details>
 
@@ -508,14 +538,14 @@ npm run tauri dev        # run the app with hot reload
 │  ├─ bindings/            ts-rs generated types (committed)
 │  ├─ dev/mockIpc.ts       mock backend for `npm run dev`
 │  ├─ ui/                  shared components
-│  └─ features/            accounts · launch · servers · monitor · discord · settings · vault
+│  └─ features/            dashboard · accounts · launch · servers · monitor · discord · settings · vault
 ├─ src-tauri/              Rust backend
 │  ├─ src/
 │  │  ├─ main.rs           builder, plugins, managed state
 │  │  ├─ commands.rs       IPC layer
 │  │  ├─ model.rs          shared types (exported to TS)
 │  │  ├─ vault/  roblox_api/  launcher/  instances/  storage/
-│  │  ├─ discord.rs  webview.rs  tray.rs  error.rs
+│  │  ├─ discord.rs  remote.rs  webview.rs  tray.rs  error.rs
 │  ├─ tests/fixtures/      recorded Roblox responses (no real cookies)
 │  └─ tauri.conf.json
 ├─ installer/RoALT.iss     Inno Setup script

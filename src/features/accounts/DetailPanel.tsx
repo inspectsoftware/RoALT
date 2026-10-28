@@ -4,7 +4,7 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, asError, type AccountInfo, type AccountPatch, type AccountSummary, type Group, type Presence, type VaultMode } from "../../api";
 import { groupColor, qk, useAccountInfo, useUpdateAccount } from "../../data";
-import { Switch } from "../../ui/controls";
+import { Switch, TextField } from "../../ui/controls";
 import { Icon } from "../../ui/Icon";
 import { friendly, toast, toastError } from "../../ui/Toast";
 import { PasswordDialog } from "../vault/PasswordDialog";
@@ -256,6 +256,17 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
           <span>Favourite</span>
           <Switch label="Favourite" checked={a.favourite} onChange={(v) => save({ favourite: v })} />
         </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="flex flex-col gap-0.5">
+            <span>Allow disconnects</span>
+            <span className="text-xs text-dim">Never rejoined or restarted; a batch counts a disconnect as done.</span>
+          </span>
+          <Switch label="Allow disconnects" checked={a.allowDisconnect} onChange={(v) => save({ allowDisconnect: v })} />
+        </div>
+        <label className="flex flex-col gap-1.5">
+          <span className="label">Launch arguments</span>
+          <TextField label="Launch arguments" placeholder="The default from Settings" value={a.launchArgs ?? ""} onCommit={(launchArgs) => update.mutateAsync({ id: a.id, patch: { launchArgs } })} />
+        </label>
       </Section>
 
       <Section>

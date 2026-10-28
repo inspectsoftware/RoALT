@@ -4,12 +4,14 @@ import { api, asError, events, type Favourite, type SameServer, type Settings, t
 import { qk, queryClient, useAccounts, useGroups, useInstances, useSetSettings, useSettings, useVault } from "./data";
 import { AccountsView } from "./features/accounts/AccountsView";
 import { AddAccountDialog } from "./features/accounts/AddAccountDialog";
+import { DiscordView } from "./features/discord/DiscordView";
 import { GroupsNav } from "./features/accounts/GroupsNav";
 import { plural } from "./features/accounts/shared";
 import { FavouritesNav } from "./features/launch/Favourites";
 import { lastLaunchAccount, LaunchView } from "./features/launch/LaunchView";
-import { isRunning, MultiInstanceSwitch, RunningPanel } from "./features/launch/Running";
+import { isRunning, KillAllButton, MultiInstanceSwitch, RunningPanel } from "./features/launch/Running";
 import { draftFor, EMPTY_DRAFT, type Draft } from "./features/launch/target";
+import { MonitorView } from "./features/monitor/MonitorView";
 import { ServersView } from "./features/servers/ServersView";
 import { SettingsView, SETTINGS_SECTIONS } from "./features/settings/SettingsView";
 import { UnlockScreen, type LockReason } from "./features/vault/UnlockScreen";
@@ -44,7 +46,7 @@ function Root() {
 
   const markLocked = () => {
     qc.setQueryData<VaultStatus>(qk.vault, (old) => old && { ...old, locked: true });
-    for (const queryKey of [qk.accounts, qk.presence, ["info"], qk.favourites, qk.join, qk.privateServers]) qc.removeQueries({ queryKey });
+    for (const queryKey of [qk.accounts, qk.presence, ["info"], qk.favourites, qk.join, qk.privateServers, qk.discord]) qc.removeQueries({ queryKey });
   };
 
   // Everything on screen asks again; the webview itself is never reloaded.
@@ -62,9 +64,10 @@ function Root() {
         for (const queryKey of [qk.accounts, qk.groups, qk.vault]) qc.invalidateQueries({ queryKey });
       }),
       events.onInstancesChanged(() => {
-        for (const queryKey of [qk.instances, qk.multi]) qc.invalidateQueries({ queryKey });
+        for (const queryKey of [qk.instances, qk.multi, qk.crashes]) qc.invalidateQueries({ queryKey });
       }),
       events.onBulkProgress((p) => qc.setQueryData(qk.bulk, p)),
+      events.onRobloxClient((c) => qc.setQueryData(qk.client, c)),
       // Errors stay until dismissed: the window may have been hidden in the tray.
       events.onNotice((n) => toast(n.message, n.error ? "error" : "ok", n.error)),
       events.onVaultLocked(() => {
@@ -135,7 +138,7 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
   const accounts = useAccounts();
   const groups = useGroups();
   const running = useInstances().data?.filter(isRunning).length ?? 0;
-  const [view, setView] = useState<"accounts" | "launch" | "servers" | "settings">("accounts");
+  const [view, setView] = useState<"accounts" | "launch" | "servers" | "monitor" | "discord" | "settings">("accounts");
   const [group, setGroup] = useState<number | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   // The Launch view's accounts; the last one launched until something else is picked.
@@ -179,6 +182,8 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
         Digit2: () => setView("launch"),
         Digit3: openServers,
         Digit4: () => setView("settings"),
+        Digit5: () => setView("monitor"),
+        Digit6: () => setView("discord"),
       };
       const go = views[e.code];
       if (go) {
@@ -249,6 +254,14 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
             <Icon name="servers" />
             <span className="flex-1">Servers</span>
           </button>
+          <button className="nav-item" aria-current={view === "monitor" ? "page" : undefined} onClick={() => setView("monitor")}>
+            <Icon name="monitor" />
+            <span className="flex-1">Monitor</span>
+          </button>
+          <button className="nav-item" aria-current={view === "discord" ? "page" : undefined} onClick={() => setView("discord")}>
+            <Icon name="bell" />
+            <span className="flex-1">Discord</span>
+          </button>
           <button className="nav-item" aria-current={view === "settings" ? "page" : undefined} onClick={() => setView("settings")}>
             <Icon name="settings" />
             <span className="flex-1">Settings</span>
@@ -277,6 +290,7 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
         </div>
         <div className="flex flex-col gap-2.5 mt-3 p-3 border border-line">
           <MultiInstanceSwitch />
+          <KillAllButton />
           <div className="mono flex items-center gap-2 text-[11px] text-dim">
             <span aria-hidden="true" className="w-1.5 h-1.5 flex-none bg-accent-text" />
             Vault · {vault.mode === "master" ? "master password" : "DPAPI"} · unlocked
@@ -325,6 +339,10 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
           step={launchStep}
           setStep={setLaunchStep}
         />
+      ) : view === "monitor" ? (
+        <MonitorView accounts={accounts.data} />
+      ) : view === "discord" ? (
+        <DiscordView settings={settings} />
       ) : (
         <SettingsView vault={vault} settings={settings} />
       )}

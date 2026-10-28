@@ -12,4 +12,13 @@ statusCheckedAt: number | null,
 /**
  * Unix ms.
  */
-createdAt: number, };
+createdAt: number, 
+/**
+ * Its clients may stay disconnected: never rejoined or restarted, and a batch counts a
+ * disconnect as done.
+ */
+allowDisconnect: boolean, 
+/**
+ * Extra client arguments, used instead of `Settings.launch_args`; None: the default.
+ */
+launchArgs: string | null, };

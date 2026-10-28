@@ -9,13 +9,18 @@
 // Servers: place 1 doesn't exist; Mega Obby (7719004215) sells no private servers; "Builder" may
 // not join private servers. Without an account the public list allows 3 requests a minute, as Roblox does.
 // "Alt 02"'s first client is kicked 20 s into its game; with auto-rejoin on it is closed and comes back once.
+// Each kick is recorded as a disconnect, shown under the ended row in Running clients. "Kill all" ends everything.
+// Monitor: each running client's CPU, memory and IO drift over time; "Alt 01"'s memory keeps growing (a leak).
+// The bandwidth limit "applies" after a pretend admin prompt; 1234 kbit/s fails as a declined prompt.
 // Moving the data folder to a path containing "bad" fails as a folder that already has a RoALT database.
+// Anti-AFK (when on) "presses a key" in each opted-in client in a game every 20 s, so the time moves.
+// Discord: any discord.com webhook URL is accepted; one whose token contains "deleted" fails the test.
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type {
-  AccountInfo, AccountStatus, AccountSummary, BulkProgress, BulkRequest, BulkStage, Favourite, GameInfo, GameServer, Group, Instance,
+  AccountInfo, AccountStatus, AccountSummary, BulkProgress, BulkRequest, BulkStage, Crash, Favourite, GameInfo, GameServer, Group, Instance,
   JoinCandidate, LaunchTarget, MultiInstanceStatus, ParsedInput, Presence, PrivateServer, PrivateServerPage, ServerOrder, ServerPage,
-  Settings, VaultMode,
+  RobloxClient, Settings, VaultMode,
 } from "../api";
 
 const MIN = 60_000;
@@ -56,12 +61,56 @@ let accounts: AccountSummary[] = seed.map(([alias, displayName, username, userId
   status,
   statusCheckedAt: status === "unknown" ? null : now - (i + 2) * MIN,
   createdAt: now - (40 - i * 3) * DAY,
+  allowDisconnect: false,
+  launchArgs: null,
 }));
 
 let settings: Settings = {
   theme: "dark", density: "detailed", autoLockMinutes: 15, clipboardClearSeconds: 30, cacheMinutes: 10,
-  multiInstance: false, protectSharedLogin: true, launchDelayMs: 6000, autoRejoin: false, closeToTray: false,
+  multiInstance: false, protectSharedLogin: true, launchDelayMs: 6000, autoRejoin: false, autoRestartOnCrash: false,
+  breakerMax: 3, breakerWindowMin: 10, closeGraceS: 5, launchArgs: "", closeToTray: false,
+  memRestartMb: 0, trimEveryMin: 0, autoSpread: false,
+  adaptive: { enabled: false, background: { cpuCap: 25, eco: true, trimEveryMin: null, affinity: null } }, bandwidthKbps: 0,
+  antiAfk: { enabled: false, intervalMin: 15 },
+  discord: { crash: true, hang: true, memRestart: true, disconnect: true, restart: true, breaker: true, batchDone: true, statusEveryMin: 0 },
+  autoUpdate: false,
 };
+
+// Outdated, so Settings offers the update and the Launch view warns before a batch.
+let robloxClient: RobloxClient = {
+  path: "C:\\Users\\you\\AppData\\Local\\Roblox\\Versions\\version-5e1f0c9a7d3b4e21\\RobloxPlayerBeta.exe",
+  bootstrapper: false,
+  version: "version-5e1f0c9a7d3b4e21",
+  latest: "version-9ac8595712b447a7",
+  outdated: true,
+};
+/** The fake vault's Discord webhook (the real one is encrypted; the UI only ever sees its id's end). */
+/** `roblox_install` runs: launches and a second install are refused, as in Rust. */
+let installing = false;
+const INSTALLING = "Roblox is being installed. Launch again once it is done.";
+let webhook: { id: string; token: string } | null = null;
+const WEBHOOK = /^https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api\/webhooks\/(\d{1,25})\/([A-Za-z0-9_-]{1,128})$/;
+const discordStatus = () => ({ configured: webhook !== null, webhook: webhook && `…${webhook.id.slice(-4)}` });
+let bandwidthActive = false;
+/** Fake metrics: a wave per client, so the sparklines move. */
+function fakeMetrics() {
+  const t = Date.now() / 1000;
+  return instances.filter((i) => i.state !== "exited").map((i, n) => {
+    const age = (Date.now() - i.startedAt) / 1000;
+    const leak = i.accountId === 2 ? age * 4 : 0;
+    const wave = (p: number) => (Math.sin(t / p + n * 1.7) + 1) / 2;
+    const capped = i.limits.cpuCap ?? 100;
+    return {
+      instanceId: i.id, pid: i.pid,
+      cpuPct: age < 2 ? null : Math.min(capped, 2 + 9 * wave(7) + 3 * Math.random()) * (i.limits.eco ? 0.7 : 1),
+      workingSetMb: 600 + 250 * wave(23) + leak * 0.8,
+      privateMb: 900 + 120 * wave(31) + leak,
+      readBps: age < 2 ? null : 20_000 + 400_000 * wave(5) * Math.random(),
+      writeBps: age < 2 ? null : 5_000 + 60_000 * wave(9),
+    };
+  });
+}
+const crashes: Crash[] = [];
 // Instances: a stranger client blocks multi-instance until "Close Roblox".
 let strangerRunning = true;
 let lockHeld = false;
@@ -97,7 +146,8 @@ function track(accountId: number, pid: number, target: LaunchTarget, placeId: nu
   if (!lockHeld) for (const old of instances) endInstance(old.id, "Replaced by another Roblox client");
   const i: Instance = {
     id: crypto.randomUUID(), accountId, pid, state: "starting", target, placeId, jobId: null,
-    startedAt: Date.now(), endedAt: null, viaBootstrapper, note: null, rejoins, limits: { cpuCap: null, eco: false },
+    startedAt: Date.now(), endedAt: null, viaBootstrapper, note: null, rejoins, limits: { cpuCap: null, eco: false, trimEveryMin: null, affinity: null },
+    antiAfk: true, afkAt: null,
   };
   instances.push(i);
   if (!lockHeld) eventHolder = i.id;
@@ -113,8 +163,12 @@ function track(accountId: number, pid: number, target: LaunchTarget, placeId: nu
 function kick(i: Instance) {
   if (i.state === "exited") return;
   i.state = "disconnected";
+  crashes.unshift({
+    id: crashes.length + 1, instanceId: i.id, accountId: i.accountId, kind: "disconnect", at: Date.now(), uptimeMs: Date.now() - i.startedAt,
+    reason: "Sending disconnect with reason: 267", placeId: i.placeId, hasLog: true,
+  });
   instancesChanged();
-  if (!settings.autoRejoin) return;
+  if (!settings.autoRejoin || find(i.accountId)?.allowDisconnect) return;
   setTimeout(() => {
     const a = find(i.accountId);
     if (i.state !== "disconnected") return;
@@ -126,6 +180,12 @@ function kick(i: Instance) {
     track(a.id, 14000 + Math.floor(Math.random() * 9000), i.target, i.placeId, i.viaBootstrapper, i.rejoins + 1);
   }, settings.launchDelayMs);
 }
+setInterval(() => {
+  if (!settings.antiAfk.enabled) return;
+  const due = instances.filter((i) => i.state === "inGame" && i.antiAfk);
+  due.forEach((i) => (i.afkAt = Date.now()));
+  if (due.length) instancesChanged();
+}, 20_000);
 const vault = { mode: "master" as VaultMode, locked: false, password: "password" };
 const FAKE_COOKIE = "_|WARNING:-DO-NOT-SHARE-THIS.--DEV-PREVIEW-FAKE-VALUE|_" + "0F1E2D3C4B5A69788796A5B4C3D2E1F0".repeat(6);
 
@@ -141,6 +201,7 @@ function addFake(username: string): AccountSummary {
   const a: AccountSummary = {
     id, userId: 6000000000 + id, username, displayName: username.replace(/_/g, " "), alias: "", notes: "", color: null,
     favourite: false, sortOrder: accounts.length, groupIds: [], status: "valid", statusCheckedAt: Date.now(), createdAt: Date.now(),
+    allowDisconnect: false, launchArgs: null,
   };
   accounts.push(a);
   changed();
@@ -311,7 +372,9 @@ function mirrorBatch() {
   for (const item of batch.items) {
     const i = instances.find((x) => x.id === item.instanceId);
     if (!i || item.stage.kind === "failed" || item.stage.kind === "cancelled") continue;
-    const stage: BulkStage = i.state === "disconnected" || i.state === "exited"
+    const stage: BulkStage = i.state === "disconnected" && find(i.accountId)?.allowDisconnect
+      ? { kind: "done" }
+      : i.state === "disconnected" || i.state === "exited"
       ? { kind: "failed", message: i.note ?? (i.state === "exited" ? "Closed" : "Disconnected") }
       : { kind: i.state };
     if (stage.kind !== item.stage.kind) {
@@ -520,7 +583,8 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       const a = find(args.id);
       if (!a) return fail("notFound", "Not found.");
       const p = args.patch;
-      Object.assign(a, p, p.color === undefined ? {} : { color: p.color || null });
+      if (/["'&|<>^]/.test(p.launchArgs ?? "")) return fail("invalid", "Launch arguments can't contain that character.");
+      Object.assign(a, p, p.color === undefined ? {} : { color: p.color || null }, p.launchArgs === undefined ? {} : { launchArgs: p.launchArgs.trim() || null });
       changed();
       return structuredClone(a);
     }
@@ -585,6 +649,7 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
         : { userId: 7000000000 + name.length * 7919, username: name, displayName: name.replace(/_/g, " ") };
     }
     case "launch": {
+      if (installing) return fail("invalid", INSTALLING);
       if (batch && !batch.done) return fail("invalid", "A batch is still running.");
       await sleep(1200);
       const a = find(args.accountId);
@@ -638,6 +703,7 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     }
 
     case "bulk_launch":
+      if (installing) return fail("invalid", INSTALLING);
       await sleep(300);
       return startBatch(args.request);
     case "bulk_cancel":
@@ -716,10 +782,32 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "instance_set_limits": {
       const i = instances.find((x) => x.id === args.id && x.state !== "exited");
       if (!i) return fail("notFound", "Not found.");
+      if (args.limits.affinity === 0) return fail("invalid", "Pick at least one CPU core.");
       i.limits = args.limits;
       instancesChanged();
       return null;
     }
+    case "instance_set_anti_afk": {
+      const i = instances.find((x) => x.id === args.id && x.state !== "exited");
+      if (!i) return fail("notFound", "Not found.");
+      i.antiAfk = args.enabled;
+      instancesChanged();
+      return null;
+    }
+    case "instance_trim":
+      await sleep(300);
+      return instances.some((x) => x.id === args.id && x.state !== "exited") ? null : fail("notFound", "Not found.");
+    case "instances_metrics":
+      return fakeMetrics();
+    case "bandwidth_status":
+      return { kbps: settings.bandwidthKbps, active: settings.bandwidthKbps > 0 && bandwidthActive };
+    case "bandwidth_apply":
+      await sleep(1500);
+      if (args.kbps !== 0 && (args.kbps < 64 || args.kbps > 10_000_000)) return fail("invalid", "The bandwidth limit must be 0 (none) or 64 to 10000000 kbit/s.");
+      if (args.kbps === 1234) return fail("invalid", "The bandwidth limit needs admin rights; the prompt was declined.");
+      settings.bandwidthKbps = args.kbps;
+      bandwidthActive = true;
+      return { kbps: settings.bandwidthKbps, active: args.kbps > 0 };
     case "instances_clear_ended":
       instances = instances.filter((i) => i.state !== "exited");
       instancesChanged();
@@ -738,9 +826,61 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       instances.forEach((i) => endInstance(i.id, "Closed"));
       retakeLock();
       return multiStatus();
+    case "panic_kill":
+      await sleep(300);
+      if (batch && !batch.done) batchCancel = true;
+      strangerRunning = false;
+      instances.forEach((i) => endInstance(i.id, "Closed"));
+      retakeLock();
+      return multiStatus();
+    case "crashes_list":
+      return structuredClone(crashes);
+    case "crash_open_log":
+      return crashes.some((c) => c.id === args.id && c.hasLog) ? null : fail("notFound", "Not found.");
 
+    case "discord_get":
+      return discordStatus();
+    case "discord_set": {
+      await sleep(300);
+      const url = String(args.url ?? "").trim();
+      if (!url) {
+        webhook = null;
+        return discordStatus();
+      }
+      const m = WEBHOOK.exec(url);
+      if (!m) return fail("invalid", "Paste a Discord webhook URL: https://discord.com/api/webhooks/<id>/<token>.");
+      webhook = { id: m[1], token: m[2] };
+      return discordStatus();
+    }
+    case "discord_test":
+      await sleep(700);
+      if (!webhook) return fail("invalid", "Set a webhook first.");
+      if (webhook.token.includes("deleted")) return fail("invalid", "Discord refused the webhook; it may have been deleted. Paste a new one.");
+      return null;
     case "roblox_client":
-      return { path: "C:\\Users\\you\\AppData\\Local\\Roblox\\Versions\\version-5e1f0c9a7d3b4e21\\RobloxPlayerBeta.exe", bootstrapper: false };
+      return { ...robloxClient };
+    case "roblox_install": {
+      if (installing) return fail("invalid", "Roblox is already being installed.");
+      if (instances.some((i) => i.state !== "exited") || strangerRunning) return fail("invalid", "Close every Roblox client first: installing Roblox ends them.");
+      installing = true;
+      try {
+        for (let percent = 0; percent <= 100; percent += 20) {
+          void emit("roblox://install", { stage: "downloading", percent });
+          await sleep(250);
+        }
+        void emit("roblox://install", { stage: "verifying" });
+        await sleep(500);
+        void emit("roblox://install", { stage: "installing" });
+        await sleep(1500);
+        const latest = robloxClient.latest ?? "version-9ac8595712b447a7";
+        robloxClient = { ...robloxClient, path: robloxClient.path?.replace(/version-[0-9a-f]{16}/, latest) ?? null, version: latest, outdated: false };
+        void emit("roblox://install", { stage: "done" });
+        void emit("roblox://client", robloxClient);
+        return { ...robloxClient };
+      } finally {
+        installing = false;
+      }
+    }
     case "data_dir_info":
       return { path: "C:\\Users\\you\\AppData\\Local\\RoALT", default: true, overridden: false };
     case "data_dir_open":
@@ -755,6 +895,12 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "settings_get":
       return { ...settings };
     case "settings_set":
+      if (/["'&|<>^]/.test(args.patch.launchArgs ?? "")) return fail("invalid", "Launch arguments can't contain that character.");
+      if (args.patch.memRestartMb && args.patch.memRestartMb < 512) return fail("invalid", "The memory limit must be 0 (off) or 512 to 65 536 MB.");
+      if (args.patch.antiAfk && (args.patch.antiAfk.intervalMin < 1 || args.patch.antiAfk.intervalMin > 19))
+        return fail("invalid", "Anti-AFK must press a key every 1 to 19 minutes.");
+      if (args.patch.discord && args.patch.discord.statusEveryMin !== 0 && (args.patch.discord.statusEveryMin < 5 || args.patch.discord.statusEveryMin > 1440))
+        return fail("invalid", "The status summary must be off (0) or every 5 minutes to 24 hours.");
       settings = { ...settings, ...args.patch };
       return { ...settings };
 

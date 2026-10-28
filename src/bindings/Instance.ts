@@ -19,4 +19,12 @@ note: string | null,
 /**
  * How many auto-rejoins led to this client (0: launched by the user).
  */
-rejoins: number, limits: Limits, };
+rejoins: number, limits: Limits, 
+/**
+ * Anti-AFK presses keys in it (when on in Settings); false: opted out.
+ */
+antiAfk: boolean, 
+/**
+ * Unix ms of its last anti-AFK key press.
+ */
+afkAt: number | null, };

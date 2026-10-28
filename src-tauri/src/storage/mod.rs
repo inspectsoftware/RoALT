@@ -10,7 +10,7 @@ use rusqlite_migration::{M, Migrations};
 
 use crate::commands::now_ms;
 use crate::error::{AppError, Result};
-use crate::model::{AccountPatch, AccountStatus, AccountSummary, Group, GroupInput, Settings, VaultMode};
+use crate::model::{AccountPatch, AccountStatus, AccountSummary, Crash, CrashKind, Group, GroupInput, Settings, VaultMode};
 use crate::vault::{Kdf, VaultRecord};
 
 /// What `upsert_account` writes. `cookie` is the encrypted blob.
@@ -49,12 +49,25 @@ pub struct FavouriteRow {
 const MAX_ALIAS: usize = 64;
 const MAX_NOTES: usize = 2000;
 const MAX_GROUP_NAME: usize = 40;
+const MAX_CRASHES: i64 = 200;
+
+/// What `add_crash` writes: one client that ended badly. `log_path` never reaches the UI.
+pub struct NewCrash<'a> {
+    pub instance_id: &'a str,
+    pub account_id: i64,
+    pub kind: CrashKind,
+    pub at: i64,
+    pub uptime_ms: i64,
+    pub reason: Option<&'a str>,
+    pub place_id: Option<i64>,
+    pub log_path: Option<&'a str>,
+}
 
 const ACCOUNT_SELECT: &str = "SELECT a.id, a.user_id, a.username, a.display_name, a.alias, a.notes, a.color, \
      a.favourite, a.sort_order, \
      (SELECT group_concat(ag.group_id ORDER BY g.sort_order, g.id) \
         FROM account_groups ag JOIN groups g ON g.id = ag.group_id WHERE ag.account_id = a.id), \
-     a.status, a.status_checked_at, a.created_at \
+     a.status, a.status_checked_at, a.created_at, a.allow_disconnect, a.launch_args \
      FROM accounts a";
 
 const GROUP_SELECT: &str = "SELECT id, name, color, sort_order FROM groups";
@@ -78,7 +91,11 @@ impl Db {
         conn.busy_timeout(Duration::from_secs(5))?;
         // secure_delete: freed pages (removed cookies, old key wraps) are zeroed, not left behind.
         conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON;")?;
-        Migrations::new(vec![M::up(include_str!("migrations/001_init.sql"))])
+        Migrations::new(vec![
+            M::up(include_str!("migrations/001_init.sql")),
+            M::up(include_str!("migrations/002_account_options.sql")),
+            M::up(include_str!("migrations/003_crashes.sql")),
+        ])
             .to_latest(&mut conn)
             .map_err(|e| AppError::Storage(e.to_string()))?;
         Ok(Db { conn: Mutex::new(conn) })
@@ -174,7 +191,8 @@ impl Db {
     }
 
     /// Applies a UI patch. `color` must be `#rrggbb` or `""` (clear); alias ≤ 64 chars,
-    /// notes ≤ 2000 chars; `group_ids` must exist and replace the current set.
+    /// notes ≤ 2000 chars; `group_ids` must exist and replace the current set; `launch_args`
+    /// blank clears the override (the caller validates the rest).
     /// Bad input → `AppError::Invalid`, unknown id → `NotFound`.
     pub fn update_account(&self, id: i64, patch: &AccountPatch) -> Result<()> {
         let mut c = self.conn();
@@ -198,6 +216,13 @@ impl Db {
         write_meta(&tx, id, &m)?;
         if let Some(ids) = &patch.group_ids {
             replace_groups(&tx, id, ids)?;
+        }
+        if let Some(v) = patch.allow_disconnect {
+            tx.execute("UPDATE accounts SET allow_disconnect = ?2 WHERE id = ?1", params![id, v])?;
+        }
+        if let Some(v) = &patch.launch_args {
+            let v = Some(v.trim()).filter(|v| !v.is_empty());
+            tx.execute("UPDATE accounts SET launch_args = ?2 WHERE id = ?1", params![id, v])?;
         }
         tx.commit()?;
         Ok(())
@@ -320,7 +345,21 @@ impl Db {
         Ok(())
     }
 
-    /// Favourites in order: `(id, name, encrypted target, account ids, in tray, sort order, last used)`.
+    /// A value kept beside the settings under its own key (not `settings`), e.g. a vault blob.
+    pub fn setting_value(&self, key: &str) -> Result<Option<String>> {
+        Ok(self.conn().query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0)).optional()?)
+    }
+
+    /// Sets (Some) or removes (None) a value kept beside the settings.
+    pub fn set_setting_value(&self, key: &str, value: Option<&str>) -> Result<()> {
+        match value {
+            Some(v) => self.conn().execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)", params![key, v])?,
+            None => self.conn().execute("DELETE FROM settings WHERE key = ?1", [key])?,
+        };
+        Ok(())
+    }
+
+    /// Favourites in order:`(id, name, encrypted target, account ids, in tray, sort order, last used)`.
     pub fn favourites(&self) -> Result<Vec<FavouriteRow>> {
         let c = self.conn();
         let mut st = c.prepare(
@@ -395,6 +434,49 @@ impl Db {
         Ok(())
     }
 
+    /// Records a client that ended badly; only the newest 200 are kept.
+    pub fn add_crash(&self, c: &NewCrash) -> Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO crashes (instance_id, account_id, kind, at, uptime_ms, reason, place_id, log_path) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![c.instance_id, c.account_id, c.kind.as_str(), c.at, c.uptime_ms, c.reason, c.place_id, c.log_path],
+        )?;
+        tx.execute("DELETE FROM crashes WHERE id NOT IN (SELECT id FROM crashes ORDER BY id DESC LIMIT ?1)", [MAX_CRASHES])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Newest first.
+    pub fn crashes(&self) -> Result<Vec<Crash>> {
+        let c = self.conn();
+        let mut st = c.prepare(
+            "SELECT id, instance_id, account_id, kind, at, uptime_ms, reason, place_id, log_path IS NOT NULL \
+             FROM crashes ORDER BY id DESC",
+        )?;
+        let rows = st.query_map([], |r| {
+            Ok(Crash {
+                id: r.get(0)?,
+                instance_id: r.get(1)?,
+                account_id: r.get(2)?,
+                kind: CrashKind::parse(&r.get::<_, String>(3)?),
+                at: r.get(4)?,
+                uptime_ms: r.get(5)?,
+                reason: r.get(6)?,
+                place_id: r.get(7)?,
+                has_log: r.get(8)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The client log of a recorded crash (`NotFound` when there is none).
+    pub fn crash_log(&self, id: i64) -> Result<String> {
+        let path: Option<String> = self.conn().query_row("SELECT log_path FROM crashes WHERE id = ?1", [id], |r| r.get(0))?;
+        path.ok_or(AppError::NotFound)
+    }
+
     /// A cached API answer no older than `max_age_ms`, with when it was fetched (unix ms).
     pub fn cache_get(&self, key: &str, max_age_ms: i64, now: i64) -> Result<Option<(String, i64)>> {
         Ok(self
@@ -432,6 +514,8 @@ fn account_row(r: &Row) -> rusqlite::Result<AccountSummary> {
         status: AccountStatus::parse(&r.get::<_, String>(10)?),
         status_checked_at: r.get(11)?,
         created_at: r.get(12)?,
+        allow_disconnect: r.get(13)?,
+        launch_args: r.get(14)?,
     })
 }
 
@@ -622,6 +706,8 @@ mod tests {
             color: Some("#A1B2C3".into()),
             favourite: Some(true),
             group_ids: Some(vec![g2, g1]),
+            allow_disconnect: Some(true),
+            launch_args: Some(" --fast ".into()),
         };
         db.update_account(id, &p).unwrap();
         db.reorder_accounts(&[id, other]).unwrap();
@@ -640,7 +726,8 @@ mod tests {
         assert_eq!((a.status, a.status_checked_at), (AccountStatus::Valid, Some(5)));
         assert_eq!((a.alias.as_str(), a.notes.as_str()), ("farm", "n"));
         assert_eq!(a.color.as_deref(), Some("#a1b2c3"));
-        assert!(a.favourite);
+        assert!(a.favourite && a.allow_disconnect);
+        assert_eq!(a.launch_args.as_deref(), Some("--fast"));
         assert_eq!(a.group_ids, vec![g1, g2]);
         assert_eq!(a.sort_order, 0);
         assert_eq!(db.account_cookie(id).unwrap(), (2, b"new".to_vec()));
@@ -762,6 +849,49 @@ mod tests {
         assert_eq!(db.settings().unwrap(), s);
         db.conn().execute("UPDATE settings SET value = 'nope' WHERE key = 'settings'", []).unwrap();
         assert_eq!(db.settings().unwrap(), Settings::default());
+
+        // Values kept beside the settings leave them alone.
+        assert_eq!(db.setting_value("discord_webhook").unwrap(), None);
+        db.set_setting_value("discord_webhook", Some("00ff")).unwrap();
+        db.save_settings(&s).unwrap();
+        assert_eq!((db.setting_value("discord_webhook").unwrap().as_deref(), db.settings().unwrap()), (Some("00ff"), s));
+        db.set_setting_value("discord_webhook", None).unwrap();
+        assert_eq!(db.setting_value("discord_webhook").unwrap(), None);
+    }
+
+    #[test]
+    fn account_options_and_crashes() {
+        let db = Db::open_in_memory().unwrap();
+        let id = add(&db, 1);
+        let a = db.account(id).unwrap();
+        assert_eq!((a.allow_disconnect, a.launch_args), (false, None));
+        db.update_account(id, &patch(|p| p.launch_args = Some("-x".into()))).unwrap();
+        db.update_account(id, &patch(|p| p.launch_args = Some("  ".into()))).unwrap();
+        assert_eq!(db.account(id).unwrap().launch_args, None);
+
+        let log = r"C:\logs\x.log";
+        for n in 0..205 {
+            db.add_crash(&NewCrash {
+                instance_id: "i",
+                account_id: id,
+                kind: if n % 2 == 0 { CrashKind::Hang } else { CrashKind::Disconnect },
+                at: n,
+                uptime_ms: 5,
+                reason: Some("Reason: 267"),
+                place_id: None,
+                log_path: (n == 204).then_some(log),
+            })
+            .unwrap();
+        }
+        let list = db.crashes().unwrap();
+        assert_eq!(list.len(), 200);
+        assert_eq!((list[0].at, list[0].kind, list[0].has_log), (204, CrashKind::Hang, true));
+        assert_eq!((list[1].kind, list[1].has_log, list[199].at), (CrashKind::Disconnect, false, 5));
+        assert_eq!(db.crash_log(list[0].id).unwrap(), log);
+        assert!(matches!(db.crash_log(list[1].id), Err(AppError::NotFound)));
+        // They go with the account.
+        db.remove_accounts(&[id]).unwrap();
+        assert!(db.crashes().unwrap().is_empty());
     }
 
     #[test]

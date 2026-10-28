@@ -15,6 +15,10 @@ export const qk = {
   join: ["join"],
   instances: ["instances"],
   multi: ["multi"],
+  crashes: ["crashes"],
+  metrics: ["metrics"],
+  bandwidth: ["bandwidth"],
+  discord: ["discord"],
   bulk: ["bulk"],
   game: (placeId: number | null) => ["game", placeId],
   servers: ["servers"],
@@ -44,6 +48,11 @@ export const useFavourites = () => useQuery({ queryKey: qk.favourites, queryFn: 
 
 /** Refreshed by instances://changed. */
 export const useInstances = () => useQuery({ queryKey: qk.instances, queryFn: api.instancesList });
+/** Refreshed by instances://changed (an ending client may add one). */
+export const useCrashes = () => useQuery({ queryKey: qk.crashes, queryFn: api.crashesList });
+/** Polled every 2 s while a caller is mounted and the window is visible. */
+export const useMetrics = () =>
+  useQuery({ queryKey: qk.metrics, queryFn: api.instancesMetrics, staleTime: 0, refetchInterval: 2000, refetchIntervalInBackground: false });
 /** While the lock is wanted but not held, asks again every 5 s (Roblox may have been closed). */
 export const useMultiStatus = () =>
   useQuery({
@@ -52,6 +61,9 @@ export const useMultiStatus = () =>
     refetchInterval: (q) => (q.state.data?.enabled && !q.state.data.active ? 5000 : false),
     refetchIntervalInBackground: false,
   });
+
+/** The Roblox client and its versions; roblox://client replaces it. */
+export const useRobloxClient = () => useQuery({ queryKey: qk.client, queryFn: api.robloxClient });
 
 /** The running or last batch; bulk://progress replaces it, null once dismissed. */
 // A dismissed batch stays hidden when the query is fetched again (bulk_current keeps the last).

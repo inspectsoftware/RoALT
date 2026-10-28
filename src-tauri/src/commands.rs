@@ -128,6 +128,9 @@ pub async fn account_add_login(app: AppHandle, s: State<'_, App>) -> Result<Acco
 
 #[tauri::command]
 pub fn account_update(app: AppHandle, s: State<'_, App>, id: i64, patch: AccountPatch) -> Result<AccountSummary> {
+    if let Some(a) = &patch.launch_args {
+        crate::launcher::launch_args(a)?;
+    }
     s.db.update_account(id, &patch)?;
     accounts_changed(&app);
     s.db.account(id)
@@ -489,21 +492,30 @@ pub async fn launch(
 ) -> Result<LaunchInfo> {
     // Launches go strictly one at a time (DESIGN §6).
     let _single = s.bulk.begin_single_launch()?;
-    Ok(launch_tracked(&app, &s, account_id, target, favourite_id).await?.0)
+    Ok(launch_tracked(&app, &s, account_id, target, favourite_id, None).await?.0)
 }
 
-/// One launch as every caller does it: the multi-instance lock first (it has to be held
-/// before this client starts, or the next one replaces it), and so the shared login files
-/// while protection is on; a dead or challenged cookie recorded on the account; the client
-/// tracked; the favourite marked as used. An account whose client is still running is refused
-/// (a second client would sign it out of the first).
+/// Why launches are refused while `roblox_install` runs.
+pub(crate) const INSTALLING: &str = "Roblox is being installed. Launch again once it is done.";
+
+/// One launch as every caller does it: the launch cooldown (`Bulk::cooldown`: waits until the
+/// launch delay, `delay_ms` or else the setting's, less its 1 s jitter has passed since the
+/// previous launch; a launch that fails before its client starts gives its slot back); stopped
+/// by Kill all (`Bulk::kill`) while waiting, and a client started meanwhile is closed; the multi-instance
+/// lock first (it has to be held before this client starts, or the next one replaces it), and
+/// so the shared login files while protection is on; a dead or challenged cookie recorded on
+/// the account; the client tracked; the favourite marked as used. An account whose client is
+/// still running is refused (a second client would sign it out of the first).
 pub(crate) async fn launch_tracked(
     app: &AppHandle,
     s: &App,
     account_id: i64,
     target: LaunchTarget,
     favourite_id: Option<i64>,
+    delay_ms: Option<u32>,
 ) -> Result<(LaunchInfo, Instance)> {
+    let kills = s.bulk.kills();
+    let killed = || AppError::Invalid("Launch cancelled by Kill all.".into());
     // Claimed until the client is tracked, so a launch from another path (rejoin, tray,
     // batch) can't start the same account meanwhile.
     let Some(_claim) = s.tracker.claim(account_id) else {
@@ -512,13 +524,26 @@ pub(crate) async fn launch_tracked(
         return Err(AppError::Invalid(format!("{name} is already running. Close its client first.")));
     };
     let _busy = s.bulk.begin_launch();
+    // After `_busy`: an install starting now sees this launch, one already running is seen here.
+    if s.update.installing() {
+        return Err(AppError::Invalid(INSTALLING.into()));
+    }
     let v = s.db.settings()?;
+    // Less the jitter's second, so a batch's own jittered wait never adds to it.
+    let gap = Duration::from_millis(u64::from(delay_ms.unwrap_or(v.launch_delay_ms).saturating_sub(1_000)));
+    let (wait, slot) = s.bulk.cooldown(gap);
+    tokio::time::sleep(wait).await;
+    if s.bulk.kills() != kills {
+        s.bulk.release(slot);
+        return Err(killed());
+    }
     retake_multi(s, &v);
     // Holds the shared files until the client is tracked (the poll releases them when idle).
     let launching = s.multi.launching(v.multi_instance && v.protect_shared_login);
     let info = match crate::launcher::launch(s, account_id, &target).await {
         Ok(info) => info,
         Err(e) => {
+            s.bulk.release(slot);
             record_cookie_error(app, s, account_id, &e)?;
             return Err(e);
         }
@@ -526,6 +551,16 @@ pub(crate) async fn launch_tracked(
     let instance = s.tracker.register(&info, target);
     drop(launching);
     instances_changed(app);
+    // Kill all pressed while the ticket was fetched: this client goes too.
+    if s.bulk.kills() != kills {
+        if let Some((pid, started)) = s.tracker.mark_closing(&instance.id) {
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                crate::instances::process::close(pid, started, true, Duration::ZERO)
+            })
+            .await;
+        }
+        return Err(killed());
+    }
     if let Some(f) = favourite_id {
         let _ = s.db.touch_favourite(f, now_ms());
     }
@@ -539,14 +574,18 @@ pub fn notice(app: &AppHandle, error: bool, message: impl Into<String>) {
     let _ = app.emit("app://notice", Notice { error, message: message.into() });
 }
 
-/// The Roblox client RoALT would start (`launcher::client::find`); not installed → path None.
+/// The Roblox client RoALT would start (`launcher::client::find`; not installed → path None),
+/// its version and Roblox's latest (`launcher::update`).
 #[tauri::command]
-pub fn roblox_client() -> RobloxClient {
-    let exe = crate::launcher::client::find().ok();
-    RobloxClient {
-        path: exe.as_ref().map(|e| e.path.display().to_string()),
-        bootstrapper: exe.is_some_and(|e| e.bootstrapper),
-    }
+pub fn roblox_client(app: AppHandle) -> RobloxClient {
+    crate::launcher::update::publish(&app)
+}
+
+/// Downloads Roblox's installer, checks it is signed by Roblox Corporation and runs it
+/// (`launcher::update::install`); progress on `roblox://install`. Refused while a client runs.
+#[tauri::command]
+pub async fn roblox_install(app: AppHandle) -> Result<RobloxClient> {
+    crate::launcher::update::install(&app).await
 }
 
 /// Where the data lives now (see `main::data_dir`).
@@ -743,21 +782,26 @@ pub async fn instance_close(s: State<'_, App>, id: String, force: bool) -> Resul
     s.tracker.get(&id).ok_or(AppError::NotFound)?;
     // Its process already gone: the next poll ends the entry.
     let Some(target) = s.tracker.mark_closing(&id) else { return Ok(()) };
-    let r = close_all(vec![target], force).await?.pop().unwrap_or(Ok(()));
+    let r = close_all(vec![target], force, grace(&s)).await?.pop().unwrap_or(Ok(()));
     if r.is_err() {
         s.tracker.clear_closing(&id);
     }
     r
 }
 
-/// Closes the processes at once (each `process::close` waits up to its grace), so the whole
+/// How long a closed client gets before it is terminated (`settings.close_grace_s`).
+fn grace(s: &App) -> Duration {
+    Duration::from_secs(u64::from(s.db.settings().map_or(5, |v| v.close_grace_s)))
+}
+
+/// Closes the processes at once (each `process::close` waits up to `grace`), so the whole
 /// thing takes one grace period, not one per client. Results in input order.
-async fn close_all(targets: Vec<(u32, Option<u64>)>, force: bool) -> Result<Vec<Result<()>>> {
+async fn close_all(targets: Vec<(u32, Option<u64>)>, force: bool, grace: Duration) -> Result<Vec<Result<()>>> {
     tauri::async_runtime::spawn_blocking(move || {
         std::thread::scope(|sc| {
             let jobs: Vec<_> = targets
                 .into_iter()
-                .map(|(pid, t0)| sc.spawn(move || crate::instances::process::close(pid, t0, force, Duration::from_secs(5))))
+                .map(|(pid, t0)| sc.spawn(move || crate::instances::process::close(pid, t0, force, grace)))
                 .collect();
             jobs.into_iter()
                 .map(|j| j.join().unwrap_or_else(|_| Err(AppError::Internal("close panicked".into()))))
@@ -778,7 +822,7 @@ pub(crate) async fn close_running(s: &App, force: bool) -> Result<()> {
     let running: Vec<Instance> = s.tracker.list().into_iter().filter(|i| i.state != InstanceState::Exited).collect();
     let (ids, targets): (Vec<String>, Vec<_>) =
         running.into_iter().filter_map(|i| Some((i.id.clone(), s.tracker.mark_closing(&i.id)?))).unzip();
-    for (id, r) in ids.iter().zip(close_all(targets, force).await?) {
+    for (id, r) in ids.iter().zip(close_all(targets, force, grace(s)).await?) {
         if let Err(e) = r {
             log::warn!("could not close Roblox client of instance {id}: {e}");
             s.tracker.clear_closing(id);
@@ -787,26 +831,123 @@ pub(crate) async fn close_running(s: &App, force: bool) -> Result<()> {
     Ok(())
 }
 
-/// Sets one client's limits (CPU cap, efficiency mode). A client still behind its
-/// bootstrapper gets them once it is found.
-#[tauri::command]
-pub async fn instance_set_limits(app: AppHandle, s: State<'_, App>, id: String, limits: Limits) -> Result<()> {
-    if limits.cpu_cap.is_some_and(|c| !(1..=100).contains(&c)) {
+/// Logical processors (for auto-spread; affinity masks cover at most 64).
+pub fn cores() -> u32 {
+    std::thread::available_parallelism().map_or(1, |n| n.get() as u32)
+}
+
+/// Limits the user can set: a CPU cap of 1-100 %, a trim every 0-1440 minutes, at least one core.
+fn check_limits(l: &Limits) -> Result<()> {
+    if l.cpu_cap.is_some_and(|c| !(1..=100).contains(&c)) {
         return Err(AppError::Invalid("The CPU limit must be between 1 and 100 %.".into()));
     }
+    if l.trim_every_min.is_some_and(|m| m > 24 * 60) {
+        return Err(AppError::Invalid("Trimming can be at most once a day apart.".into()));
+    }
+    if l.affinity == Some(0) {
+        return Err(AppError::Invalid("Pick at least one CPU core.".into()));
+    }
+    Ok(())
+}
+
+/// Sets one client's own limits (CPU cap, efficiency mode, trim interval, cores); they win
+/// over the adaptive manager's and fill in the defaults (`limits::plan`). A client still behind
+/// its bootstrapper gets them once it is found.
+#[tauri::command]
+pub async fn instance_set_limits(app: AppHandle, s: State<'_, App>, id: String, limits: Limits) -> Result<()> {
+    check_limits(&limits)?;
     let (prev, client) = s.tracker.set_limits(&id, limits).ok_or(AppError::NotFound)?;
     instances_changed(&app);
-    let Some((pid, t0)) = client else { return Ok(()) };
+    if client.is_none() {
+        return Ok(());
+    }
     let app2 = app.clone();
-    let r = tauri::async_runtime::spawn_blocking(move || app2.state::<App>().limiter.apply(&id, pid, t0, limits).map_err(|e| (id, e)))
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let r = tauri::async_runtime::spawn_blocking(move || {
+        let s = app2.state::<App>();
+        let v = s.db.settings().unwrap_or_default();
+        let fg = if v.adaptive.enabled { crate::instances::process::foreground_pid() } else { None };
+        let plan = crate::instances::limits::plan(&s.tracker.clients(), &v, fg, cores());
+        match plan.into_iter().find(|c| c.0 == id) {
+            Some((_, pid, t0, l)) => s.limiter.apply(&id, pid, t0, l).map_err(|e| (id, e)),
+            None => Ok(()),
+        }
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?;
     if let Err((id, e)) = r {
         s.tracker.set_limits(&id, prev);
         instances_changed(&app);
         return Err(e);
     }
     Ok(())
+}
+
+/// Opts one running client in or out of anti-AFK.
+#[tauri::command]
+pub fn instance_set_anti_afk(app: AppHandle, s: State<'_, App>, id: String, enabled: bool) -> Result<()> {
+    if !s.tracker.set_anti_afk(&id, enabled) {
+        return Err(AppError::NotFound);
+    }
+    instances_changed(&app);
+    Ok(())
+}
+
+/// Pages one client's working set out now ("Trim now").
+#[tauri::command]
+pub async fn instance_trim(s: State<'_, App>, id: String) -> Result<()> {
+    s.tracker.get(&id).ok_or(AppError::NotFound)?;
+    let (_, pid, t0, _) = s
+        .tracker
+        .clients()
+        .into_iter()
+        .find(|c| c.0 == id)
+        .ok_or_else(|| AppError::Invalid("That client hasn't started yet, or has closed.".into()))?;
+    tauri::async_runtime::spawn_blocking(move || crate::instances::limits::trim(pid, t0))
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?
+}
+
+/// CPU, memory and IO of each running client (sampled at most every 2 s).
+#[tauri::command]
+pub async fn instances_metrics(app: AppHandle) -> Result<Vec<ClientMetrics>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let s = app.state::<App>();
+        s.metrics.sample(&s.tracker.clients())
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))
+}
+
+/// When the bandwidth policy was last applied (the boot it was applied in, as fetched_at).
+const QOS_KEY: &str = "qos:applied";
+
+pub(crate) fn bandwidth(s: &App) -> Result<BandwidthStatus> {
+    let kbps = s.db.settings()?.bandwidth_kbps;
+    let now = now_ms();
+    let boot = crate::instances::qos::boot_ms(now);
+    let applied = s.db.cache_get(QOS_KEY, i64::MAX / 2, now)?.is_some_and(|(_, at)| crate::instances::qos::applied_this_boot(at, boot));
+    Ok(BandwidthStatus { kbps, active: kbps > 0 && applied })
+}
+
+/// The Roblox bandwidth limit and whether it is in force (no admin rights needed).
+#[tauri::command]
+pub fn bandwidth_status(s: State<'_, App>) -> Result<BandwidthStatus> {
+    bandwidth(&s)
+}
+
+/// Sets the outbound limit for all Roblox clients (kbit/s; 0 removes it) as a Windows QoS
+/// policy: Windows asks for admin rights first (`instances::qos::apply`). Saved only once set.
+#[tauri::command]
+pub async fn bandwidth_apply(s: State<'_, App>, kbps: u32) -> Result<BandwidthStatus> {
+    crate::instances::qos::script(kbps)?;
+    tauri::async_runtime::spawn_blocking(move || crate::instances::qos::apply(kbps))
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))??;
+    let mut v = s.db.settings()?;
+    v.bandwidth_kbps = kbps;
+    s.db.save_settings(&v)?;
+    s.db.cache_put(QOS_KEY, "", crate::instances::qos::boot_ms(now_ms()))?;
+    bandwidth(&s)
 }
 
 #[tauri::command]
@@ -860,23 +1001,62 @@ pub fn multi_instance_set(s: State<'_, App>, enabled: bool) -> Result<MultiInsta
 /// the multi-instance lock if it is enabled.
 #[tauri::command]
 pub async fn roblox_close_all(s: State<'_, App>, force: bool) -> Result<MultiInstanceStatus> {
+    close_roblox(&s, force, false).await
+}
+
+/// Panic button (sidebar, tray "Kill all Roblox"): the running batch stops after its current
+/// step, every client counts as closed by the user (no rejoin or restart follows, also for ones
+/// waiting their turn), and every Roblox process is terminated at once, tracked or not.
+#[tauri::command]
+pub async fn panic_kill(s: State<'_, App>) -> Result<MultiInstanceStatus> {
+    kill_all(&s).await
+}
+
+pub(crate) async fn kill_all(s: &App) -> Result<MultiInstanceStatus> {
+    log::info!("kill all Roblox");
+    s.bulk.kill();
+    s.tracker.mark_all_closing();
+    close_roblox(s, true, true).await
+}
+
+/// `keep_closing` (Kill all): a client that couldn't be closed still counts as closed by the
+/// user, so it is never rejoined or restarted when it ends later.
+async fn close_roblox(s: &App, force: bool, keep_closing: bool) -> Result<MultiInstanceStatus> {
     for i in s.tracker.list() {
         s.tracker.mark_closing(&i.id);
     }
     let procs = crate::instances::process::roblox_processes();
     let targets = procs.iter().map(|p| (p.pid, Some(p.start_time))).collect();
-    for (p, r) in procs.iter().zip(close_all(targets, force).await?) {
+    for (p, r) in procs.iter().zip(close_all(targets, force, grace(s)).await?) {
         if let Err(e) = r {
             log::warn!("could not close Roblox process {}: {e}", p.pid);
-            // Still running: its exit stays unexpected.
-            for i in s.tracker.list().iter().filter(|i| i.pid == p.pid && i.state != InstanceState::Exited) {
+            // Still running: its exit stays unexpected (not after Kill all).
+            for i in s.tracker.list().iter().filter(|i| !keep_closing && i.pid == p.pid && i.state != InstanceState::Exited) {
                 s.tracker.clear_closing(&i.id);
             }
         }
     }
     let v = s.db.settings()?;
-    retake_multi(&s, &v);
+    retake_multi(s, &v);
     Ok(s.multi.status(v.multi_instance, v.protect_shared_login))
+}
+
+/// Clients that crashed, were disconnected or hung, newest first (the last 200).
+#[tauri::command]
+pub fn crashes_list(s: State<'_, App>) -> Result<Vec<Crash>> {
+    s.db.crashes()
+}
+
+/// Opens a recorded crash's client log in the default app (opener plugin, Rust side). The path
+/// comes from the database, never from the UI.
+#[tauri::command]
+pub fn crash_open_log(app: AppHandle, s: State<'_, App>, id: i64) -> Result<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let path = s.db.crash_log(id)?;
+    if !Path::new(&path).is_file() {
+        return Err(AppError::Invalid("That client log is gone; Roblox deletes old logs.".into()));
+    }
+    app.opener().open_path(path, None::<&str>).map_err(|e| AppError::Internal(e.to_string()))
 }
 
 const FAVOURITE_AAD: &[u8] = b"roalt.favourite";
@@ -996,6 +1176,27 @@ pub fn lock_vault(app: &AppHandle) {
     s.vault.lock();
     let _ = app.emit("vault://locked", ());
     crate::tray::refresh(app);
+}
+
+// ---------- discord ----------
+
+/// Whether a webhook is set, and its id's last digits (never the URL). `Locked` while locked.
+#[tauri::command]
+pub fn discord_get(s: State<'_, App>) -> Result<DiscordStatus> {
+    crate::discord::status(&s)
+}
+
+/// Stores a Discord webhook URL in the vault (only discord.com / discordapp.com webhooks);
+/// None or "" removes it.
+#[tauri::command]
+pub fn discord_set(s: State<'_, App>, url: Option<String>) -> Result<DiscordStatus> {
+    crate::discord::set(&s, url.as_deref())
+}
+
+/// Posts a test message to the webhook.
+#[tauri::command]
+pub async fn discord_test(s: State<'_, App>) -> Result<()> {
+    crate::discord::test(&s).await
 }
 
 // ---------- groups ----------
@@ -1134,7 +1335,61 @@ pub fn settings_set(s: State<'_, App>, patch: SettingsPatch) -> Result<Settings>
         v.cache_minutes = c;
     }
     if let Some(r) = patch.auto_rejoin { v.auto_rejoin = r }
+    if let Some(r) = patch.auto_restart_on_crash { v.auto_restart_on_crash = r }
+    if let Some(n) = patch.breaker_max {
+        if !(1..=20).contains(&n) {
+            return Err(AppError::Invalid("The restart limit must be between 1 and 20.".into()));
+        }
+        v.breaker_max = n;
+    }
+    if let Some(m) = patch.breaker_window_min {
+        if !(1..=240).contains(&m) {
+            return Err(AppError::Invalid("The restart window must be between 1 minute and 4 hours.".into()));
+        }
+        v.breaker_window_min = m;
+    }
+    if let Some(g) = patch.close_grace_s {
+        if !(1..=60).contains(&g) {
+            return Err(AppError::Invalid("The close grace must be between 1 and 60 seconds.".into()));
+        }
+        v.close_grace_s = g;
+    }
+    if let Some(a) = patch.launch_args {
+        crate::launcher::launch_args(&a)?;
+        v.launch_args = a.trim().to_owned();
+    }
     if let Some(c) = patch.close_to_tray { v.close_to_tray = c }
+    if let Some(m) = patch.mem_restart_mb {
+        if m != 0 && !(512..=65_536).contains(&m) {
+            return Err(AppError::Invalid("The memory limit must be 0 (off) or 512 to 65 536 MB.".into()));
+        }
+        v.mem_restart_mb = m;
+    }
+    if let Some(m) = patch.trim_every_min {
+        if m > 24 * 60 {
+            return Err(AppError::Invalid("Trimming can be at most once a day apart.".into()));
+        }
+        v.trim_every_min = m;
+    }
+    if let Some(a) = patch.auto_spread { v.auto_spread = a }
+    if let Some(a) = patch.adaptive {
+        check_limits(&a.background)?;
+        v.adaptive = a;
+    }
+    if let Some(a) = patch.anti_afk {
+        // Roblox disconnects after 20 idle minutes.
+        if !(1..=19).contains(&a.interval_min) {
+            return Err(AppError::Invalid("Anti-AFK must press a key every 1 to 19 minutes.".into()));
+        }
+        v.anti_afk = a;
+    }
+    if let Some(d) = patch.discord {
+        if d.status_every_min != 0 && !(5..=24 * 60).contains(&d.status_every_min) {
+            return Err(AppError::Invalid("The status summary must be off (0) or every 5 minutes to 24 hours.".into()));
+        }
+        v.discord = d;
+    }
+    if let Some(a) = patch.auto_update { v.auto_update = a }
     if let Some(d) = patch.launch_delay_ms {
         if !(2_000..=60_000).contains(&d) {
             return Err(AppError::Invalid("The launch delay must be between 2 and 60 seconds.".into()));

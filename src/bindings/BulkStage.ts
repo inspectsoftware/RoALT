@@ -3,4 +3,4 @@
 /**
  * One account's progress. After `Starting` it mirrors its client (`Instance`).
  */
-export type BulkStage = { "kind": "queued" } | { "kind": "ticket" } | { "kind": "starting" } | { "kind": "joining" } | { "kind": "inGame" } | { "kind": "failed", message: string, } | { "kind": "cancelled" };
+export type BulkStage = { "kind": "queued" } | { "kind": "ticket" } | { "kind": "starting" } | { "kind": "joining" } | { "kind": "inGame" } | { "kind": "done" } | { "kind": "failed", message: string, } | { "kind": "cancelled" };

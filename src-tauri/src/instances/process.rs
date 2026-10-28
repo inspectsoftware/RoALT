@@ -15,7 +15,10 @@ use windows::Win32::System::Threading::{
     GetProcessTimes, OpenProcess, PROCESS_ACCESS_RIGHTS, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
     PROCESS_TERMINATE, TerminateProcess, WaitForSingleObject,
 };
-use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId, PostMessageW, WM_CLOSE};
+use windows::Win32::UI::WindowsAndMessaging::{
+    EnumWindows, GW_OWNER, GetForegroundWindow, GetWindow, GetWindowThreadProcessId, IsHungAppWindow, IsIconic, IsWindowVisible,
+    PostMessageW, WM_CLOSE,
+};
 use windows::core::{BOOL, Owned};
 
 use crate::error::{AppError, Result};
@@ -122,6 +125,75 @@ fn post_close(pid: u32) {
     let _ = unsafe { EnumWindows(Some(each), LPARAM(pid as isize)) };
 }
 
+/// A visible top-level window of `pid` is not responding (`IsHungAppWindow`: it handled no
+/// messages for 5 s). Window queries only: no process handle is opened.
+pub fn hung(pid: u32) -> bool {
+    struct Find {
+        pid: u32,
+        hung: bool,
+    }
+    unsafe extern "system" fn each(hwnd: HWND, data: LPARAM) -> BOOL {
+        // SAFETY: `data` is the `&mut Find` passed to EnumWindows below, alive for the whole call.
+        let f = unsafe { &mut *(data.0 as *mut Find) };
+        let mut owner = 0u32;
+        // SAFETY: `hwnd` comes from EnumWindows; these calls only read the window's state.
+        let hung = unsafe {
+            GetWindowThreadProcessId(hwnd, Some(&raw mut owner));
+            owner == f.pid && IsWindowVisible(hwnd).as_bool() && IsHungAppWindow(hwnd).as_bool()
+        };
+        f.hung |= hung;
+        (!hung).into()
+    }
+    let mut f = Find { pid, hung: false };
+    // SAFETY: `each` has the WNDENUMPROC signature; `f` outlives the call. Stopping early makes
+    // EnumWindows report an error, which says nothing here.
+    let _ = unsafe { EnumWindows(Some(each), LPARAM(&raw mut f as isize)) };
+    f.hung
+}
+
+/// The client's main window: its first visible top-level window without an owner (window
+/// queries only), and whether it is minimized.
+pub fn main_window(pid: u32) -> Option<(HWND, bool)> {
+    struct Find {
+        pid: u32,
+        found: Option<HWND>,
+    }
+    unsafe extern "system" fn each(hwnd: HWND, data: LPARAM) -> BOOL {
+        // SAFETY: `data` is the `&mut Find` passed to EnumWindows below, alive for the whole call.
+        let f = unsafe { &mut *(data.0 as *mut Find) };
+        let mut owner = 0u32;
+        // SAFETY: `hwnd` comes from EnumWindows; these calls only read the window's state.
+        let main = unsafe {
+            GetWindowThreadProcessId(hwnd, Some(&raw mut owner));
+            owner == f.pid && IsWindowVisible(hwnd).as_bool() && GetWindow(hwnd, GW_OWNER).is_err()
+        };
+        if main {
+            f.found = Some(hwnd);
+        }
+        (!main).into()
+    }
+    let mut f = Find { pid, found: None };
+    // SAFETY: `each` has the WNDENUMPROC signature; `f` outlives the call. Stopping early makes
+    // EnumWindows report an error, which says nothing here.
+    let _ = unsafe { EnumWindows(Some(each), LPARAM(&raw mut f as isize)) };
+    // SAFETY: reads one window's state.
+    f.found.map(|h| (h, unsafe { IsIconic(h) }.as_bool()))
+}
+
+/// The process owning the window in front (window queries only), for the adaptive manager.
+pub fn foreground_pid() -> Option<u32> {
+    let mut pid = 0u32;
+    // SAFETY: reads which window is in front and its owner into a local; no handle is opened.
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_invalid() {
+            return None;
+        }
+        GetWindowThreadProcessId(hwnd, Some(&raw mut pid));
+    }
+    (pid != 0).then_some(pid)
+}
+
 pub(super) fn open(pid: u32, rights: PROCESS_ACCESS_RIGHTS) -> Option<Owned<HANDLE>> {
     // SAFETY: on success the handle is ours; Owned closes it on drop.
     unsafe { OpenProcess(rights, false, pid).ok().map(|h| Owned::new(h)) }
@@ -217,6 +289,18 @@ mod tests {
         close(child.id(), None, false, Duration::from_millis(200)).unwrap();
         assert!(begun.elapsed() >= Duration::from_millis(400));
         assert_eq!(child.try_wait().unwrap().and_then(|s| s.code()), Some(1));
+    }
+
+    #[test]
+    fn windowless_and_missing_processes_are_not_hung() {
+        let mut child = sleeper();
+        assert!(!hung(child.id()));
+        assert!(!hung(std::process::id()));
+        assert!(!hung(u32::MAX));
+        assert_eq!(main_window(child.id()), None);
+        assert_eq!(main_window(u32::MAX), None);
+        close(child.id(), None, true, Duration::from_secs(5)).unwrap();
+        child.wait().unwrap();
     }
 
     #[test]

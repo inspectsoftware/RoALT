@@ -24,6 +24,8 @@ pub struct LogFacts {
     pub disconnected: bool,
     /// That disconnect was the player's own (`client_initiated`: Leave, or signed in elsewhere).
     pub left: bool,
+    /// What the disconnect line said (`reason_of`: plain text only, no prefix).
+    pub reason: Option<String>,
     /// `challengedByGcs`.
     pub challenged: bool,
     /// Closed because another client started (EventWaitResultUpdate then a close request).
@@ -120,12 +122,17 @@ pub fn parse_line(line: &str, facts: &mut LogFacts) {
             facts.in_game = false;
             facts.disconnected = false;
             facts.left = false;
+            facts.reason = None;
         }
     } else if line.contains("[FLog::Network] Replicator created") || line.contains("[FLog::Network] serverId:") {
         facts.in_game = true;
-    } else if DISCONNECTS.iter().any(|m| line.contains(m)) {
+    } else if let Some(m) = DISCONNECTS.iter().find(|m| line.contains(*m)) {
         facts.disconnected = true;
         facts.left |= client_initiated(line);
+        // The first line that names a reason; "Time to disconnect ..." names none.
+        if !facts.reason.as_deref().is_some_and(names_reason) {
+            facts.reason = reason_of(line, m).or(facts.reason.take());
+        }
     } else if line.contains("challengedByGcs") {
         facts.challenged = true;
     } else if line.contains("[FLog::GameJoinLoadTime] Report game_join_loadtime:") {
@@ -137,6 +144,20 @@ pub fn parse_line(line: &str, facts: &mut LogFacts) {
     } else if line.contains("Received close main window request") && facts.signalled {
         facts.replaced = true;
     }
+}
+
+/// A disconnect line from its marker on, for crash diagnostics: letters, digits, spaces and
+/// `.,:;()_-` only (anything else ends it), at most 160 characters. Never a ticket: those are
+/// on `gameinfo:` lines, which are no disconnect lines.
+fn reason_of(line: &str, marker: &str) -> Option<String> {
+    let rest = &line[line.find(marker)?..];
+    let end = rest.find(|c: char| !(c.is_ascii_alphanumeric() || " .,:;()_-".contains(c))).unwrap_or(rest.len());
+    let text: String = rest[..end].trim_end().chars().take(160).collect();
+    (!text.is_empty()).then_some(text)
+}
+
+fn names_reason(text: &str) -> bool {
+    text.to_ascii_lowercase().contains("reason")
 }
 
 fn tracker_id(line: &str) -> Option<i64> {
@@ -240,7 +261,11 @@ mod tests {
                 | "tray_user_exit" | "tray_spawned" => {}
                 other => panic!("new fixture sample {other}: say here what it means"),
             }
-            assert_eq!(parsed(&[l]), want, "{key}");
+            let mut got = parsed(&[l]);
+            // Every disconnect keeps its line's text, from the marker on (reason_of).
+            assert_eq!(got.reason.is_some(), want.disconnected, "{key}");
+            got.reason = None;
+            assert_eq!(got, want, "{key}");
         }
     }
 
@@ -360,6 +385,30 @@ mod tests {
         // A 285 in the timestamp, seconds or thread id is not the reason.
         let prefixed = parsed(&["2026-10-17T18:16:31.285Z,285.100000,a285,6,Info [FLog::Network] Sending disconnect with reason: 267"]);
         assert!(prefixed.disconnected && !prefixed.left);
+    }
+
+    #[test]
+    fn the_disconnect_reason_is_kept_as_plain_text() {
+        let reason = |lines: &[&str]| {
+            let mut f = LogFacts::default();
+            lines.iter().for_each(|l| parse_line(&line(l), &mut f));
+            f.reason
+        };
+        assert_eq!(reason(&["[FLog::Network] Sending disconnect with reason: 267"]).as_deref(), Some("Sending disconnect with reason: 267"));
+        // A line naming no reason gives way to one that does, not the other way round.
+        let both = ["[FLog::Network] Time to disconnect replication data: 0.01", "[FLog::Network] Disconnection Notification. Reason: 277"];
+        assert_eq!(reason(&both).as_deref(), Some("Disconnection Notification. Reason: 277"));
+        let shutdown = "[FLog::Network] Connection closed by server for reason: RCC: 288 (DisconnectServerShutdown)";
+        assert_eq!(reason(&[shutdown, both[0]]).as_deref(), Some("Connection closed by server for reason: RCC: 288 (DisconnectServerShutdown)"));
+        // Anything unusual ends it, and it is capped.
+        let odd = format!("[FLog::Network] Lost connection with reason : kicked \"x\" {}", "y".repeat(400));
+        assert_eq!(reason(&[&odd]).as_deref(), Some("Lost connection with reason : kicked"));
+        let long = format!("[FLog::Network] Lost connection with reason : {}", "y".repeat(400));
+        assert_eq!(reason(&[&long]).unwrap().len(), 160);
+        // A new join forgets it.
+        let mut f = parsed(&[&line("[FLog::Network] Sending disconnect with reason: 267")]);
+        parse_line(&line(&format!("[FLog::Output] ! Joining game '{JOB}' place {PLACE} at 10.9.2.90")), &mut f);
+        assert_eq!(f.reason, None);
     }
 }
 

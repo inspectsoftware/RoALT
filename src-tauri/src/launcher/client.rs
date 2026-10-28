@@ -36,14 +36,19 @@ pub fn find() -> Result<ClientExe> {
     Ok(ClientExe { bootstrapper: !is_player(&path), path })
 }
 
-/// Starts the client with the URI as its only argument (raw: no quoting, it contains no
-/// spaces), in its own folder, and closes the process handle at once (Roblox's anti-cheat has
-/// flagged long-held handles). Returns the PID and its start time, read while our handle still
-/// reserves the PID (0: already gone). The URI is never logged.
-pub fn start(exe: &ClientExe, uri: &Secret) -> Result<(u32, u64)> {
+/// Starts the client with the URI as its first argument, then `extra` (`launcher::launch_args`),
+/// all raw: no quoting, none contains spaces or quotes. In its own folder; the process handle
+/// is closed at once (Roblox's anti-cheat has flagged long-held handles). Returns the PID and
+/// its start time, read while our handle still reserves the PID (0: already gone). The URI
+/// and the arguments are never logged.
+pub fn start(exe: &ClientExe, uri: &Secret, extra: &[String]) -> Result<(u32, u64)> {
     let dir = exe.path.parent().ok_or_else(|| AppError::Internal("Roblox's folder is unknown.".into()))?;
-    let child = Command::new(&exe.path)
-        .raw_arg(uri.expose())
+    let mut cmd = Command::new(&exe.path);
+    cmd.raw_arg(uri.expose());
+    for a in extra {
+        cmd.raw_arg(a);
+    }
+    let child = cmd
         .current_dir(dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -67,6 +72,24 @@ fn handler_exe(command: &str) -> Option<PathBuf> {
         },
     };
     (!exe.is_empty()).then(|| PathBuf::from(exe))
+}
+
+/// A bootstrapper owns this install, so Roblox's installer must not run over it: `exe` is a
+/// bootstrapper, sits under a `Bloxstrap`/`Fishstrap` folder (they set `clientExe` to their own
+/// `Versions` copy), or the `roblox-player` protocol handler isn't RobloxPlayerBeta.exe.
+pub fn managed_by_bootstrapper(exe: &ClientExe) -> bool {
+    let handler = [
+        (HKEY_CURRENT_USER, r"Software\Classes\roblox-player\shell\open\command"),
+        (HKEY_CLASSES_ROOT, r"roblox-player\shell\open\command"),
+    ]
+    .into_iter()
+    .filter_map(|(root, key)| handler_exe(&reg_string(root, key, None)?))
+    .find(|p| p.is_file());
+    exe.bootstrapper || in_bootstrapper_folder(&exe.path) || handler.is_some_and(|h| !is_player(&h))
+}
+
+fn in_bootstrapper_folder(path: &Path) -> bool {
+    path.components().any(|c| ["bloxstrap", "fishstrap"].iter().any(|b| c.as_os_str().eq_ignore_ascii_case(b)))
 }
 
 fn is_player(path: &Path) -> bool {
@@ -112,6 +135,10 @@ mod tests {
 
         assert!(is_player(Path::new(roblox)) && is_player(Path::new(r"D:\robloxplayerbeta.EXE")));
         assert!(!is_player(Path::new(bloxstrap)) && !is_player(Path::new(r"C:\RobloxPlayerInstaller.exe")));
+
+        assert!(in_bootstrapper_folder(Path::new(r"C:\Users\you\AppData\Local\Bloxstrap\Versions\version-9ac8595712b447a7\RobloxPlayerBeta.exe")));
+        assert!(in_bootstrapper_folder(Path::new(r"D:\FISHSTRAP\Versions\x\RobloxPlayerBeta.exe")));
+        assert!(!in_bootstrapper_folder(Path::new(roblox)));
     }
 
     #[test]
@@ -127,10 +154,11 @@ mod tests {
         let system = std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
         let exe = ClientExe { path: system.join(r"System32\cmd.exe"), bootstrapper: true };
         let out = std::env::temp_dir().join(format!("roalt-test-{}.txt", uuid::Uuid::new_v4()));
-        // Kept alive a second so its start time is read before it exits.
-        let arg = Secret::new(format!("/c cd > \"{}\" & ping -n 2 127.0.0.1 >nul", out.display()));
+        // Kept alive a second so its start time is read before it exits. The extra arguments
+        // follow the first one, space-separated.
+        let arg = Secret::new(format!("/c cd > \"{}\" & ping -n", out.display()));
 
-        let (pid, started) = start(&exe, &arg).unwrap();
+        let (pid, started) = start(&exe, &arg, &["2".into(), "127.0.0.1".into(), ">nul".into()]).unwrap();
         assert!(pid > 0 && started > 0);
         let deadline = Instant::now() + Duration::from_secs(10);
         let written = loop {
@@ -144,6 +172,6 @@ mod tests {
         assert!(written.trim().eq_ignore_ascii_case(&system.join("System32").to_string_lossy()), "{written}");
 
         let missing = ClientExe { path: system.join(r"System32\roalt-no-such.exe"), bootstrapper: false };
-        assert!(matches!(start(&missing, &arg), Err(AppError::Internal(_))));
+        assert!(matches!(start(&missing, &arg, &[]), Err(AppError::Internal(_))));
     }
 }

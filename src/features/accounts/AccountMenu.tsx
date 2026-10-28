@@ -64,6 +64,11 @@ export function AccountMenu({ at, onClose, selection, canLaunch, onLaunch, onVal
         ["copy", "Copy user ID", () => clip(String(a.userId), "User ID copied")],
         null,
         ["star", a.favourite ? "Remove from favourites" : "Add to favourites", () => update.mutate({ id: a.id, patch: { favourite: !a.favourite } })],
+        [
+          "check",
+          a.allowDisconnect ? "Stop allowing disconnects" : "Allow disconnects",
+          () => update.mutate({ id: a.id, patch: { allowDisconnect: !a.allowDisconnect } }),
+        ],
         ["refresh", many ? `Validate ${plural(ids.length, "account")}` : "Validate", () => onValidate(ids)],
         ["trash", many ? `Remove ${plural(ids.length, "account")}…` : "Remove…", () => onRemove(ids)],
       ]

@@ -10,13 +10,14 @@ import { describeTarget } from "./target";
 const STEPS = ["TKT", "RUN", "JOIN", "IN"];
 type Kind = Exclude<BulkStage["kind"], "failed">;
 /** The step in progress; 4 is all done, -1 none. */
-const AT: Record<Kind, number> = { queued: -1, ticket: 0, starting: 1, joining: 2, inGame: 4, cancelled: -1 };
+const AT: Record<Kind, number> = { queued: -1, ticket: 0, starting: 1, joining: 2, inGame: 4, done: 4, cancelled: -1 };
 const NOTE: Record<Kind, string> = {
   queued: "queued",
   ticket: "getting ticket",
   starting: "starting client",
   joining: "joining server",
   inGame: "in game",
+  done: "done · disconnected",
   cancelled: "cancelled",
 };
 
@@ -28,8 +29,8 @@ function steps(stage: BulkStage, started: boolean, done: boolean) {
 }
 
 /** A started client's stage from its tracked instance (as the backend mirrors it), so rows keep
- * moving after the batch itself stopped. */
-function stageOf(i: Instance): BulkStage {
+ * moving after the batch itself stopped. `allowDisconnect`: its account's setting. */
+function stageOf(i: Instance, allowDisconnect: boolean): BulkStage {
   // As the backend's mirror_item: these notes fail the item whatever the state.
   if (i.note === "Signed in as another account" || i.note === "Roblox wants a human check") return { kind: "failed", message: i.note };
   switch (i.state) {
@@ -38,7 +39,7 @@ function stageOf(i: Instance): BulkStage {
     case "inGame":
       return { kind: i.state };
     case "disconnected":
-      return { kind: "failed", message: i.note ?? "Disconnected" };
+      return allowDisconnect ? { kind: "done" } : { kind: "failed", message: i.note ?? "Disconnected" };
     case "exited":
       return { kind: "failed", message: i.note ?? "Closed" };
   }
@@ -65,11 +66,13 @@ export function BatchSection({ accounts, onPick }: { accounts: AccountSummary[];
     const running = item.stage.kind === "starting" || item.stage.kind === "joining" || item.stage.kind === "inGame";
     // Only ended clients leave the tracker; while the batch runs the backend already says so,
     // and a progress event may arrive before the instance list catches up.
-    const stage = inst ? stageOf(inst) : running && p.done && instances && item.instanceId ? closed : item.stage;
+    const stage = inst ? stageOf(inst, own(item)?.allowDisconnect ?? false) : running && p.done && instances && item.instanceId ? closed : item.stage;
     return { ...item, stage, job: inst?.jobId ?? null };
   });
   const n = items.length;
-  const inGame = items.filter((i) => i.stage.kind === "inGame").length;
+  // Allow-disconnect accounts that disconnected are done, not failed.
+  const ok = items.filter((i) => i.stage.kind === "inGame" || i.stage.kind === "done").length;
+  const done = items.some((i) => i.stage.kind === "done");
   const failed = items.filter((i) => i.stage.kind === "failed").length;
   const rest = items
     .filter((i) => i.stage.kind === "cancelled" || (i.stage.kind === "failed" && !i.instanceId))
@@ -104,14 +107,14 @@ export function BatchSection({ accounts, onPick }: { accounts: AccountSummary[];
           )}
         </div>
         <div className="flex items-baseline gap-2" role="status">
-          <span className="mono text-[26px] font-medium">{inGame}/{n}</span>
+          <span className="mono text-[26px] font-medium">{ok}/{n}</span>
           <span className="text-dim">
-            in game{failed ? ` · ${failed} failed` : ""}
+            {done ? "in game / done" : "in game"}{failed ? ` · ${failed} failed` : ""}
             {p.done ? " · finished" : ""}
           </span>
         </div>
         <div className="h-0.5 bg-line">
-          <div className="h-0.5 bg-accent-text transition-[width] duration-500" style={{ width: `${(inGame / (n || 1)) * 100}%` }} />
+          <div className="h-0.5 bg-accent-text transition-[width] duration-500" style={{ width: `${(ok / (n || 1)) * 100}%` }} />
         </div>
         {p.stopped && (
           <div className="flex flex-col items-start gap-2">

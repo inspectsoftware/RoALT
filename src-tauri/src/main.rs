@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod discord;
 mod error;
 mod instances;
 mod launcher;
@@ -36,7 +37,10 @@ pub struct App {
     pub tracker: instances::Tracker,
     pub multi: instances::multi::Multi,
     pub limiter: instances::limits::Limiter,
+    pub metrics: instances::metrics::Sampler,
     pub bulk: launcher::bulk::Bulk,
+    pub discord: discord::Discord,
+    pub update: launcher::update::Updater,
 }
 
 impl App {
@@ -226,9 +230,9 @@ fn spawn_auto_lock(handle: AppHandle) {
             }
             // Using a Roblox window (signing in, a session) is activity too: its cookie is
             // encrypted when it closes, which needs the vault open. So is a client auto-rejoin
-            // follows: rejoining needs its cookie.
+            // or auto-restart follows: relaunching needs its cookie.
             if handle.webview_windows().keys().any(|l| l.starts_with("session-") || l.starts_with("login-"))
-                || (s.tracker.any_running() && s.db.settings().is_ok_and(|v| v.auto_rejoin))
+                || (s.tracker.any_running() && s.db.settings().is_ok_and(|v| v.auto_rejoin || v.auto_restart_on_crash))
             {
                 s.vault.touch();
                 continue;
@@ -299,7 +303,10 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
         tracker: instances::Tracker::new(),
         multi,
         limiter: instances::limits::Limiter::new(),
+        metrics: instances::metrics::Sampler::new(),
         bulk: launcher::bulk::Bulk::new(),
+        discord: discord::Discord::new(),
+        update: launcher::update::Updater::new(),
     });
     if let Err(e) = tray::setup(app.handle()) {
         log::warn!("no tray icon: {e}");
@@ -312,7 +319,26 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
     })?;
     spawn_auto_lock(app.handle().clone());
     instances::Tracker::spawn(app.handle().clone());
+    instances::afk::spawn(app.handle().clone());
+    discord::spawn(app.handle().clone());
+    launcher::update::spawn(app.handle().clone());
+    remind_bandwidth(app.handle().clone());
     Ok(())
+}
+
+/// Windows drops the bandwidth policy when it restarts; RoALT never sets it again on its own
+/// (that needs admin rights), so it says so once the window is up.
+fn remind_bandwidth(handle: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        if commands::bandwidth(&handle.state::<App>()).is_ok_and(|b| b.kbps > 0 && !b.active) {
+            commands::notice(
+                &handle,
+                true,
+                "The Roblox bandwidth limit is off: Windows clears it when it restarts. Apply it again in Settings, Performance.",
+            );
+        }
+    });
 }
 
 /// Closing the main window hides it while `settings.close_to_tray` is on.
@@ -387,9 +413,20 @@ fn main() {
             commands::instances_close_all,
             commands::instances_clear_ended,
             commands::instance_set_limits,
+            commands::instance_trim,
+            commands::instance_set_anti_afk,
+            commands::instances_metrics,
+            commands::bandwidth_status,
+            commands::bandwidth_apply,
             commands::multi_instance_status,
             commands::multi_instance_set,
             commands::roblox_close_all,
+            commands::panic_kill,
+            commands::crashes_list,
+            commands::crash_open_log,
+            commands::discord_get,
+            commands::discord_set,
+            commands::discord_test,
             commands::bulk_launch,
             commands::bulk_cancel,
             commands::bulk_current,
@@ -397,6 +434,7 @@ fn main() {
             commands::game_info,
             commands::target_place,
             commands::roblox_client,
+            commands::roblox_install,
             commands::data_dir_info,
             commands::data_dir_open,
             commands::data_dir_move,

@@ -407,6 +407,40 @@ impl Client {
         })
     }
 
+    /// `GET clientsettingscdn.roblox.com/v2/client-version/WindowsPlayer` (no cookie) → the live
+    /// `clientVersionUpload` (`version-` + 16 hex digits; anything else → `Roblox(..)`).
+    pub async fn client_version(&self) -> Result<String> {
+        let route = endpoints::CLIENT_VERSION;
+        let (_, body, _) = self.request(Method::GET, route, route, None, 0, None).await?;
+        client_version_of(&body)
+    }
+
+    /// Downloads `url` (no cookie, no redirects) in at most 5 minutes; refused when it is over
+    /// `max` bytes (by `Content-Length` before, or while reading). `progress(received, total)`
+    /// after each chunk.
+    pub async fn download(&self, url: &str, max: u64, mut progress: impl FnMut(u64, Option<u64>)) -> Result<Vec<u8>> {
+        let http = self.http.as_ref().map_err(|e| AppError::Internal(format!("HTTP client unavailable: {e}")))?;
+        let (url, _) = self.target(url)?;
+        let mut resp = http.get(url).timeout(Duration::from_secs(300)).send().await.map_err(network)?;
+        if !resp.status().is_success() {
+            return Err(AppError::Roblox(format!("download: HTTP {}", resp.status().as_u16())));
+        }
+        let too_big = || AppError::Roblox(format!("download over {} MB", max / 1_000_000));
+        let total = resp.content_length();
+        if total.is_some_and(|t| t > max) {
+            return Err(too_big());
+        }
+        let mut out = Vec::with_capacity(total.unwrap_or(0) as usize);
+        while let Some(chunk) = resp.chunk().await.map_err(network)? {
+            if (out.len() + chunk.len()) as u64 > max {
+                return Err(too_big());
+            }
+            out.extend_from_slice(&chunk);
+            progress(out.len() as u64, total);
+        }
+        Ok(out)
+    }
+
     /// One API call with throttle, CSRF retry, 429 backoff and cookie rotation.
     /// `route` keys the throttle (one per endpoint, not per URL). No cookie: no `Cookie`
     /// header, CSRF cached as account 0, no rotation.
@@ -616,6 +650,12 @@ fn network(e: reqwest::Error) -> AppError {
         Some(host) => AppError::Network(format!("{what} ({host})")),
         None => AppError::Network(what.into()),
     }
+}
+
+/// `clientVersionUpload` of a client-version answer, only when it is a plain version name.
+fn client_version_of(body: &[u8]) -> Result<String> {
+    let v: String = field(json(body)?, "clientVersionUpload")?;
+    if crate::launcher::update::is_version(&v) { Ok(v) } else { Err(unreadable()) }
 }
 
 fn json<T: DeserializeOwned>(body: &[u8]) -> Result<T> {

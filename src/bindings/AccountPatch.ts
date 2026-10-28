@@ -4,4 +4,8 @@
  * Partial update from the UI; `None` leaves a field as it is.
  * `color: Some("")` clears the colour.
  */
-export type AccountPatch = { alias?: string, notes?: string, color?: string, favourite?: boolean, groupIds?: Array<number>, };
+export type AccountPatch = { alias?: string, notes?: string, color?: string, favourite?: boolean, groupIds?: Array<number>, allowDisconnect?: boolean, 
+/**
+ * `Some("")` goes back to the default from Settings.
+ */
+launchArgs?: string, };

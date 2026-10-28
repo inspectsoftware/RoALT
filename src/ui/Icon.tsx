@@ -23,6 +23,8 @@ const paths = {
   signin: <path d="M9 2h5v12H9M2 8h8M7 5l3 3-3 3" />,
   key: <><rect x="1.5" y="5.5" width="5" height="5" /><path d="M6.5 8h8M11.5 8v3M14 8v2" /></>,
   chevron: <path d="M4 6l4 4 4-4" />,
+  monitor: <path d="M1 9h3l2-5 3 9 2-5h4" />,
+  bell: <><path d="M3 12h10l-1.5-2V6.5a3.5 3.5 0 0 0-7 0V10z" /><path d="M6.5 14h3" /></>,
   play: <path d="M4 2.5l9 5.5-9 5.5z" strokeLinejoin="round" />,
   servers: <><rect x="2" y="2" width="12" height="5" /><rect x="2" y="9" width="12" height="5" /><path d="M5 4.5h1M5 11.5h1" /></>,
   grip: (

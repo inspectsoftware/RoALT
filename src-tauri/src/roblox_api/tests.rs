@@ -1156,3 +1156,20 @@ fn images_only_from_roblox_cdn() {
         assert!(!super::is_rbxcdn(url), "{url}");
     }
 }
+
+#[test]
+fn client_version_answer() {
+    for name in ["multiinstance-client-version-windowsplayer.json", "multiinstance-client-version-windowsplayer-channel-live.json"] {
+        assert_eq!(client_version_of(fixture(name).as_bytes()).unwrap(), "version-9ac8595712b447a7", "{name}");
+    }
+    for bad in [
+        r#"{"clientVersionUpload":"version-9AC8595712B447A7"}"#,
+        r#"{"clientVersionUpload":"version-9ac8595712b447a"}"#,
+        r#"{"clientVersionUpload":"../../evil"}"#,
+        r#"{"clientVersionUpload":""}"#,
+        r#"{"version":"0.744.0.7441080"}"#,
+        "not json",
+    ] {
+        assert!(client_version_of(bad.as_bytes()).is_err(), "{bad}");
+    }
+}

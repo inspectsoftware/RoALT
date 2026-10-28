@@ -2,9 +2,11 @@
 //! resolve the target with that account's cookie, get an authentication ticket, build the
 //! `roblox-player:` URI and start the client. Tickets and URIs are secrets: never logged.
 
+pub mod authenticode;
 pub mod bulk;
 pub mod client;
 pub mod target;
+pub mod update;
 pub mod uri;
 
 use serde_json::Value;
@@ -96,20 +98,54 @@ pub async fn resolve(
 const EXPIRED: &str = "This share link has expired, so Roblox may refuse the join.";
 const DATA_DROPPED: &str = "The link's launch data is over Roblox's 200-byte limit and was left out.";
 
+const MAX_ARGS_LEN: usize = 512;
+const MAX_ARGS: usize = 32;
+
+/// Extra client arguments typed by the user, split on whitespace. Refused (`Invalid`): over
+/// 512 characters or 32 arguments, quotes, control characters (newlines), `& | < > ^` (a
+/// bootstrapper may hand them to a shell), and anything starting with `roblox-player:` (a
+/// second launch URI). They go after the launch URI as typed; never logged.
+pub fn launch_args(text: &str) -> Result<Vec<String>> {
+    let invalid = |why: &str| Err(AppError::Invalid(format!("Launch arguments {why}.")));
+    if text.chars().count() > MAX_ARGS_LEN {
+        return invalid(&format!("can be at most {MAX_ARGS_LEN} characters"));
+    }
+    if let Some(c) = text.chars().find(|&c| c.is_control() && !matches!(c, ' ' | '\t') || "\"'&|<>^".contains(c)) {
+        return invalid(&format!("can't contain {}", if c.is_control() { "line breaks or control characters".into() } else { format!("{c}") }));
+    }
+    let args: Vec<String> = text.split_whitespace().map(str::to_owned).collect();
+    if args.len() > MAX_ARGS {
+        return invalid(&format!("can be at most {MAX_ARGS} words"));
+    }
+    if args.iter().any(|a| a.to_ascii_lowercase().starts_with("roblox-player:")) {
+        return invalid("can't contain another roblox-player: link");
+    }
+    Ok(args)
+}
+
+/// The account's own launch arguments, else the default from settings (`launch_args`).
+fn args_for(s: &App, account_id: i64) -> Result<Vec<String>> {
+    let own = s.db.account(account_id)?.launch_args;
+    launch_args(&own.map_or_else(|| s.db.settings().map(|v| v.launch_args), Ok)?)
+}
+
 /// One launch: resolve → `client-assertion` (failure ignored) → `authentication-ticket` →
-/// URI with a fresh `browsertrackerid` → start the client (`client::find` + `client::start`).
+/// URI with a fresh `browsertrackerid` → start the client (`client::find` + `client::start`,
+/// with the account's or the default launch arguments after the URI).
 /// `AppError::Locked` when the vault is locked; cookie errors as the API client maps them.
 pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget) -> Result<LaunchInfo> {
     let cookie = account_cookie(s, account_id)?;
-    // Before any network call: no ticket is fetched when Roblox isn't installed.
+    // Before any network call: no ticket is fetched when Roblox isn't installed or the
+    // arguments are refused.
     let exe = client::find()?;
+    let args = args_for(s, account_id)?;
     let (join, warning) = resolve(&s.api, account_id, &cookie, target).await?;
     let assertion = s.api.client_assertion(account_id, &cookie).await.ok();
     let ticket = s.api.authentication_ticket(account_id, &cookie, assertion.as_ref()).await?;
     let (browser_tracker_id, started_at) = (uri::new_browser_tracker_id(), crate::commands::now_ms());
     let place = uri::PlaceLaunch { join: &join, browser_tracker_id, join_attempt_id: Uuid::new_v4() };
-    let (pid, pid_start) = client::start(&exe, &uri::player_uri(&ticket, started_at, &place))?;
-    log::info!("launched account {account_id} (pid {pid}, bootstrapper: {})", exe.bootstrapper);
+    let (pid, pid_start) = client::start(&exe, &uri::player_uri(&ticket, started_at, &place), &args)?;
+    log::info!("launched account {account_id} (pid {pid}, bootstrapper: {}, {} extra argument(s))", exe.bootstrapper, args.len());
     Ok(LaunchInfo {
         account_id,
         pid,
@@ -236,4 +272,28 @@ fn is_status(status: &Option<String>, want: &str) -> bool {
 
 fn no_longer_valid() -> AppError {
     AppError::Invalid("This share link is no longer valid.".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::launch_args;
+
+    #[test]
+    fn launch_args_are_plain_words() {
+        assert_eq!(launch_args("").unwrap(), Vec::<String>::new());
+        assert_eq!(launch_args("  --fps 60\t-x  ").unwrap(), ["--fps", "60", "-x"]);
+        assert_eq!(launch_args(r"-path=C:\Games\x %TEMP%").unwrap().len(), 2);
+        for bad in ["a\"b", "it's", "a & b", "a|b", "a > b", "a < b", "a^b", "a\nb", "a\rb", "x\u{0}"] {
+            assert!(launch_args(bad).is_err(), "{bad:?}");
+        }
+        assert!(launch_args("ROBLOX-PLAYER:1+launchmode:play").is_err());
+        assert!(launch_args("-x roblox-player:1").is_err());
+        assert!(launch_args("--not-roblox-player:1").is_ok(), "only a word starting with it");
+        assert!(launch_args(&"x ".repeat(33)).is_err(), "33 words");
+        assert!(launch_args(&"x".repeat(513)).is_err());
+        assert!(launch_args(&"x".repeat(512)).is_ok());
+        // The message never echoes what was typed, beyond the one refused character.
+        let e = launch_args("secret&").unwrap_err().to_string();
+        assert!(!e.contains("secret") && e.contains('&'), "{e}");
+    }
 }

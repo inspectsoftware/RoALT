@@ -5,10 +5,14 @@ import type { AccountInfo } from "./bindings/AccountInfo";
 import type { AccountPatch } from "./bindings/AccountPatch";
 import type { AccountPresence } from "./bindings/AccountPresence";
 import type { AccountSummary } from "./bindings/AccountSummary";
+import type { BandwidthStatus } from "./bindings/BandwidthStatus";
 import type { BulkProgress } from "./bindings/BulkProgress";
 import type { BulkRequest } from "./bindings/BulkRequest";
+import type { ClientMetrics } from "./bindings/ClientMetrics";
 import type { ConflictPolicy } from "./bindings/ConflictPolicy";
+import type { Crash } from "./bindings/Crash";
 import type { DataDir } from "./bindings/DataDir";
+import type { DiscordStatus } from "./bindings/DiscordStatus";
 import type { ErrorPayload } from "./bindings/ErrorPayload";
 import type { Favourite } from "./bindings/Favourite";
 import type { FavouriteInput } from "./bindings/FavouriteInput";
@@ -17,6 +21,7 @@ import type { Group } from "./bindings/Group";
 import type { GroupInput } from "./bindings/GroupInput";
 import type { Headshot } from "./bindings/Headshot";
 import type { ImportReport } from "./bindings/ImportReport";
+import type { InstallProgress } from "./bindings/InstallProgress";
 import type { Instance } from "./bindings/Instance";
 import type { JoinCandidate } from "./bindings/JoinCandidate";
 import type { LaunchInfo } from "./bindings/LaunchInfo";
@@ -38,14 +43,18 @@ import type { VaultStatus } from "./bindings/VaultStatus";
 export type {
   AccountInfo, AccountPresence, Headshot,
   Favourite, FavouriteInput, JoinCandidate, LaunchInfo, LaunchTarget, ParsedInput, UserRef,
-  Instance, MultiInstanceStatus, BulkProgress, BulkRequest, ServerOrder, ServerPage, GameInfo, PrivateServerPage, DataDir, Notice, RobloxClient,
+  BandwidthStatus, ClientMetrics, Crash, DiscordStatus, Instance, MultiInstanceStatus, BulkProgress, BulkRequest, ServerOrder, ServerPage, GameInfo, PrivateServerPage, DataDir, Notice, RobloxClient,
   AccountPatch, AccountSummary, ConflictPolicy, ErrorPayload, Group, GroupInput,
-  ImportReport, Settings, SettingsPatch, VaultMode, VaultStatus,
+  ImportReport, InstallProgress, Settings, SettingsPatch, VaultMode, VaultStatus,
 };
 export type { AccountStatus } from "./bindings/AccountStatus";
+export type { Adaptive } from "./bindings/Adaptive";
+export type { AntiAfk } from "./bindings/AntiAfk";
 export type { BulkItem } from "./bindings/BulkItem";
 export type { BulkStage } from "./bindings/BulkStage";
+export type { CrashKind } from "./bindings/CrashKind";
 export type { Density } from "./bindings/Density";
+export type { DiscordEvents } from "./bindings/DiscordEvents";
 export type { GameServer } from "./bindings/GameServer";
 export type { PrivateServer } from "./bindings/PrivateServer";
 export type { SameServer } from "./bindings/SameServer";
@@ -110,12 +119,35 @@ export const api = {
   instanceClose: (id: string, force: boolean) => invoke<void>("instance_close", { id, force }),
   instancesCloseAll: (force: boolean) => invoke<void>("instances_close_all", { force }),
   instancesClearEnded: () => invoke<void>("instances_clear_ended"),
-  /** CPU cap and efficiency mode for one running client. */
+  /** CPU cap, efficiency mode, trim interval and cores for one running client (they win over adaptive ones). */
   instanceSetLimits: (id: string, limits: Limits) => invoke<void>("instance_set_limits", { id, limits }),
+  /** Pages the client's working set out now. */
+  instanceTrim: (id: string) => invoke<void>("instance_trim", { id }),
+  /** Opts one running client in or out of anti-AFK. */
+  instanceSetAntiAfk: (id: string, enabled: boolean) => invoke<void>("instance_set_anti_afk", { id, enabled }),
+  /** CPU, memory and IO of each running client (sampled at most every 2 s). */
+  instancesMetrics: () => invoke<ClientMetrics[]>("instances_metrics"),
+  /** The Roblox bandwidth limit and whether it is in force now. */
+  bandwidthStatus: () => invoke<BandwidthStatus>("bandwidth_status"),
+  /** Sets the outbound limit for all Roblox clients (0 removes it); Windows asks for admin rights. */
+  bandwidthApply: (kbps: number) => invoke<BandwidthStatus>("bandwidth_apply", { kbps }),
   multiInstanceStatus: () => invoke<MultiInstanceStatus>("multi_instance_status"),
   multiInstanceSet: (enabled: boolean) => invoke<MultiInstanceStatus>("multi_instance_set", { enabled }),
   /** Every Roblox client, tracked or not; then takes the multi-instance lock if enabled. */
   robloxCloseAll: (force: boolean) => invoke<MultiInstanceStatus>("roblox_close_all", { force }),
+  /** Panic button: cancels the batch, no rejoins or restarts, terminates every Roblox client. */
+  panicKill: () => invoke<MultiInstanceStatus>("panic_kill"),
+  /** Clients that crashed, were disconnected or hung, newest first (the last 200). */
+  crashesList: () => invoke<Crash[]>("crashes_list"),
+  /** Opens that crash's client log in the default app. */
+  crashOpenLog: (id: number) => invoke<void>("crash_open_log", { id }),
+
+  /** Whether a Discord webhook is set (and its id's last digits; never the URL). */
+  discordGet: () => invoke<DiscordStatus>("discord_get"),
+  /** Stores a Discord webhook URL in the vault; null or "" removes it. */
+  discordSet: (url: string | null) => invoke<DiscordStatus>("discord_set", { url }),
+  /** Posts a test message to the webhook. */
+  discordTest: () => invoke<void>("discord_test"),
 
   /** Starts a batch in the background; progress comes as bulk://progress. Returns its id. */
   bulkLaunch: (request: BulkRequest) => invoke<string>("bulk_launch", { request }),
@@ -140,6 +172,8 @@ export const api = {
     invoke<ImportReport>("backup_import", { path, password, onConflict }),
 
   robloxClient: () => invoke<RobloxClient>("roblox_client"),
+  /** Downloads Roblox's installer, checks it is signed by Roblox Corporation, runs it; progress on onRobloxInstall. */
+  robloxInstall: () => invoke<RobloxClient>("roblox_install"),
   dataDirInfo: () => invoke<DataDir>("data_dir_info"),
   dataDirOpen: () => invoke<void>("data_dir_open"),
   /** Copies the database to `path` and restarts RoALT to use it (resolves only on failure). */
@@ -155,4 +189,7 @@ export const events = {
   onInstancesChanged: (f: () => void): Promise<UnlistenFn> => listen("instances://changed", f),
   onNotice: (f: (n: Notice) => void): Promise<UnlistenFn> => listen<Notice>("app://notice", (e) => f(e.payload)),
   onBulkProgress: (f: (p: BulkProgress) => void): Promise<UnlistenFn> => listen<BulkProgress>("bulk://progress", (e) => f(e.payload)),
+  /** The client or its versions changed (version check at start and every 30 min, an install). */
+  onRobloxClient: (f: (c: RobloxClient) => void): Promise<UnlistenFn> => listen<RobloxClient>("roblox://client", (e) => f(e.payload)),
+  onRobloxInstall: (f: (p: InstallProgress) => void): Promise<UnlistenFn> => listen<InstallProgress>("roblox://install", (e) => f(e.payload)),
 };

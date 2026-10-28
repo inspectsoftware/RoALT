@@ -74,6 +74,11 @@ pub struct AccountSummary {
     pub status_checked_at: Option<i64>,
     /// Unix ms.
     pub created_at: i64,
+    /// Its clients may stay disconnected: never rejoined or restarted, and a batch counts a
+    /// disconnect as done.
+    pub allow_disconnect: bool,
+    /// Extra client arguments, used instead of `Settings.launch_args`; None: the default.
+    pub launch_args: Option<String>,
 }
 
 /// Partial update from the UI; `None` leaves a field as it is.
@@ -92,6 +97,11 @@ pub struct AccountPatch {
     pub favourite: Option<bool>,
     #[ts(optional)]
     pub group_ids: Option<Vec<i64>>,
+    #[ts(optional)]
+    pub allow_disconnect: Option<bool>,
+    /// `Some("")` goes back to the default from Settings.
+    #[ts(optional)]
+    pub launch_args: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
@@ -156,10 +166,104 @@ pub struct Settings {
     /// Bulk launch: wait between two launches (±1 s jitter is added), 2 000..=60 000.
     pub launch_delay_ms: u32,
     /// Relaunch a client Roblox disconnects (kicked, server shut down, connection lost; not the
-    /// player's own Leave or a sign-in elsewhere) into the same target, at most 3 tries in a row.
+    /// player's own Leave or a sign-in elsewhere) into the same target, within the breaker.
     pub auto_rejoin: bool,
+    /// Relaunch a client that ended without RoALT closing it or stopped responding (a window
+    /// closed by hand looks the same, so it is opt-in), within the breaker.
+    pub auto_restart_on_crash: bool,
+    /// Crash breaker: at most this many rejoins and restarts of one account (1..=20) ...
+    pub breaker_max: u32,
+    /// ... within this many minutes (1..=240); then RoALT gives up on it.
+    pub breaker_window_min: u32,
+    /// How long a closed client gets to exit before it is terminated, 1..=60 s.
+    pub close_grace_s: u32,
+    /// Extra client arguments after the launch URI (`launcher::launch_args` rules); "" for none.
+    pub launch_args: String,
     /// Closing the window hides it; the tray icon brings it back or quits.
     pub close_to_tray: bool,
+    /// Restart a client whose private memory stays over this many MB (3 samples, 10 s apart),
+    /// within the breaker; 0: off, else 512..=65 536.
+    pub mem_restart_mb: u32,
+    /// Trim each client's working set this often (minutes, 0: off) unless its own limits say.
+    pub trim_every_min: u32,
+    /// Give each client its own share of the CPU cores (round-robin) unless its limits say.
+    pub auto_spread: bool,
+    pub adaptive: Adaptive,
+    /// Outbound limit for all Roblox clients together (a Windows QoS policy, set with admin
+    /// rights by `bandwidth_apply`, which alone changes this); 0: none.
+    pub bandwidth_kbps: u32,
+    pub anti_afk: AntiAfk,
+    /// Which events go to the Discord webhook (the webhook itself is in the vault).
+    pub discord: DiscordEvents,
+    /// Install a new Roblox version on its own once no client runs and no launch or batch does
+    /// (never over a bootstrapper; the installer is signature-checked as always).
+    pub auto_update: bool,
+}
+
+/// Anti-AFK: every `interval_min` (1..=19) minutes each client in a game that hasn't opted out
+/// is brought to the front for a moment and gets a Space key press (`instances::afk`).
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export)]
+pub struct AntiAfk {
+    pub enabled: bool,
+    pub interval_min: u32,
+}
+
+impl Default for AntiAfk {
+    fn default() -> Self {
+        Self { enabled: false, interval_min: 15 }
+    }
+}
+
+/// Events sent to the Discord webhook (`discord`), each on or off.
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export)]
+pub struct DiscordEvents {
+    pub crash: bool,
+    pub hang: bool,
+    pub mem_restart: bool,
+    pub disconnect: bool,
+    /// Auto-rejoins and auto-restarts that went ahead.
+    pub restart: bool,
+    /// The crash breaker gave up on an account.
+    pub breaker: bool,
+    pub batch_done: bool,
+    /// A summary of the running clients every this many minutes (0: off, else 5..=1440).
+    pub status_every_min: u32,
+}
+
+impl Default for DiscordEvents {
+    fn default() -> Self {
+        Self { crash: true, hang: true, mem_restart: true, disconnect: true, restart: true, breaker: true, batch_done: true, status_every_min: 0 }
+    }
+}
+
+/// The Discord webhook as the UI may see it: never the URL or its token.
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DiscordStatus {
+    pub configured: bool,
+    /// The webhook id's last 4 digits, e.g. "…4821".
+    pub webhook: Option<String>,
+}
+
+/// The adaptive resource manager: clients whose window isn't in front get `background`;
+/// a client with its own limits keeps them.
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export)]
+pub struct Adaptive {
+    pub enabled: bool,
+    pub background: Limits,
+}
+
+impl Default for Adaptive {
+    fn default() -> Self {
+        Self { enabled: false, background: Limits { cpu_cap: Some(25), eco: true, ..Limits::default() } }
+    }
 }
 
 impl Default for Settings {
@@ -174,7 +278,20 @@ impl Default for Settings {
             protect_shared_login: true,
             launch_delay_ms: 6_000,
             auto_rejoin: false,
+            auto_restart_on_crash: false,
+            breaker_max: 3,
+            breaker_window_min: 10,
+            close_grace_s: 5,
+            launch_args: String::new(),
             close_to_tray: false,
+            mem_restart_mb: 0,
+            trim_every_min: 0,
+            auto_spread: false,
+            adaptive: Adaptive::default(),
+            bandwidth_kbps: 0,
+            anti_afk: AntiAfk::default(),
+            discord: DiscordEvents::default(),
+            auto_update: false,
         }
     }
 }
@@ -200,7 +317,31 @@ pub struct SettingsPatch {
     #[ts(optional)]
     pub auto_rejoin: Option<bool>,
     #[ts(optional)]
+    pub auto_restart_on_crash: Option<bool>,
+    #[ts(optional)]
+    pub breaker_max: Option<u32>,
+    #[ts(optional)]
+    pub breaker_window_min: Option<u32>,
+    #[ts(optional)]
+    pub close_grace_s: Option<u32>,
+    #[ts(optional)]
+    pub launch_args: Option<String>,
+    #[ts(optional)]
     pub close_to_tray: Option<bool>,
+    #[ts(optional)]
+    pub mem_restart_mb: Option<u32>,
+    #[ts(optional)]
+    pub trim_every_min: Option<u32>,
+    #[ts(optional)]
+    pub auto_spread: Option<bool>,
+    #[ts(optional)]
+    pub adaptive: Option<Adaptive>,
+    #[ts(optional)]
+    pub anti_afk: Option<AntiAfk>,
+    #[ts(optional)]
+    pub discord: Option<DiscordEvents>,
+    #[ts(optional)]
+    pub auto_update: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
@@ -466,17 +607,56 @@ pub struct Instance {
     /// How many auto-rejoins led to this client (0: launched by the user).
     pub rejoins: u32,
     pub limits: Limits,
+    /// Anti-AFK presses keys in it (when on in Settings); false: opted out.
+    pub anti_afk: bool,
+    /// Unix ms of its last anti-AFK key press.
+    pub afk_at: Option<i64>,
 }
 
 /// What Windows holds one client to (instances::limits). Lasts as long as the client.
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 #[ts(export)]
 pub struct Limits {
     /// Hard cap on its CPU time, in percent of the whole machine (1-100); None: no cap.
     pub cpu_cap: Option<u8>,
     /// Efficiency mode: EcoQoS and below-normal priority, as Task Manager's.
     pub eco: bool,
+    /// Trim its working set every this many minutes (0: never); None: `Settings.trim_every_min`.
+    pub trim_every_min: Option<u32>,
+    /// The CPU cores it may run on, one bit each (the first 53 cores: a JS number); None: all
+    /// (or its share with `Settings.auto_spread`).
+    #[ts(type = "number | null")]
+    pub affinity: Option<u64>,
+}
+
+/// What one running client uses (`instances_metrics`), sampled at most every 2 s.
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ClientMetrics {
+    pub instance_id: String,
+    pub pid: u32,
+    /// Percent of the whole machine since the previous sample (None on the first one).
+    pub cpu_pct: Option<f64>,
+    /// Working set (what Task Manager's details show), MB.
+    pub working_set_mb: f64,
+    /// Private bytes (what a leak grows), MB.
+    pub private_mb: f64,
+    /// Disk and network reads and writes, bytes per second since the previous sample.
+    pub read_bps: Option<f64>,
+    pub write_bps: Option<f64>,
+}
+
+/// The Roblox bandwidth limit (`bandwidth_status`).
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct BandwidthStatus {
+    /// The setting: what was last applied (0: none).
+    pub kbps: u32,
+    /// The policy RoALT set is in force: applied since Windows last started.
+    pub active: bool,
 }
 
 #[derive(Serialize, TS, Clone, Debug, PartialEq)]
@@ -538,6 +718,8 @@ pub enum BulkStage {
     Starting,
     Joining,
     InGame,
+    /// Disconnected, and its account allows that (`allow_disconnect`).
+    Done,
     Failed { message: String },
     Cancelled,
 }
@@ -672,8 +854,30 @@ pub struct PrivateServerPage {
 pub struct RobloxClient {
     /// None when Roblox isn't installed.
     pub path: Option<String>,
-    /// A bootstrapper (e.g. Bloxstrap) handles launches.
+    /// A bootstrapper (e.g. Bloxstrap) handles launches; it keeps Roblox up to date itself, so
+    /// RoALT never updates or installs over it.
     pub bootstrapper: bool,
+    /// The installed version: the `Versions\version-…` folder the client is in. None when not
+    /// installed, for a bootstrapper, or a client outside such a folder.
+    pub version: Option<String>,
+    /// Roblox's live version (`clientVersionUpload`), once checked (at start, every 30 min).
+    pub latest: Option<String>,
+    /// Both versions are known and differ (`launcher::update::outdated`).
+    pub outdated: bool,
+}
+
+/// Where `roblox_install` is (`roblox://install`).
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(tag = "stage", rename_all = "camelCase")]
+#[ts(export)]
+pub enum InstallProgress {
+    Downloading { percent: u8 },
+    /// Checking the installer's Authenticode signature.
+    Verifying,
+    /// Roblox's installer runs.
+    Installing,
+    Done,
+    Error { message: String },
 }
 
 /// Where RoALT keeps its data.
@@ -686,6 +890,62 @@ pub struct DataDir {
     pub default: bool,
     /// Set for test runs (`ROALT_DATA_DIR`): moving is not offered.
     pub overridden: bool,
+}
+
+/// Why a client ended badly (`crashes_list`).
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum CrashKind {
+    /// Ended without RoALT closing it and without a disconnect in its log.
+    Crash,
+    /// Roblox disconnected it (kick, shutdown, connection lost).
+    Disconnect,
+    /// Its window stopped responding.
+    Hang,
+    /// RoALT restarted it: its memory stayed over `Settings.mem_restart_mb`.
+    Mem,
+}
+
+impl CrashKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Crash => "crash",
+            Self::Disconnect => "disconnect",
+            Self::Hang => "hang",
+            Self::Mem => "mem",
+        }
+    }
+
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "disconnect" => Self::Disconnect,
+            "hang" => Self::Hang,
+            "mem" => Self::Mem,
+            _ => Self::Crash,
+        }
+    }
+}
+
+/// One client that crashed, was disconnected or hung (the newest 200 are kept).
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Crash {
+    pub id: i64,
+    /// The `Instance` it was.
+    pub instance_id: String,
+    pub account_id: i64,
+    pub kind: CrashKind,
+    /// Unix ms it ended.
+    pub at: i64,
+    /// From launch to end.
+    pub uptime_ms: i64,
+    /// What its log said (disconnect reason, redacted to plain text), if anything.
+    pub reason: Option<String>,
+    pub place_id: Option<i64>,
+    /// Its client log was found ("Open log"); the path itself stays in the backend.
+    pub has_log: bool,
 }
 
 /// A message for the user from the backend (`app://notice`), shown as a toast.

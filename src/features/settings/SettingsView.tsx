@@ -2,9 +2,9 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { open as openFile, save as saveFile } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { api, asError, type ConflictPolicy, type ImportReport, type RobloxClient, type Settings, type VaultStatus } from "../../api";
+import { api, asError, events, type BandwidthStatus, type ConflictPolicy, type ImportReport, type InstallProgress, type RobloxClient, type Settings, type VaultStatus } from "../../api";
 import { qk, useMultiStatus, useSetSettings } from "../../data";
-import { NumberField, Segmented, Switch } from "../../ui/controls";
+import { NumberField, Segmented, Switch, TextField } from "../../ui/controls";
 import { ConfirmDialog, Dialog } from "../../ui/Dialog";
 import { Icon } from "../../ui/Icon";
 import { friendly, toast, toastError } from "../../ui/Toast";
@@ -15,6 +15,7 @@ import { PasswordDialog } from "../vault/PasswordDialog";
 export const SETTINGS_SECTIONS = [
   ["general", "General"],
   ["launching", "Launching"],
+  ["performance", "Performance"],
   ["security", "Security"],
   ["data", "Data"],
   ["shortcuts", "Shortcuts"],
@@ -26,6 +27,8 @@ const SHORTCUTS = [
   ["Go to Launch", "Ctrl 2"],
   ["Go to Servers", "Ctrl 3"],
   ["Go to Settings", "Ctrl 4"],
+  ["Go to Monitor", "Ctrl 5"],
+  ["Go to Discord", "Ctrl 6"],
   ["Add account", "Ctrl N"],
   ["Filter accounts", "Ctrl F"],
   ["Select all shown", "Ctrl A"],
@@ -155,15 +158,134 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
             onCommit={(s) => set.mutate({ launchDelayMs: Math.round(s * 1000) })}
           />
         </Row>
-        <Row title="Auto-rejoin" hint="Relaunch a client Roblox disconnects (kicked, server shut down, connection lost) into the same target. Up to 3 tries.">
+        <Row title="Auto-rejoin" hint="Relaunch a client Roblox disconnects (kicked, server shut down, connection lost) into the same target.">
           <Switch label="Auto-rejoin" checked={settings.autoRejoin} onChange={(autoRejoin) => set.mutate({ autoRejoin })} />
         </Row>
         <Row
-          title="Roblox client"
-          hint={client?.path ? <PathHint path={client.path} /> : client ? "Install Roblox from roblox.com, then come back here." : ""}
+          title="Auto-restart after a crash"
+          hint="Relaunch a client that closes without RoALT closing it, or whose window stops responding for 30 s. Closing Roblox's window yourself looks the same, so close clients from RoALT."
         >
-          {client && <ClientStatus client={client} />}
+          <Switch
+            label="Auto-restart after a crash"
+            checked={settings.autoRestartOnCrash}
+            onChange={(autoRestartOnCrash) => set.mutate({ autoRestartOnCrash })}
+          />
         </Row>
+        <Row
+          title="Anti-AFK"
+          hint="So Roblox doesn't disconnect idle clients after 20 minutes: each client in a game is brought to the front for a moment, gets a Space press, and the window you had in front comes back. Only after 5 s without keyboard or mouse input; minimized clients are skipped. A client can opt out under its limits in Launch."
+        >
+          <Switch label="Anti-AFK" checked={settings.antiAfk.enabled} onChange={(enabled) => set.mutate({ antiAfk: { ...settings.antiAfk, enabled } })} />
+        </Row>
+        {settings.antiAfk.enabled && (
+          <Row title="Press a key every" hint="Roblox disconnects after 20 idle minutes, so 1 to 19.">
+            <NumberField
+              unit="minutes"
+              short="min"
+              min={1}
+              max={19}
+              value={settings.antiAfk.intervalMin}
+              onCommit={(intervalMin) => set.mutate({ antiAfk: { ...settings.antiAfk, intervalMin } })}
+            />
+          </Row>
+        )}
+        <Row
+          title="Give up after"
+          hint="Rejoins and restarts of one account within this time. Each waits twice as long as the one before (at most a minute); past the limit RoALT leaves it and tells you."
+        >
+          <div className="flex flex-wrap gap-3">
+            <NumberField unit="relaunches" short="tries" min={1} max={20} value={settings.breakerMax} onCommit={(breakerMax) => set.mutate({ breakerMax })} />
+            <NumberField
+              label="in"
+              unit="minutes"
+              short="min"
+              min={1}
+              max={240}
+              value={settings.breakerWindowMin}
+              onCommit={(breakerWindowMin) => set.mutate({ breakerWindowMin })}
+            />
+          </div>
+        </Row>
+        <Row title="Close grace" hint="How long a client RoALT closes gets to close by itself before it is ended.">
+          <NumberField unit="seconds" short="s" min={1} max={60} value={settings.closeGraceS} onCommit={(closeGraceS) => set.mutate({ closeGraceS })} />
+        </Row>
+        <Row
+          title="Launch arguments"
+          hint="Extra words for every client, after its launch link (for a bootstrapper, say). No quotes or & | < > ^. An account can have its own in its details."
+        >
+          <TextField
+            label="Launch arguments"
+            className="w-64"
+            placeholder="none"
+            value={settings.launchArgs}
+            onCommit={(launchArgs) => set.mutateAsync({ launchArgs })}
+          />
+        </Row>
+        <ClientRow client={client} />
+        <Row
+          title="Update Roblox automatically"
+          hint="When Roblox has a new version and no Roblox client runs (nor a launch or batch), install it. The installer is checked to be signed by Roblox Corporation first. Never over a bootstrapper such as Bloxstrap, which updates Roblox itself."
+        >
+          <Switch label="Update Roblox automatically" checked={settings.autoUpdate} onChange={(autoUpdate) => set.mutate({ autoUpdate })} />
+        </Row>
+
+        <Heading id="performance">Performance</Heading>
+        <Row
+          title="Restart on high memory"
+          hint="Close and relaunch a client whose private memory stays over this for 30 s, into the same game, within the restart limit above. Not during a batch. 0 turns it off."
+        >
+          <NumberField unit="MB, 0 for off" short="MB" min={0} max={65536} value={settings.memRestartMb} onCommit={(memRestartMb) => set.mutate({ memRestartMb })} />
+        </Row>
+        <Row
+          title="Trim memory every"
+          hint="Ask Windows to page each client's memory out on a schedule; it comes back as used. A client's own setting in Launch wins. 0 turns it off."
+        >
+          <NumberField unit="minutes, 0 for off" short="min" min={0} max={1440} value={settings.trimEveryMin} onCommit={(trimEveryMin) => set.mutate({ trimEveryMin })} />
+        </Row>
+        <Row title="Spread clients over CPU cores" hint="Give each client its own share of the cores, round-robin. Cores picked for a client in Launch win.">
+          <Switch label="Spread clients over CPU cores" checked={settings.autoSpread} onChange={(autoSpread) => set.mutate({ autoSpread })} />
+        </Row>
+        <Row
+          title="Adaptive limits"
+          hint="Clients whose window isn't in front get the limits below; the one you're playing runs free. A client with its own limits keeps them."
+        >
+          <Switch
+            label="Adaptive limits"
+            checked={settings.adaptive.enabled}
+            onChange={(enabled) => set.mutate({ adaptive: { ...settings.adaptive, enabled } })}
+          />
+        </Row>
+        {settings.adaptive.enabled && (
+          <Row title="In the background" hint="CPU limit (a share of all cores), efficiency mode and how often to trim memory, for clients not in front.">
+            <div className="flex flex-wrap items-center gap-3">
+              <Segmented
+                mono
+                label="Background CPU limit"
+                value={settings.adaptive.background.cpuCap ?? 0}
+                options={[0, 50, 25, 10, 5].map((c) => ({ value: c, label: c ? `${c}%` : "Off" }))}
+                onChange={(c) => set.mutate({ adaptive: { ...settings.adaptive, background: { ...settings.adaptive.background, cpuCap: c || null } } })}
+              />
+              <label className="flex items-center gap-2">
+                <span className="text-xs text-dim">Efficiency</span>
+                <Switch
+                  label="Background efficiency mode"
+                  checked={settings.adaptive.background.eco}
+                  onChange={(eco) => set.mutate({ adaptive: { ...settings.adaptive, background: { ...settings.adaptive.background, eco } } })}
+                />
+              </label>
+              <Segmented
+                mono
+                label="Background trim"
+                value={settings.adaptive.background.trimEveryMin ?? -1}
+                options={[-1, 0, 5, 15, 30, 60].map((m) => ({ value: m, label: m < 0 ? "Default" : m ? `${m}m` : "Off" }))}
+                onChange={(m) =>
+                  set.mutate({ adaptive: { ...settings.adaptive, background: { ...settings.adaptive.background, trimEveryMin: m < 0 ? null : m } } })
+                }
+              />
+            </div>
+          </Row>
+        )}
+        <BandwidthRow />
 
         <Heading id="security">Security</Heading>
         <Row
@@ -257,7 +379,7 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
         </table>
 
         <Heading id="about">About</Heading>
-        <Row title={<>RoALT <span className="mono">{import.meta.env.APP_VERSION}</span></>} hint="RoALT only talks to roblox.com. New versions are on GitHub Releases." last>
+        <Row title={<>RoALT <span className="mono">{import.meta.env.APP_VERSION}</span></>} hint="RoALT only talks to roblox.com (and Discord, once you set a webhook), and changes nothing on your PC unless you apply a bandwidth limit. New versions are on GitHub Releases." last>
           <button className="btn" onClick={() => openUrl(RELEASES).catch(toastError)}>
             Open releases page
             <Icon name="external" size={12} />
@@ -416,7 +538,71 @@ function ImportDialog({ open, path, onClose }: { open: boolean; path: string; on
   );
 }
 
-function Heading({ id, children }: { id: string; children: ReactNode }) {
+/** The Roblox bandwidth limit: typed, then applied with admin rights only on the button. */
+function BandwidthRow() {
+  const qc = useQueryClient();
+  const status = useQuery({ queryKey: qk.bandwidth, queryFn: api.bandwidthStatus, staleTime: 0 }).data;
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (status) setText(status.kbps ? String(status.kbps) : "");
+  }, [status]);
+  const apply = (kbps: number) => {
+    setBusy(true);
+    api
+      .bandwidthApply(kbps)
+      .then((st: BandwidthStatus) => {
+        qc.setQueryData(qk.bandwidth, st);
+        qc.invalidateQueries({ queryKey: qk.settings });
+        toast(kbps ? `Roblox's upload is limited to ${kbps} kbit/s.` : "Roblox's bandwidth limit is off.");
+      }, toastError)
+      .finally(() => setBusy(false));
+  };
+  const n = Number(text || "0");
+  const valid = Number.isInteger(n) && (n === 0 || (n >= 64 && n <= 10_000_000));
+  const state = !status ? "" : !status.kbps ? "Off." : status.active ? `In force: ${status.kbps} kbit/s.` : `Set to ${status.kbps} kbit/s, but Windows has restarted since: apply it again.`;
+  return (
+    <Row
+      title="Bandwidth limit"
+      hint={
+        <>
+          Caps outbound (upload) traffic only, for all Roblox clients together, as a Windows QoS policy. Applying needs admin
+          rights (Windows asks each time) and lasts until Windows restarts. {state}
+        </>
+      }
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="flex items-center gap-2">
+          <span className="sr-only">kbit/s, empty or 0 for none</span>
+          <input
+            className="field mono w-24"
+            type="number"
+            min={0}
+            max={10_000_000}
+            placeholder="none"
+            value={text}
+            aria-invalid={!valid}
+            onChange={(e) => setText(e.target.value)}
+          />
+          <span className="text-dim">kbit/s</span>
+        </label>
+        <button
+          className="btn"
+          disabled={busy || !valid}
+          title={valid ? "Windows asks for admin rights" : "Use 64 to 10 000 000 kbit/s, or 0 for none"}
+          onClick={() => apply(n)}
+        >
+          {busy ? "Waiting for Windows…" : "Apply (admin)"}
+        </button>
+        {status?.kbps !== 0 && status && (
+          <button className="btn" disabled={busy} onClick={() => apply(0)}>Remove (admin)</button>
+        )}
+      </div>
+    </Row>
+  );
+}
+
+export function Heading({ id, children }: { id: string; children: ReactNode }) {
   return <h2 id={id} className="label mt-8 first-of-type:mt-6 scroll-mt-6">{children}</h2>;
 }
 
@@ -424,12 +610,102 @@ function PathHint({ path }: { path: string }) {
   return <span className="mono block truncate selectable" title={path}>{path}</span>;
 }
 
+const ROBLOX_DOWNLOAD = "https://www.roblox.com/download";
+
+function installStep(p: InstallProgress | null) {
+  switch (p?.stage) {
+    case "downloading":
+      return `Downloading… ${p.percent}%`;
+    case "verifying":
+      return "Checking the signature…";
+    case "installing":
+      return "Roblox's installer is running…";
+    default:
+      return null;
+  }
+}
+
+/** The client RoALT starts, its version, and Install / Update Roblox (Roblox's own client only). */
+function ClientRow({ client }: { client: RobloxClient | undefined }) {
+  const qc = useQueryClient();
+  const [progress, setProgress] = useState<InstallProgress | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    const un = events.onRobloxInstall(setProgress);
+    return () => void un.then((f) => f());
+  }, []);
+  const step = installStep(progress);
+  const offer = client && !client.bootstrapper && (!client.path || client.outdated);
+
+  async function install() {
+    if (busy) return;
+    setBusy(true);
+    setFailed(false);
+    try {
+      const c = await api.robloxInstall();
+      qc.setQueryData(qk.client, c);
+      toast(c.version ? `Roblox ${c.version} is installed.` : "Roblox is installed.");
+    } catch (e) {
+      setFailed(true);
+      toastError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const version = client?.path && !client.bootstrapper && (
+    <span className="mono block truncate">
+      {client.version ?? "version unknown"}
+      {client.outdated && client.latest ? ` · ${client.latest} is out` : client.latest && client.version === client.latest ? " · latest" : ""}
+    </span>
+  );
+  return (
+    <Row
+      title="Roblox client"
+      hint={
+        client?.path ? (
+          <>
+            <PathHint path={client.path} />
+            {version}
+          </>
+        ) : client ? (
+          "Roblox isn't installed. Install it here or from roblox.com."
+        ) : (
+          ""
+        )
+      }
+    >
+      <span className="flex flex-wrap items-center gap-3">
+        {client && <ClientStatus client={client} />}
+        {step ? (
+          <span className="text-xs text-dim" role="status">{step}</span>
+        ) : (
+          offer && (
+            <button className="btn btn-sm" disabled={busy} onClick={() => void install()} title="Downloads Roblox's installer from setup.rbxcdn.com and runs it once it is verified as signed by Roblox Corporation">
+              {client.path ? "Update Roblox" : "Install Roblox"}
+            </button>
+          )
+        )}
+        {failed && !step && (
+          <button className="btn btn-sm" onClick={() => openUrl(ROBLOX_DOWNLOAD).catch(toastError)}>
+            <Icon name="external" size={11} />
+            roblox.com/download
+          </button>
+        )}
+      </span>
+    </Row>
+  );
+}
+
 function ClientStatus({ client }: { client: RobloxClient }) {
   const [label, color] = !client.path
     ? ["not installed", "var(--orange)"]
     : client.bootstrapper
       ? ["via a bootstrapper", "var(--blue)"]
-      : ["detected", "var(--accent-text)"];
+      : client.outdated
+        ? ["outdated", "var(--orange)"]
+        : ["detected", "var(--accent-text)"];
   return (
     <span className="mono inline-flex items-center gap-1.5 text-xs">
       <span aria-hidden="true" className="w-1.5 h-1.5 flex-none" style={{ background: color }} />
@@ -438,7 +714,7 @@ function ClientStatus({ client }: { client: RobloxClient }) {
   );
 }
 
-function Row({ title, hint, children, last }: { title: ReactNode; hint: ReactNode; children: ReactNode; last?: boolean }) {
+export function Row({ title, hint, children, last }: { title: ReactNode; hint: ReactNode; children: ReactNode; last?: boolean }) {
   return (
     <div className={`flex flex-wrap items-center gap-x-6 gap-y-2 py-4 ${last ? "" : "border-b border-line"}`}>
       <div className="flex-[1_1_280px] min-w-0 flex flex-col gap-0.5">

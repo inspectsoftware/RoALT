@@ -278,10 +278,25 @@ Copy user ID / username and "open profile" stay in the UI (clipboard API, opener
 - **Close:** WM_CLOSE twice (the client may show a leave prompt), then TerminateProcess after a few seconds.
 - **Auto-rejoin:** a client Roblox disconnects (kicked, server shut down, connection lost: a disconnect
   line in its log whose reason isn't the player's own Leave, 285, or the same account launched elsewhere, 273,
-  which a rejoin would kick) is closed after the stagger and its account relaunched into the same target, at
-  most 3 tries in a row (a client that stays in a game for 5 minutes starts the count over). A plain exit is not rejoined: closing Roblox's
-  window leaves no trace in the log, so it can't be told apart from a crash, and a kicked client stays open
-  on its error dialog anyway.
+  which a rejoin would kick) is closed and its account relaunched into the same target, within the crash
+  breaker below. A plain exit is rejoined only with auto-restart on: closing Roblox's window leaves no trace
+  in the log, so it can't be told apart from a crash, and a kicked client stays open on its error dialog anyway.
+- **Auto-restart (opt-in):** a client that ended without RoALT closing it ("Closed unexpectedly", no
+  disconnect in its log) or whose window has not responded for 30 polls (`IsHungAppWindow`, window
+  queries only, no process handle) is closed if still running and relaunched into the same target. Same
+  path for the memory limit: private bytes over `mem_restart_mb` for 3 samples 10 s apart. Accounts marked
+  "allow disconnect" are never rejoined or restarted, and a batch counts their disconnect as done. Each bad
+  end is kept (newest 200) with its kind, uptime and the redacted log reason; the log path stays in the backend.
+- **Crash breaker:** at most `breaker_max` (default 3) relaunches of one account per `breaker_window_min`
+  (default 10) minutes, then RoALT gives up on it with a note and an error notice. Each relaunch waits the
+  launch delay doubled per recent relaunch, ±1 s, capped at 60 s. Relaunches go one at a time and never
+  while a batch runs or the vault is locked.
+- **Launch control:** every launch passes one cooldown (at least the launch delay after the previous one;
+  it waits, never refuses). Custom launch arguments (a default plus a per-account override) go after the
+  URI as plain words: no quotes, control characters, `& | < > ^`, or a second `roblox-player:` link; at
+  most 512 characters / 32 words; never logged. Kill all (held button or tray) stops the batch and any
+  launch or rejoin in flight, marks every client closed by the user and terminates every Roblox process.
+  Close grace (WM_CLOSE to terminate) is a setting, 1–60 s, default 5.
 
 Rate limits: one queue per route, driven by Roblox's `x-ratelimit-limit/remaining/reset` headers (windows
 are aligned to the clock minute); 429 waits for `x-ratelimit-reset` (Retry-After is shorter than the real
@@ -291,6 +306,50 @@ window. Error bodies come in three shapes (`{errors:[…]}`, a bare string, empt
 
 Input validation before anything reaches a URI: place / user IDs are digits (u64), job IDs and access codes
 are GUIDs, private-server link codes are digits (25–32 seen), share codes are `[A-Za-z0-9_-]`.
+
+Metrics and limits keep the handle rules of §6 Launch: each sample or change opens a short-lived handle
+checked against the client's start time, with only the right it needs: `PROCESS_QUERY_LIMITED_INFORMATION`
+for metrics (CPU from `GetProcessTimes` deltas, memory from `K32GetProcessMemoryInfo`, IO from
+`GetProcessIoCounters`, cached 2 s), `PROCESS_SET_QUOTA` for the working-set trim (`K32EmptyWorkingSet`:
+Windows pages memory out, nothing is read), `PROCESS_SET_INFORMATION` for affinity and efficiency mode.
+Never `PROCESS_VM_READ` or `PROCESS_DUP_HANDLE`; only the CPU-cap job handle is kept.
+
+Adaptive manager (opt-in): each tick the pid owning the foreground window keeps its limits lifted; every
+other client gets the background limits (default CPU cap 25 % and efficiency mode). A client with its own
+limits keeps them. The default trim interval and auto-spread affinity (cores round-robin, first 53 cores)
+fill in where a client sets nothing.
+
+Bandwidth limit (the one system change, opt-in): Apply runs a fixed PowerShell script elevated through
+`ShellExecuteExW` with `runas` (a UAC prompt each time; never on its own), with only the range-checked
+integer rate inserted. It sets the outbound QoS policy `RoALT-Roblox` for the Roblox client in ActiveStore,
+so Windows drops it on restart; status can't be read back without admin, so RoALT records the boot it was
+applied in and asks the user to apply again after a restart.
+
+Anti-AFK (opt-in) uses `SendInput`, so it needs the client in front: it runs only after 5 s with no
+user input (`GetLastInputInfo`), skips minimized clients, and takes the focus with `SetForegroundWindow`,
+then `AttachThreadInput`, then after a zero-movement mouse input that lifts the foreground lock (not an
+ALT tap, which opens menus). Space goes out by scan code only while the client is confirmed in front,
+then the previous window gets the focus back. Our own injection also moves `GetLastInputInfo`, so any
+newer input mid-round means the user is back and the round stops. This is input automation: it moves the
+focus for a moment and Roblox may treat injected input as it sees fit, so it is off by default and each
+client can opt out.
+
+Discord alerts (opt-in): the webhook URL is encrypted with its own AAD (`roalt.discord.webhook`) and
+accepted only for the Discord hosts, https, `/api/webhooks/<id>/<token>`; redirects are off. Events are
+coalesced into one message at most every 2 s, and a 429's `retry_after` is honoured. Nothing is sent
+while the vault is locked; messages carry names only and disable mentions. Discord is the only host
+outside Roblox's that RoALT ever contacts, and only with a webhook set.
+
+Roblox updates: the live version comes from `clientsettingscdn.roblox.com/v2/client-version/WindowsPlayer`
+(at start and every 30 min) and is compared with the client's `Versions\version-…` folder; a bulk launch
+warns when it is out of date. Install (button, or auto-update when on) is refused while any Roblox client
+runs, while a launch, batch, auto-rejoin or other install runs, and over a bootstrapper install (it keeps
+Roblox up to date itself). Only a `version-` + 16 hex digits value goes into the URL
+`setup.rbxcdn.com/<version>-RobloxPlayerInstaller.exe` (≤ 50 MB), downloaded into a fresh temp folder and
+write-locked. It runs only after `WinVerifyTrust` accepts its embedded signature (revocation checked
+online, fail closed) and the leaf certificate WinVerifyTrust itself verified is named exactly "Roblox
+Corporation". Launches are refused while it runs (≤ 10 min); the folder is deleted afterwards. Auto-update
+doesn't retry a version that failed. Fallback: open roblox.com/download.
 
 ## 7. Releases
 
@@ -302,8 +361,8 @@ are GUIDs, private-server link codes are digits (25–32 seen), share codes are 
 - `.github/workflows/release.yml` (same pattern as AgentSuite): a `v*` tag builds on windows-latest,
   installs Inno Setup, attaches the setup .exe and `SHA256SUMS.txt` to a **draft** release; you publish it.
   `ci.yml` runs `cargo test`, clippy and `tsc` on every push.
-- No code signing yet: SmartScreen will warn on first run. No in-app update check (RoALT only talks to
-  Roblox); Settings → About links to the Releases page.
+- No code signing yet: SmartScreen will warn on first run. No in-app update check for RoALT itself (the
+  version check is Roblox's client only); Settings → About links to the Releases page.
 
 ## 8. Milestones
 

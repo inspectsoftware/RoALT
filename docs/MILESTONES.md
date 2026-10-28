@@ -130,8 +130,8 @@ https *.rbxcdn.com.
 
 **Built:** auto-rejoin (Settings → Launching, and next to Same server in Launch): a client Roblox
 disconnects (kicked, server shut down, connection lost) is closed after the launch delay and its
-account relaunched into the same target, up to 3 tries in a row (the count resets after 5 minutes
-in game); leaving on purpose (reason 285) or a duplicate-login kick (273) is not rejoined, and in
+account relaunched into the same target, within the crash breaker (since Batch 1; first it was 3
+tries in a row); leaving on purpose (reason 285) or a duplicate-login kick (273) is not rejoined, and in
 master-password mode the vault stays unlocked while auto-rejoin has clients to watch. Tray icon:
 show, favourites (launch with their stored accounts; several as a batch), close all clients,
 lock vault, quit; optional close to tray. Settings also show the Roblox client RoALT will start
@@ -147,3 +147,74 @@ Move the data folder to another drive: RoALT restarts and the accounts are still
 **Roblox differences:** closing Roblox's window leaves no trace in its log, so plain exits can't
 be told from crashes and aren't rejoined; a kicked client stays open on its error dialog, which
 is why rejoin closes it first.
+
+## Batch 1 — crash handling and launch control
+
+**Built:** auto-restart (Settings → Launching, off by default): a client that ends without RoALT
+closing it, or whose window stops responding for 30 s, is closed and relaunched into the same
+target. A crash breaker replaces the old 3-tries rule for rejoins and restarts alike: at most N
+relaunches of one account in M minutes (default 3 in 10), each after a growing backoff, then
+"Gave up after N" and an error toast. Per-account "Allow disconnect" (detail panel and right-click
+menu): never rejoined or restarted, and a batch counts its disconnect as done. Ended clients that
+crashed, hung, were disconnected or restarted for memory are kept (newest 200) with uptime and the
+log's reason; the Running list expands them and opens the log. Every launch waits out the launch
+delay since the previous one. Custom launch arguments (Settings default, per-account override),
+checked before use and never logged. Kill all: a hold-to-fire button in the sidebar and a tray
+item end every Roblox process and stop the batch and pending rejoins. Close grace is a setting.
+
+**Test:** turn on auto-restart, launch an account, end its process in Task Manager: it comes back
+in the same game. Do it 4 times within 10 minutes: the fourth gives up. Mark an account Allow
+disconnect, get it kicked: it stays closed. Set `--foo` as launch arguments, then `a & b`: refused.
+Hold Kill all: every client ends and nothing relaunches.
+
+**Roblox differences:** a window closed by hand still looks exactly like a crash in the log, which
+is why auto-restart is opt-in; a hung client's window answers `IsHungAppWindow` without opening
+the process.
+
+## Batch 2 — metrics and performance
+
+**Built:** a Monitor tab (Ctrl+5): CPU, memory, disk/network IO, uptime, state and restarts per
+client with sparklines and totals, refreshed every 2 s. Memory restart (off by default): a client
+over the limit for 3 samples 10 s apart is restarted, counted by the breaker. Per-client limits
+gain a working-set trim (every N minutes, or Trim now) and CPU core checkboxes; Settings →
+Performance adds a default trim, auto-spread of cores, the adaptive manager (clients not in front
+get a background CPU cap and efficiency mode; manual limits win) and the bandwidth limit (all
+Roblox clients together, outbound only, applied through an admin prompt, cleared by a restart).
+
+**Test:** launch two clients, open Monitor: both show CPU and memory. Trim now: working set drops.
+Untick cores: Task Manager's affinity matches. Turn on the adaptive manager, switch between the
+clients: the one in front loses its cap. Set 1000 kbps and Apply (UAC prompt), then Remove.
+
+**Roblox differences:** Roblox's working set grows back as used after a trim; private bytes, not
+the working set, is what a leak grows, so the memory limit uses that.
+
+## Batch 3 — anti-AFK and Discord alerts
+
+**Built:** anti-AFK (Settings → off by default, every 1–19 minutes; per-client switch in the
+running client's limits): while the user has been idle 5 s, each due client is brought to the
+front, gets one Space press and the previous window gets the focus back; the round stops if the
+user comes back. Discord tab (Ctrl+6): a webhook kept encrypted in the vault, a test message, and
+toggles for crashes, disconnects, hangs, restarts (memory restarts separately), the rejoin
+breaker giving up, finished batches and an optional status summary.
+
+**Test:** turn on anti-AFK at 1 minute, launch a client, leave the PC: about a minute later the
+client flashes to the front and back, and "Last key press" resets. Touch the mouse during a
+round: it stops. Set a webhook, Send test, then kill a client: a crash message arrives.
+
+## Batch 4 — Roblox updates and installer (v0.4.0)
+
+**Built:** Settings shows the installed Roblox version next to Roblox's live one (checked at start
+and every 30 minutes) and flags it when out of date; a bulk launch warns first, since Roblox's own
+update can end the other clients. "Install / Update Roblox" downloads Roblox's installer from
+`setup.rbxcdn.com`, runs it only if its Authenticode signature is valid and Roblox Corporation's,
+then finds the client again and deletes the download; progress shows in the row, and
+roblox.com/download is the fallback. Auto-update (off by default) does the same once no client,
+launch, batch or rejoin runs. Neither ever runs over a bootstrapper such as Bloxstrap.
+
+**Test:** with an older Roblox installed, Settings says out of date; Install / Update: the
+progress runs through downloading, verifying, installing, and the version matches. Try it with a
+client running: refused. Turn on auto-update, close all clients: it updates on the next check.
+
+**Roblox differences:** the live version is `clientVersionUpload` from
+`clientsettingscdn.roblox.com/v2/client-version/WindowsPlayer`, and the installed one is only
+known from the `Versions\version-…` folder name; bootstrapper installs keep their own versions.

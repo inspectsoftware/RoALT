@@ -1,17 +1,17 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { api, type AccountSummary, type Instance, type InstanceState, type Limits, type MultiInstanceStatus } from "../../api";
-import { qk, useBulk, useInstances, useMultiStatus } from "../../data";
+import { api, type AccountSummary, type Crash, type CrashKind, type Instance, type InstanceState, type Limits, type MultiInstanceStatus } from "../../api";
+import { qk, useBulk, useCrashes, useInstances, useMultiStatus, useSettings } from "../../data";
 import { Segmented, Switch } from "../../ui/controls";
 import { ConfirmDialog } from "../../ui/Dialog";
 import { Divider, usePanelWidth } from "../../ui/Resizer";
 import { Icon } from "../../ui/Icon";
-import { toastError } from "../../ui/Toast";
+import { toast, toastError } from "../../ui/Toast";
 import { accountName, Avatar, plural } from "../accounts/shared";
 import { BatchSection } from "./Batch";
 import { launchBlocked, launched, launchFailed } from "./LaunchView";
 
-const STATES: Record<InstanceState, [label: string, color: string]> = {
+export const STATES: Record<InstanceState, [label: string, color: string]> = {
   starting: ["Starting", "var(--dim)"],
   joining: ["Joining", "var(--blue)"],
   inGame: ["In game", "var(--accent-text)"],
@@ -21,7 +21,7 @@ const STATES: Record<InstanceState, [label: string, color: string]> = {
 
 export const isRunning = (i: Instance) => i.state !== "exited";
 
-function uptime(from: number, to: number) {
+export function uptime(from: number, to: number) {
   const m = Math.max(0, Math.floor((to - from) / 60_000));
   return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`;
 }
@@ -37,11 +37,33 @@ export function useNow(ms: number) {
 }
 
 const CAPS = [0, 50, 25, 10, 5];
-const limited = (l: Limits) => l.cpuCap !== null || l.eco;
+/** -1: the default from Settings; 0: never. */
+const TRIMS = [-1, 0, 5, 15, 30, 60];
+const limited = (l: Limits) => l.cpuCap !== null || l.eco || l.trimEveryMin !== null || l.affinity !== null;
+/** Logical processors a mask can name (JS numbers hold 53 bits exactly). */
+const CORES = Math.min(53, navigator.hardwareConcurrency || 1);
+// Not bit operators: those cut numbers to 32 bits.
+const hasCore = (mask: number, c: number) => Math.floor(mask / 2 ** c) % 2 === 1;
+const allCores = 2 ** CORES - 1;
 
-/** One client's utility panel, under its row: CPU cap and efficiency mode. */
+/** One client's utility panel, under its row: CPU cap, efficiency mode, trimming, cores and anti-AFK. */
 function LimitsRow({ inst }: { inst: Instance }) {
   const set = (patch: Partial<Limits>) => api.instanceSetLimits(inst.id, { ...inst.limits, ...patch }).catch(toastError);
+  const afk = useSettings().data?.antiAfk;
+  const [trimming, setTrimming] = useState(false);
+  const mask = inst.limits.affinity ?? allCores;
+  const toggleCore = (c: number) => {
+    const next = hasCore(mask, c) ? mask - 2 ** c : mask + 2 ** c;
+    if (next === 0) return toastError({ kind: "invalid", message: "Leave at least one CPU core." });
+    void set({ affinity: next === allCores ? null : next });
+  };
+  const trimNow = () => {
+    setTrimming(true);
+    api
+      .instanceTrim(inst.id)
+      .then(() => toast("Trimmed its memory. Windows pages it back in as the client needs it."), toastError)
+      .finally(() => setTrimming(false));
+  };
   return (
     <tr className="border-b border-line">
       <td colSpan={5} className="px-5 py-3 font-sans">
@@ -60,10 +82,82 @@ function LimitsRow({ inst }: { inst: Instance }) {
             <span className="text-[13px] text-text">Efficiency mode</span>
             <Switch label="Efficiency mode" checked={inst.limits.eco} onChange={(eco) => set({ eco })} />
           </div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-[13px] text-text">Trim memory</span>
+            <span className="flex flex-wrap items-center gap-2">
+              <Segmented
+                mono
+                label="Trim memory every"
+                value={inst.limits.trimEveryMin ?? -1}
+                options={TRIMS.map((m) => ({ value: m, label: m < 0 ? "Default" : m ? `${m}m` : "Off" }))}
+                onChange={(m) => set({ trimEveryMin: m < 0 ? null : m })}
+              />
+              <button className="btn btn-sm" disabled={trimming} onClick={trimNow}>
+                {trimming ? "Trimming…" : "Trim now"}
+              </button>
+            </span>
+          </div>
+          <fieldset className="flex flex-col gap-1.5">
+            <legend className="flex w-full items-center justify-between gap-2 text-[13px] text-text">
+              CPU cores
+              {inst.limits.affinity !== null && (
+                <button type="button" className="btn btn-sm" onClick={() => set({ affinity: null })}>All cores</button>
+              )}
+            </legend>
+            <div className="flex flex-wrap gap-1 mt-1.5">
+              {Array.from({ length: CORES }, (_, c) => (
+                <label key={c} className="mono flex items-center gap-1 text-xs text-dim w-11">
+                  <input type="checkbox" checked={hasCore(mask, c)} onChange={() => toggleCore(c)} />
+                  {c}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <div className="flex items-center justify-between gap-2">
+            <span className="flex flex-col">
+              <span className="text-[13px] text-text">Anti-AFK</span>
+              <span className="mono text-xs text-dim">
+                {!afk?.enabled ? "Off in Settings" : inst.afkAt !== null ? `Last key press ${uptime(inst.afkAt, Date.now())} ago` : "No key press yet"}
+              </span>
+            </span>
+            <Switch label="Anti-AFK for this client" checked={inst.antiAfk} onChange={(on) => api.instanceSetAntiAfk(inst.id, on).catch(toastError)} />
+          </div>
           <p className="text-xs text-dim">
             The limit is a share of all CPU cores; its frame rate drops with it. Roblox has no per-client FPS cap RoALT
-            can set without modifying the client. Efficiency mode lowers its priority, as Task Manager does.
+            can set without modifying the client. Efficiency mode lowers its priority, as Task Manager does. Trimming asks
+            Windows to page its memory out; it comes back as used. Limits set here win over the adaptive manager's.
+            Anti-AFK briefly brings this client to the front for a Space press while you're away; it skips a minimized client.
           </p>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+const KINDS: Record<CrashKind, string> = {
+  crash: "Crashed",
+  disconnect: "Disconnected by Roblox",
+  hang: "Stopped responding",
+  mem: "Restarted: used too much memory",
+};
+
+/** What RoALT recorded about an ended client: how it ended, what its log said, its log. */
+function CrashRow({ crash: c }: { crash: Crash }) {
+  return (
+    <tr className="border-b border-line">
+      <td colSpan={5} className="px-5 py-3 font-sans">
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <span className="text-[13px] text-text">{KINDS[c.kind]}</span>
+            <span className="mono text-xs text-dim">after {uptime(0, c.uptimeMs)}{c.placeId !== null ? ` · place ${c.placeId}` : ""}</span>
+          </div>
+          {c.reason && <p className="mono text-xs text-dim break-words selectable">{c.reason}</p>}
+          {c.hasLog && (
+            <button className="btn btn-sm self-start" onClick={() => api.crashOpenLog(c.id).catch(toastError)}>
+              Open log
+              <Icon name="external" size={12} />
+            </button>
+          )}
         </div>
       </td>
     </tr>
@@ -79,6 +173,8 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
   const [confirmAll, setConfirmAll] = useState(false);
   const [busyAll, setBusyAll] = useState(false);
   const [tuning, setTuning] = useState<string | null>(null);
+  const [details, setDetails] = useState<string | null>(null);
+  const crashes = new Map(useCrashes().data?.map((c) => [c.instanceId, c]));
   const [relaunching, setRelaunching] = useState<string | null>(null);
   const multi = useMultiStatus().data;
   const batch = useBulk().data;
@@ -163,9 +259,10 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
                 const name = a ? accountName(a) : `Account ${i.accountId}`;
                 const [label, color] = STATES[i.state];
                 const live = isRunning(i);
+                const crash = live ? undefined : crashes.get(i.id);
                 return (
                   <Fragment key={i.id}>
-                  <tr className={`enter h-10 border-b border-line ${live ? "" : "text-dim"}`} title={`PID ${i.pid}`}>
+                  <tr className={`enter h-10 border-b border-line ${live ? "" : "text-dim"}`} title={`PID ${i.pid}${i.afkAt !== null ? ` · anti-AFK key press ${uptime(i.afkAt, now)} ago` : ""}`}>
                     <td className="pl-5 pr-2 max-w-0 w-[40%]">
                       <span className="flex items-center gap-2 min-w-0 font-sans">
                         {a && <Avatar account={a} size={20} />}
@@ -196,7 +293,7 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
                           className={`wc w-9 h-8 ${limited(i.limits) ? "text-accent-text" : ""}`}
                           aria-label={`Limits for ${name}'s client`}
                           aria-expanded={tuning === i.id}
-                          title={limited(i.limits) ? `Limited${i.limits.cpuCap ? ` to ${i.limits.cpuCap}% CPU` : ""}${i.limits.eco ? ", efficiency mode" : ""}` : "CPU limit and efficiency mode"}
+                          title={limited(i.limits) ? `Limited${i.limits.cpuCap ? ` to ${i.limits.cpuCap}% CPU` : ""}${i.limits.eco ? ", efficiency mode" : ""}${i.limits.trimEveryMin !== null ? ", trim" : ""}${i.limits.affinity !== null ? ", cores" : ""}` : "CPU limit, efficiency mode, trimming and cores"}
                           onClick={() => setTuning((t) => (t === i.id ? null : i.id))}
                         >
                           <Icon name="sliders" size={12} />
@@ -212,7 +309,20 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
                         </button>
                         </span>
                       )}
-                      {!live && a?.status === "valid" && !running.some((r) => r.accountId === a.id && r.state !== "disconnected") && (
+                      {!live && (
+                        <span className="flex">
+                        {crash && (
+                          <button
+                            className="wc w-9 h-8"
+                            aria-label={`How ${name}'s client ended`}
+                            aria-expanded={details === i.id}
+                            title="How it ended"
+                            onClick={() => setDetails((d) => (d === i.id ? null : i.id))}
+                          >
+                            <Icon name="chevron" size={12} className={details === i.id ? "rotate-180" : ""} />
+                          </button>
+                        )}
+                        {a?.status === "valid" && !running.some((r) => r.accountId === a.id && r.state !== "disconnected") && (
                         <button
                           className="wc w-9 h-8"
                           aria-label={`Relaunch ${name}`}
@@ -222,10 +332,13 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
                         >
                           <Icon name="play" size={10} />
                         </button>
+                        )}
+                        </span>
                       )}
                     </td>
                   </tr>
                   {live && tuning === i.id && <LimitsRow inst={i} />}
+                  {crash && details === i.id && <CrashRow crash={crash} />}
                   </Fragment>
                 );
               })}
@@ -244,6 +357,68 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
       />
     </aside>
     </>
+  );
+}
+
+const HOLD_MS = 1000;
+
+/** The panic button: held for a second (pointer, Space or Enter), it cancels the batch, stops
+ * rejoins and restarts, and terminates every Roblox client at once, RoALT's or not. */
+export function KillAllButton() {
+  const qc = useQueryClient();
+  const [held, setHeld] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const timer = useRef<number | undefined>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const fire = () => {
+    setHeld(false);
+    setBusy(true);
+    api
+      .panicKill()
+      .then((st) => {
+        qc.setQueryData(qk.multi, st);
+        toast("Killed every Roblox client.");
+      }, toastError)
+      .finally(() => setBusy(false));
+  };
+  const start = () => {
+    if (busy || held) return;
+    setHeld(true);
+    timer.current = window.setTimeout(fire, HOLD_MS);
+  };
+  const stop = () => {
+    clearTimeout(timer.current);
+    setHeld(false);
+  };
+  const key = (e: { key: string }) => e.key === " " || e.key === "Enter";
+  return (
+    <button
+      type="button"
+      className="btn btn-sm btn-danger relative overflow-hidden w-full"
+      disabled={busy}
+      title="Hold for a second: ends every Roblox client at once, without saving"
+      onPointerDown={start}
+      onPointerUp={stop}
+      onPointerLeave={stop}
+      onKeyDown={(e) => {
+        if (!key(e)) return;
+        e.preventDefault();
+        if (!e.repeat) start();
+      }}
+      onKeyUp={(e) => key(e) && stop()}
+      onBlur={stop}
+    >
+      <span
+        aria-hidden="true"
+        className="absolute inset-y-0 left-0"
+        style={{
+          width: held ? "100%" : "0%",
+          background: "color-mix(in srgb, var(--orange) 35%, transparent)",
+          transition: held ? `width ${HOLD_MS}ms linear` : "none",
+        }}
+      />
+      <span className="relative">{busy ? "Killing…" : held ? "Keep holding…" : "Hold to kill all Roblox"}</span>
+    </button>
   );
 }
 

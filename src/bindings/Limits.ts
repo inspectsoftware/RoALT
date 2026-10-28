@@ -11,4 +11,13 @@ cpuCap: number | null,
 /**
  * Efficiency mode: EcoQoS and below-normal priority, as Task Manager's.
  */
-eco: boolean, };
+eco: boolean, 
+/**
+ * Trim its working set every this many minutes (0: never); None: `Settings.trim_every_min`.
+ */
+trimEveryMin: number | null, 
+/**
+ * The CPU cores it may run on, one bit each (the first 53 cores: a JS number); None: all
+ * (or its share with `Settings.auto_spread`).
+ */
+affinity: number | null, };

@@ -16,7 +16,7 @@
 //!    rest launch with the target as given, with a note.
 //! 2. Per account: stage `Ticket`, then `commands::launch_tracked` (the favourite is touched
 //!    for the first started client only), then `Starting` with its instance id; later stages
-//!    mirror that instance (`stage_of`).
+//!    mirror that instance (`stage_of`; a disconnect is `Done` for an account that allows it).
 //! 3. Between launches: wait until the previous client's log is bound (its instance left
 //!    `starting`, at most 30 s), then `delay_ms` ± 1 s (`jittered`). After the last launch,
 //!    keep mirroring until every started client is in game or ended (at most 120 s), then
@@ -32,7 +32,7 @@
 //! 5. Every change emits `bulk://progress` with the whole `BulkProgress`, and `Bulk` keeps the
 //!    latest copy for `bulk_current`.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -70,6 +70,16 @@ pub struct Bulk {
     rejoining: AtomicUsize,
     /// Launches in flight (`commands::launch_tracked`).
     launches: AtomicUsize,
+    /// When the last launch was let through (`cooldown`).
+    last_launch: Mutex<Option<Instant>>,
+    /// Bumped by Kill all (`kill`): a launch or rejoin that saw another value stops.
+    kills: AtomicU64,
+}
+
+/// A launch slot taken by `cooldown`; give it back with `release` when no client started.
+pub struct Slot {
+    at: Instant,
+    prev: Option<Instant>,
 }
 
 /// Holds a count of `Bulk` up while alive.
@@ -93,7 +103,50 @@ struct Batch {
 
 impl Bulk {
     pub fn new() -> Bulk {
-        Bulk { inner: Mutex::new(None), rejoining: AtomicUsize::new(0), launches: AtomicUsize::new(0) }
+        Bulk {
+            inner: Mutex::new(None),
+            rejoining: AtomicUsize::new(0),
+            launches: AtomicUsize::new(0),
+            last_launch: Mutex::new(None),
+            kills: AtomicU64::new(0),
+        }
+    }
+
+    /// The launch cooldown: reserves the next launch slot at least `gap` after the last one and
+    /// returns how long to wait for it (zero when the gap already passed). Every launch takes a
+    /// slot (`commands::launch_tracked`), so launches from any path are spaced out.
+    pub fn cooldown(&self, gap: Duration) -> (Duration, Slot) {
+        self.reserve(Instant::now(), gap)
+    }
+
+    fn reserve(&self, now: Instant, gap: Duration) -> (Duration, Slot) {
+        let mut last = self.last_launch.lock().unwrap_or_else(|e| e.into_inner());
+        let at = last.map_or(now, |l| (l + gap).max(now));
+        let prev = last.replace(at);
+        (at - now, Slot { at, prev })
+    }
+
+    /// Gives back a slot whose launch failed before its client started, unless a later launch
+    /// already queued behind it.
+    pub fn release(&self, slot: Slot) {
+        let mut last = self.last_launch.lock().unwrap_or_else(|e| e.into_inner());
+        if *last == Some(slot.at) {
+            *last = slot.prev;
+        }
+    }
+
+    /// Panic button: the running batch (if any) stops after its current step, and launches or
+    /// rejoins in flight stop at their next check (`kills`).
+    pub fn kill(&self) {
+        self.kills.fetch_add(1, Ordering::SeqCst);
+        if let Some(b) = self.batch().as_ref() {
+            b.cancel.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// How many times Kill all was pressed.
+    pub fn kills(&self) -> u64 {
+        self.kills.load(Ordering::SeqCst)
     }
 
     /// A copy of the running or last batch.
@@ -191,6 +244,9 @@ pub fn start(app: AppHandle, req: BulkRequest) -> Result<String> {
     if s.vault.is_locked() {
         return Err(AppError::Locked);
     }
+    if s.update.installing() {
+        return Err(AppError::Invalid(crate::commands::INSTALLING.into()));
+    }
     let mut accounts = Vec::with_capacity(ids.len());
     for &id in ids {
         let a = s.db.account(id)?;
@@ -201,7 +257,7 @@ pub fn start(app: AppHandle, req: BulkRequest) -> Result<String> {
         if s.tracker.has_live_client(id) {
             return Err(AppError::Invalid(format!("{name} is already running. Untick it or close its client first.")));
         }
-        accounts.push(Account { id, user_id: a.user_id, name });
+        accounts.push(Account { id, user_id: a.user_id, name, allow_disconnect: a.allow_disconnect });
     }
     if ids.len() > 1 && !s.multi.is_active() {
         let v = s.db.settings()?;
@@ -221,7 +277,12 @@ pub fn start(app: AppHandle, req: BulkRequest) -> Result<String> {
         if s.bulk.rejoining.load(Ordering::SeqCst) > 0 {
             return Err(AppError::Invalid(REJOINING.into()));
         }
-        *batch = Some(Batch { progress: progress.clone(), cancel: cancel.clone() });
+        let last = batch.replace(Batch { progress: progress.clone(), cancel: cancel.clone() });
+        // After registering: an install starting now sees this batch, one already running is seen here.
+        if s.update.installing() {
+            *batch = last;
+            return Err(AppError::Invalid(crate::commands::INSTALLING.into()));
+        }
     }
     let _ = app.emit(EVENT, &progress);
     log::info!("bulk batch {}: {} account(s)", progress.batch_id, accounts.len());
@@ -252,14 +313,16 @@ pub fn jittered(delay_ms: u32) -> Duration {
 }
 
 /// The batch stage a started client is at: `starting` → `Starting`, `joining` → `Joining`,
-/// `inGame` → `InGame`, `disconnected` / `exited` → `Failed` with the instance's note (or
-/// "Disconnected" / "Closed").
-pub fn stage_of(instance: &Instance) -> BulkStage {
+/// `inGame` → `InGame`, `disconnected` → `Done` when its account allows disconnects, else
+/// `Failed` with the instance's note (or "Disconnected"); `exited` → `Failed` with the note
+/// (or "Closed").
+pub fn stage_of(instance: &Instance, allow_disconnect: bool) -> BulkStage {
     let failed = |default: &str| BulkStage::Failed { message: instance.note.clone().unwrap_or_else(|| default.into()) };
     match instance.state {
         InstanceState::Starting => BulkStage::Starting,
         InstanceState::Joining => BulkStage::Joining,
         InstanceState::InGame => BulkStage::InGame,
+        InstanceState::Disconnected if allow_disconnect => BulkStage::Done,
         InstanceState::Disconnected => failed("Disconnected"),
         InstanceState::Exited => failed("Closed"),
     }
@@ -270,6 +333,7 @@ struct Account {
     id: i64,
     user_id: i64,
     name: String,
+    allow_disconnect: bool,
 }
 
 /// A running batch: owns nothing but its id; progress lives in `App.bulk`.
@@ -295,6 +359,9 @@ impl Run {
             }
             p.done = true;
         });
+        if let Some(p) = self.progress().filter(|p| p.batch_id == self.batch_id) {
+            crate::discord::batch_done(&self.app, &p);
+        }
     }
 
     /// Every launch in order; `Some(why)` when the batch has to stop.
@@ -347,7 +414,7 @@ impl Run {
             self.set_stage(i, BulkStage::Ticket);
             let target = target_for(&req.target, server.as_ref());
             let favourite = if started { None } else { req.favourite_id };
-            match crate::commands::launch_tracked(&self.app, &s, a.id, target, favourite).await {
+            match crate::commands::launch_tracked(&self.app, &s, a.id, target, favourite, Some(req.delay_ms)).await {
                 Ok((info, inst)) => {
                     started = true;
                     self.update(|p| {
@@ -464,7 +531,7 @@ impl Run {
             for (item, a) in p.items.iter_mut().zip(&self.accounts) {
                 match item.instance_id.as_deref().map(|id| s.tracker.get(id)) {
                     Some(Some(inst)) => {
-                        let why = mirror_item(item, &inst, &a.name);
+                        let why = mirror_item(item, &inst, a);
                         stop = stop.take().or(why);
                     }
                     // Only ended entries leave the tracker (Clear ended, pruning).
@@ -573,7 +640,8 @@ fn stop_reason(e: &AppError, name: &str) -> Option<String> {
 
 /// Mirrors one started client into its item; `Some(why)` when it signed in as another account
 /// or Roblox wants a human check.
-fn mirror_item(item: &mut BulkItem, inst: &Instance, name: &str) -> Option<String> {
+fn mirror_item(item: &mut BulkItem, inst: &Instance, a: &Account) -> Option<String> {
+    let name = &a.name;
     let why = match inst.note.as_deref() {
         Some(WRONG_ACCOUNT) => format!(
             "{name}'s client signed in as another account. Close that client and turn on Settings > Protect \
@@ -581,7 +649,7 @@ fn mirror_item(item: &mut BulkItem, inst: &Instance, name: &str) -> Option<Strin
         ),
         Some(CHALLENGED) => format!("Roblox wants a human check for {name}. Finish it in that client or close it."),
         _ => {
-            item.stage = stage_of(inst);
+            item.stage = stage_of(inst, a.allow_disconnect);
             return None;
         }
     };
@@ -633,12 +701,12 @@ fn halt(p: &mut BulkProgress, why: String) {
     });
 }
 
-/// Every started client is in game or ended.
+/// Every started client is in game, done or ended.
 fn settled(p: &BulkProgress) -> bool {
     p.items
         .iter()
         .filter(|i| i.instance_id.is_some())
-        .all(|i| matches!(i.stage, BulkStage::InGame | BulkStage::Failed { .. }))
+        .all(|i| matches!(i.stage, BulkStage::InGame | BulkStage::Done | BulkStage::Failed { .. }))
 }
 
 #[cfg(test)]
@@ -668,11 +736,13 @@ mod tests {
             note: note.map(Into::into),
             rejoins: 0,
             limits: Default::default(),
+            anti_afk: true,
+            afk_at: None,
         }
     }
 
     fn accounts(ids: &[i64]) -> Vec<Account> {
-        ids.iter().map(|&id| Account { id, user_id: id * 1_000, name: format!("A{id}") }).collect()
+        ids.iter().map(|&id| Account { id, user_id: id * 1_000, name: format!("A{id}"), allow_disconnect: false }).collect()
     }
 
     fn item(stage: BulkStage, started: bool) -> BulkItem {
@@ -726,13 +796,53 @@ mod tests {
     #[test]
     fn stages_mirror_the_instance() {
         use InstanceState::*;
-        assert_eq!(stage_of(&instance(Starting, None)), BulkStage::Starting);
-        assert_eq!(stage_of(&instance(Joining, None)), BulkStage::Joining);
-        assert_eq!(stage_of(&instance(InGame, None)), BulkStage::InGame);
-        assert_eq!(stage_of(&instance(Disconnected, None)), failed("Disconnected"));
-        assert_eq!(stage_of(&instance(Exited, None)), failed("Closed"));
-        assert_eq!(stage_of(&instance(Exited, Some("Closed unexpectedly"))), failed("Closed unexpectedly"));
-        assert_eq!(stage_of(&instance(Disconnected, Some("Roblox wants a human check"))), failed("Roblox wants a human check"));
+        assert_eq!(stage_of(&instance(Starting, None), false), BulkStage::Starting);
+        assert_eq!(stage_of(&instance(Joining, None), false), BulkStage::Joining);
+        assert_eq!(stage_of(&instance(InGame, None), false), BulkStage::InGame);
+        assert_eq!(stage_of(&instance(Disconnected, None), false), failed("Disconnected"));
+        assert_eq!(stage_of(&instance(Exited, None), false), failed("Closed"));
+        assert_eq!(stage_of(&instance(Exited, Some("Closed unexpectedly")), false), failed("Closed unexpectedly"));
+        assert_eq!(stage_of(&instance(Disconnected, Some("Roblox wants a human check")), false), failed("Roblox wants a human check"));
+    }
+
+    #[test]
+    fn a_disconnect_is_done_when_the_account_allows_it() {
+        use InstanceState::*;
+        assert_eq!(stage_of(&instance(Disconnected, None), true), BulkStage::Done);
+        assert_eq!(stage_of(&instance(Disconnected, Some("Not responding")), true), BulkStage::Done);
+        assert_eq!(stage_of(&instance(InGame, None), true), BulkStage::InGame);
+        assert_eq!(stage_of(&instance(Exited, Some("Closed unexpectedly")), true), failed("Closed unexpectedly"));
+        let mut a = accounts(&[1]).remove(0);
+        a.allow_disconnect = true;
+        let mut it = item(BulkStage::InGame, true);
+        assert_eq!(mirror_item(&mut it, &instance(Disconnected, None), &a), None);
+        assert_eq!(it.stage, BulkStage::Done);
+        let req = BulkRequest { account_ids: vec![1], target: LaunchTarget::FollowUser { user_id: 1 }, delay_ms: 0, same_server: SameServer::Off, favourite_id: None };
+        let mut p = new_progress("b".into(), &req, &[a]);
+        p.items[0] = it;
+        assert!(settled(&p));
+    }
+
+    #[test]
+    fn launches_are_spaced_out_by_the_cooldown() {
+        let b = Bulk::new();
+        let (t0, gap) = (Instant::now(), Duration::from_secs(5));
+        assert_eq!(b.reserve(t0, gap).0, Duration::ZERO, "the first goes at once");
+        // Two asked for at once queue up one gap apart.
+        assert_eq!(b.reserve(t0 + Duration::from_secs(1), gap).0, Duration::from_secs(4));
+        let (wait, slot) = b.reserve(t0 + Duration::from_secs(1), gap);
+        assert_eq!(wait, Duration::from_secs(9));
+        // A failed launch gives its slot back: the next one takes it.
+        b.release(slot);
+        assert_eq!(b.reserve(t0 + Duration::from_secs(1), gap).0, Duration::from_secs(9));
+        // Not when another queued behind it meanwhile.
+        let (_, slot) = b.reserve(t0 + Duration::from_secs(1), gap);
+        b.reserve(t0 + Duration::from_secs(1), gap);
+        b.release(slot);
+        assert_eq!(b.reserve(t0 + Duration::from_secs(1), gap).0, Duration::from_secs(24));
+        // Long after: at once again.
+        assert_eq!(b.reserve(t0 + Duration::from_secs(60), gap).0, Duration::ZERO);
+        assert_eq!(Bulk::new().cooldown(gap).0, Duration::ZERO);
     }
 
     #[test]
@@ -753,7 +863,7 @@ mod tests {
         assert!(b.check_single_launch().is_ok() && !b.any_busy());
 
         let req = BulkRequest { account_ids: vec![1], target: LaunchTarget::Place { place_id: 1, launch_data: None }, delay_ms: 0, same_server: SameServer::PickFirst, favourite_id: None };
-        let progress = new_progress("b".into(), &req, &[Account { id: 1, user_id: 1, name: "A".into() }]);
+        let progress = new_progress("b".into(), &req, &accounts(&[1]));
         *b.batch() = Some(Batch { progress, cancel: Arc::new(AtomicBool::new(false)) });
         assert!(b.begin_rejoin().is_none() && b.any_busy());
     }
@@ -767,18 +877,19 @@ mod tests {
             assert_eq!(stop_reason(&e, "Alt 1"), None, "{e}");
         }
 
+        let alt = Account { id: 1, user_id: 1, name: "Alt 1".into(), allow_disconnect: true };
         let mut it = item(BulkStage::Starting, true);
-        assert_eq!(mirror_item(&mut it, &instance(InstanceState::InGame, None), "Alt 1"), None);
+        assert_eq!(mirror_item(&mut it, &instance(InstanceState::InGame, None), &alt), None);
         assert_eq!(it.stage, BulkStage::InGame);
-        let why = mirror_item(&mut it, &instance(InstanceState::Joining, Some(WRONG_ACCOUNT)), "Alt 1").unwrap();
+        let why = mirror_item(&mut it, &instance(InstanceState::Joining, Some(WRONG_ACCOUNT)), &alt).unwrap();
         assert!(why.starts_with("Alt 1's client signed in as another account"), "{why}");
         assert_eq!(it.stage, failed(WRONG_ACCOUNT));
         // A human check stops it too; other notes only mirror.
-        let why = mirror_item(&mut it, &instance(InstanceState::Joining, Some(CHALLENGED)), "Alt 1").unwrap();
+        let why = mirror_item(&mut it, &instance(InstanceState::Joining, Some(CHALLENGED)), &alt).unwrap();
         assert!(why.starts_with("Roblox wants a human check for Alt 1"), "{why}");
         assert_eq!(it.stage, failed(CHALLENGED));
         let replaced = "Replaced by another Roblox client";
-        assert_eq!(mirror_item(&mut it, &instance(InstanceState::Joining, Some(replaced)), "Alt 1"), None);
+        assert_eq!(mirror_item(&mut it, &instance(InstanceState::Joining, Some(replaced)), &alt), None);
         assert_eq!(it.stage, BulkStage::Joining);
 
         // A client that left the tracker ended; an earlier failure is kept.
@@ -894,6 +1005,8 @@ mod tests {
             status: AccountStatus::Valid,
             status_checked_at: None,
             created_at: 0,
+            allow_disconnect: false,
+            launch_args: None,
         };
         assert_eq!(name_of(&a), "Alt 01");
         a.alias.clear();

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type Dispatch, type FormEvent, type ReactNode, type SetStateAction } from "react";
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { api, asError, type AccountSummary, type GameInfo, type LaunchTarget, type ServerOrder } from "../../api";
-import { qk, useBulk, useMultiStatus, useSettings } from "../../data";
+import { qk, useBulk, useMultiStatus, useRobloxClient, useSettings } from "../../data";
 import { Segmented, Switch } from "../../ui/controls";
 import { Icon } from "../../ui/Icon";
 import { friendly } from "../../ui/Toast";
@@ -103,6 +103,7 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
     ? `${short(pubPick)}${free === null ? "" : ` · ${free} free`}`
     : privPick ? `${privPick.name || "Private server"} · ${free} free` : "No server picked";
   const n = chosen.length;
+  const client = useRobloxClient().data;
   const askerName = chosen[0] ? accountName(chosen[0]) : "";
   const restricted = !!privPick && !!priv.data?.pages.some((p) => p.joinRestricted);
   const noJoin = `Roblox doesn't let ${askerName} join servers of this game.`;
@@ -112,6 +113,7 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
       blocked ?? (restricted ? noJoin : null),
       privPick && n > 1 ? `Access was checked for ${askerName} only; accounts without access can't join.` : null,
       free !== null && n > free ? `Only ${plural(free, "free slot")} for ${plural(n, "account")}.` : null,
+      n > 1 && client?.outdated ? "Roblox is out of date: its update can close the other clients. Update it in Settings first." : null,
     ]
       .filter(Boolean)
       .join(" ") || null;

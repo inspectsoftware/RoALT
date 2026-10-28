@@ -7,8 +7,9 @@ use std::time::{Duration, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 use super::logwatch::{self, LogFacts};
+use super::metrics::{MEM_STRIKES, mem_strikes};
 use super::process::{self, ProcInfo};
-use crate::model::{Instance, InstanceState, LaunchInfo, LaunchTarget, Limits};
+use crate::model::{CrashKind, Instance, InstanceState, LaunchInfo, LaunchTarget, Limits};
 
 /// A client that vanishes this soon after launch without reaching a game may come back under
 /// a new PID (Roblox's updater relaunches it, research M8/M9), or, behind a bootstrapper, may
@@ -21,14 +22,32 @@ const LOG_SKEW_SECS: u64 = 3;
 pub const WRONG_ACCOUNT: &str = "Signed in as another account";
 pub const CHALLENGED: &str = "Roblox wants a human check";
 /// The note of a client that ended without RoALT closing it and with nothing else to blame.
-const UNEXPECTED: &str = "Closed unexpectedly";
-/// In a game this long, a client's auto-rejoins stop counting against `MAX_REJOINS`.
-const REJOIN_RESET_MS: i64 = 5 * 60_000;
+pub const UNEXPECTED: &str = "Closed unexpectedly";
+/// The note of a running client whose window stopped responding.
+pub const HUNG: &str = "Not responding";
+/// Polls (about seconds) a client's window must be not responding in a row to count as hung.
+const HANG_POLLS: u32 = 30;
 
 pub struct Tracker {
     inner: Mutex<Vec<Entry>>,
     /// Accounts being launched (`claim`); locked before `inner`.
     claimed: Mutex<Vec<i64>>,
+    /// Clients that ended badly since the last `take_crashes`; locked after `inner`.
+    crashes: Mutex<Vec<Ended>>,
+}
+
+/// A client that ended badly (`crash_kind`), for the crash history.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Ended {
+    pub instance_id: String,
+    pub account_id: i64,
+    pub kind: CrashKind,
+    /// Unix ms.
+    pub at: i64,
+    pub uptime_ms: i64,
+    pub reason: Option<String>,
+    pub place_id: Option<i64>,
+    pub log: Option<PathBuf>,
 }
 
 /// An account being launched; released on drop.
@@ -62,17 +81,44 @@ struct Entry {
     closing: bool,
     /// Unix ms the client first reached a server.
     in_game_at: Option<i64>,
-    /// Unix ms the client's current stretch in a game began (None while not in one).
-    in_game_since: Option<i64>,
+    /// Polls in a row its window was not responding (`process::hung`).
+    hung_polls: u32,
+    /// RoALT gave up restarting it (the crash breaker): its note from then on.
+    gave_up: Option<String>,
     /// Unix ms the bootstrapper of a not yet adopted entry was first seen gone.
     gone_at: Option<i64>,
     /// Handed out by `take_rejoins` (or ended): not again until it is back in a game.
     rejoin_seen: bool,
+    /// Memory samples in a row over `Settings.mem_restart_mb` (`check_memory`).
+    mem_strikes: u32,
+    /// Its private memory at the last sample, MB.
+    mem_mb: u64,
+    /// RoALT is closing it for its memory (`mark_restart`): its exit is recorded as `Mem`.
+    mem_restart: bool,
+}
+
+impl Entry {
+    fn hung(&self) -> bool {
+        self.hung_polls >= HANG_POLLS
+    }
+
+    /// Over the memory limit long enough to be restarted.
+    fn mem_high(&self) -> bool {
+        self.mem_strikes >= MEM_STRIKES
+    }
+
+    /// Why it is worth launching again (`wants_rejoin`), or its memory (`Mem`) while it still
+    /// runs with no problem note.
+    fn cause(&self) -> Option<CrashKind> {
+        wants_rejoin(&self.inst, &self.facts, self.hung()).or_else(|| {
+            (self.mem_high() && self.inst.state != InstanceState::Exited && self.inst.note.is_none()).then_some(CrashKind::Mem)
+        })
+    }
 }
 
 impl Tracker {
     pub fn new() -> Tracker {
-        Tracker { inner: Mutex::new(Vec::new()), claimed: Mutex::new(Vec::new()) }
+        Tracker { inner: Mutex::new(Vec::new()), claimed: Mutex::new(Vec::new()), crashes: Mutex::new(Vec::new()) }
     }
 
     fn entries(&self) -> MutexGuard<'_, Vec<Entry>> {
@@ -95,6 +141,8 @@ impl Tracker {
             note: None,
             rejoins: 0,
             limits: Default::default(),
+            anti_afk: true,
+            afk_at: None,
         };
         self.entries().push(Entry {
             inst: inst.clone(),
@@ -109,9 +157,13 @@ impl Tracker {
             user_checked: false,
             closing: false,
             in_game_at: None,
-            in_game_since: None,
+            hung_polls: 0,
+            gave_up: None,
             gone_at: None,
             rejoin_seen: false,
+            mem_strikes: 0,
+            mem_mb: 0,
+            mem_restart: false,
         });
         inst
     }
@@ -136,16 +188,45 @@ impl Tracker {
     /// first seen with (None before that). None once it ended or its process is gone, so a
     /// reused pid is never closed; the next poll ends the entry.
     pub fn mark_closing(&self, id: &str) -> Option<(u32, Option<u64>)> {
+        self.mark_restart(id, None)
+    }
+
+    /// `mark_closing` for an auto-rejoin or restart of `cause`; a `Mem` one ends as `Mem`.
+    pub fn mark_restart(&self, id: &str, cause: Option<CrashKind>) -> Option<(u32, Option<u64>)> {
         let mut entries = self.entries();
         let e = entries.iter_mut().find(|e| e.inst.id == id && e.inst.state != InstanceState::Exited)?;
         e.closing = true;
+        e.mem_restart = cause == Some(CrashKind::Mem);
         e.alive.then_some((e.inst.pid, e.start_time))
+    }
+
+    /// Panic button: every entry, ended ones too, counts as closed by the user, so no rejoin or
+    /// restart waiting for its turn goes ahead (`still_wants_rejoin`).
+    pub fn mark_all_closing(&self) {
+        self.entries().iter_mut().for_each(|e| e.closing = true);
+    }
+
+    /// The crash breaker tripped for this client: `note` ("Gave up after ...") stays its note,
+    /// unless the user closes it.
+    pub fn give_up(&self, id: &str, note: String) {
+        if let Some(e) = self.entries().iter_mut().find(|e| e.inst.id == id) {
+            if !e.closing {
+                e.inst.note = Some(note.clone());
+            }
+            e.gave_up = Some(note);
+        }
+    }
+
+    /// Clients that ended badly since the last call, oldest first.
+    pub fn take_crashes(&self) -> Vec<Ended> {
+        std::mem::take(&mut *self.crashes.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     /// A close that didn't land: its exit counts as unexpected again.
     pub fn clear_closing(&self, id: &str) {
         if let Some(e) = self.entries().iter_mut().find(|e| e.inst.id == id) {
             e.closing = false;
+            e.mem_restart = false;
         }
     }
 
@@ -174,7 +255,7 @@ impl Tracker {
         self.entries().iter().any(|e| e.inst.state != InstanceState::Exited)
     }
 
-    /// How many auto-rejoins led to the client `id` (shown in the UI, capped by `take_rejoins`).
+    /// How many auto-rejoins in a row led to the client `id` (shown in the UI).
     pub fn set_rejoins(&self, id: &str, rejoins: u32) {
         if let Some(e) = self.entries().iter_mut().find(|e| e.inst.id == id) {
             e.inst.rejoins = rejoins;
@@ -191,6 +272,34 @@ impl Tracker {
         Some((prev, client_of(e)))
     }
 
+    /// Opts a running client in or out of anti-AFK; false when there is no such client.
+    pub fn set_anti_afk(&self, id: &str, on: bool) -> bool {
+        let mut entries = self.entries();
+        let Some(e) = entries.iter_mut().find(|e| e.inst.id == id && e.inst.state != InstanceState::Exited) else { return false };
+        e.inst.anti_afk = on;
+        true
+    }
+
+    /// Clients anti-AFK may press keys in: in a game, opted in, not being closed, the client
+    /// itself known. `since`: its last anti-AFK press, else when it reached the game.
+    pub fn afk_clients(&self) -> Vec<super::afk::AfkClient> {
+        self.entries()
+            .iter()
+            .filter(|e| e.inst.state == InstanceState::InGame && e.inst.anti_afk && !e.closing)
+            .filter_map(|e| {
+                let (pid, _) = client_of(e)?;
+                Some(super::afk::AfkClient { id: e.inst.id.clone(), pid, since: e.inst.afk_at.or(e.in_game_at)? })
+            })
+            .collect()
+    }
+
+    /// Anti-AFK pressed a key in the client at `at` (unix ms).
+    pub fn mark_afk(&self, id: &str, at: i64) {
+        if let Some(e) = self.entries().iter_mut().find(|e| e.inst.id == id) {
+            e.inst.afk_at = Some(at);
+        }
+    }
+
     /// Running clients by (id, pid, start time, limits), for `Limiter::sync`.
     pub fn clients(&self) -> Vec<(String, u32, u64, Limits)> {
         self.entries()
@@ -201,31 +310,59 @@ impl Tracker {
     }
 
     /// Still a rejoin case (`wants_rejoin`), checked again after the launch delay: false once
-    /// the user closed it, it reconnected or it was cleared.
+    /// the user closed it, it reconnected, responds again or was cleared.
     pub fn still_wants_rejoin(&self, id: &str) -> bool {
-        self.entries().iter().any(|e| e.inst.id == id && wants_rejoin(&e.inst, &e.facts))
+        self.entries().iter().any(|e| e.inst.id == id && !e.closing && e.cause().is_some())
     }
 
-    /// Clients that got disconnected since the last call and may be rejoined (`wants_rejoin`),
-    /// each returned once per disconnect (again after it got back into a game). Drained whether
-    /// or not auto-rejoin is on, so turning it on later doesn't relaunch old disconnects.
+    /// Clients that got disconnected, crashed or hung since the last call and may be relaunched
+    /// (`wants_rejoin`), each returned once per trouble (again after it got back into a game or
+    /// responds again). Drained whether or not auto-rejoin or auto-restart is on, so turning
+    /// one on later doesn't relaunch old troubles.
     pub fn take_rejoins(&self) -> Vec<Rejoin> {
         let mut out = Vec::new();
         for e in self.entries().iter_mut() {
-            match e.inst.state {
-                InstanceState::Disconnected | InstanceState::Exited if !e.rejoin_seen => {
-                    e.rejoin_seen = true;
-                    if wants_rejoin(&e.inst, &e.facts) {
-                        let i = &e.inst;
-                        out.push(Rejoin { from: i.id.clone(), account_id: i.account_id, target: i.target.clone(), rejoins: i.rejoins + 1 });
-                    }
+            let trouble = e.hung() || e.mem_high() || matches!(e.inst.state, InstanceState::Disconnected | InstanceState::Exited);
+            if !trouble {
+                // Reconnected, teleported or responding again: later trouble counts again.
+                e.rejoin_seen = false;
+            } else if !e.rejoin_seen {
+                e.rejoin_seen = true;
+                if let Some(cause) = e.cause() {
+                    let i = &e.inst;
+                    out.push(Rejoin {
+                        from: i.id.clone(),
+                        account_id: i.account_id,
+                        target: i.target.clone(),
+                        rejoins: i.rejoins + 1,
+                        cause,
+                    });
                 }
-                InstanceState::Disconnected | InstanceState::Exited => {}
-                // Reconnected (or teleported): a later disconnect counts again.
-                _ => e.rejoin_seen = false,
             }
         }
         out
+    }
+
+    /// One memory sample of every running client (`private_mb` reads it, MB), counted against
+    /// `limit_mb` (`metrics::mem_strikes`; 0: off). A client over it for `MEM_STRIKES` samples
+    /// in a row is handed out by `take_rejoins` as `Mem`.
+    pub fn check_memory(&self, limit_mb: u32, private_mb: &dyn Fn(u32, u64) -> Option<u64>) {
+        let read: Vec<(String, u32, u64)> = self
+            .clients()
+            .into_iter()
+            .filter_map(|(id, pid, t0, _)| Some((id, pid, private_mb(pid, t0)?)))
+            .collect();
+        // One being closed keeps its count (and the memory it is recorded with).
+        for e in self.entries().iter_mut().filter(|e| !e.closing) {
+            match read.iter().find(|(id, pid, _)| *id == e.inst.id && *pid == e.inst.pid) {
+                Some(&(_, _, mb)) => {
+                    e.mem_strikes = mem_strikes(e.mem_strikes, mb, limit_mb);
+                    e.mem_mb = mb;
+                }
+                None if e.inst.state != InstanceState::Exited => e.mem_strikes = 0,
+                None => {}
+            }
+        }
     }
 
     /// Forgets ended entries.
@@ -241,39 +378,72 @@ impl Tracker {
     /// before reaching the game within 120 s, looks for a new client whose log names the same
     /// browser tracker id (Roblox's updater relaunches with a new PID) and rebinds to it;
     /// otherwise marks it Exited (note "Closed" if mark_closing was called, else "Closed
-    /// unexpectedly"). Emits `instances://changed` whenever an entry changes. The bootstrapper
-    /// case (`via_bootstrapper`): the started PID is the bootstrapper; bind to the client by log.
+    /// unexpectedly"). A client whose window doesn't respond for 30 polls is hung (note "Not
+    /// responding"). Clients that ended badly go to the crash history. Emits
+    /// `instances://changed` whenever an entry changes. The bootstrapper case
+    /// (`via_bootstrapper`): the started PID is the bootstrapper; bind to the client by log.
+    /// Each poll also brings the clients to their limits (`limits::plan`: the adaptive manager
+    /// by the window in front, default trim, auto-spread), and every 10 s samples their memory
+    /// for the memory restart (not while a launch or batch runs).
     pub fn spawn(app: AppHandle) {
         tauri::async_runtime::spawn(async move {
+            let mut tick: u64 = 0;
             loop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
+                tick += 1;
                 let handle = app.clone();
-                let (changed, rejoins) = tauri::async_runtime::spawn_blocking(move || {
+                let (moved, rejoins) = tauri::async_runtime::spawn_blocking(move || {
                     let s = handle.state::<crate::App>();
+                    let v = s.db.settings().unwrap_or_default();
                     let user_of = |account_id| s.db.account(account_id).ok().map(|a| a.user_id);
-                    let changed = s.tracker.poll(logwatch::logs_dir().as_deref(), &Live, &user_of, crate::commands::now_ms());
+                    let moved = s.tracker.poll(logwatch::logs_dir().as_deref(), &Live, &user_of, crate::commands::now_ms());
                     // The shared login files are held only while RoALT's clients run (or launch).
                     s.multi.release_if(|| !s.tracker.any_running());
-                    // A client re-adopted under a new pid gets its limits again.
-                    s.limiter.sync(&s.tracker.clients());
-                    (changed, s.tracker.take_rejoins())
+                    // Also gives a client re-adopted under a new pid its limits again.
+                    let clients = s.tracker.clients();
+                    if !clients.is_empty() {
+                        let fg = if v.adaptive.enabled { process::foreground_pid() } else { None };
+                        s.limiter.sync(&super::limits::plan(&clients, &v, fg, crate::commands::cores()));
+                    }
+                    // Skipped (not reset) while a launch, batch or rejoin runs.
+                    if tick.is_multiple_of(10) && !clients.is_empty() && !s.bulk.any_busy() {
+                        let mb = |pid, t0| super::metrics::read(pid, t0).map(|r| r.private >> 20);
+                        s.tracker.check_memory(v.mem_restart_mb, &mb);
+                    }
+                    for c in s.tracker.take_crashes() {
+                        let row = crate::storage::NewCrash {
+                            instance_id: &c.instance_id,
+                            account_id: c.account_id,
+                            kind: c.kind,
+                            at: c.at,
+                            uptime_ms: c.uptime_ms,
+                            reason: c.reason.as_deref(),
+                            place_id: c.place_id,
+                            log_path: c.log.as_ref().and_then(|p| p.to_str()),
+                        };
+                        if let Err(e) = s.db.add_crash(&row) {
+                            log::warn!("could not record the end of instance {}: {e}", c.instance_id);
+                        }
+                    }
+                    (moved, s.tracker.take_rejoins())
                 })
                 .await
                 .unwrap_or_default();
-                if changed {
+                if !moved.is_empty() {
                     crate::commands::instances_changed(&app);
+                    crate::discord::transitions(&app, &moved);
                 }
                 super::rejoin::handle(&app, rejoins);
             }
         });
     }
 
-    /// One round over the running entries; true when what the UI sees changed. The files and
-    /// processes are looked at on copies, outside the lock.
-    fn poll(&self, dir: Option<&Path>, procs: &dyn Procs, user_of: &dyn Fn(i64) -> Option<i64>, now: i64) -> bool {
+    /// One round over the running entries; what the UI sees of each one that changed (none:
+    /// nothing changed). The files and processes are looked at on copies, outside the lock.
+    fn poll(&self, dir: Option<&Path>, procs: &dyn Procs, user_of: &dyn Fn(i64) -> Option<i64>, now: i64) -> Vec<Transition> {
         let mut work: Vec<Entry> = self.entries().iter().filter(|e| e.inst.state != InstanceState::Exited).cloned().collect();
         if work.is_empty() {
-            return false;
+            return Vec::new();
         }
         let mut taken: Vec<u32> = work.iter().filter(|e| e.adopted).map(|e| e.inst.pid).collect();
         let mut roblox = None;
@@ -285,55 +455,111 @@ impl Tracker {
             observe(e, dir, procs, &mut roblox, &mut taken, now);
         }
         let mut entries = self.entries();
-        let mut changed = false;
+        let mut moved = Vec::new();
         for w in work {
             // Only this loop ends entries, so a running one is still there.
             let Some(e) = entries.iter_mut().find(|e| e.inst.id == w.inst.id) else { continue };
             // A close that reached only the bootstrapper doesn't cover the client it started.
             let closing = e.closing && (e.adopted || !w.adopted);
-            let before = std::mem::replace(e, w).inst;
+            let old = std::mem::replace(e, w);
             e.closing = closing;
-            // set_rejoins / set_limits may have run since the copy was taken.
-            e.inst.rejoins = before.rejoins;
-            e.inst.limits = before.limits;
-            settle(e, now);
-            changed |= e.inst != before;
+            // set_rejoins / set_limits / give_up / set_anti_afk / mark_afk may have run since the
+            // copy was taken.
+            e.inst.rejoins = old.inst.rejoins;
+            e.inst.limits = old.inst.limits;
+            (e.inst.anti_afk, e.inst.afk_at) = (old.inst.anti_afk, old.inst.afk_at);
+            e.gave_up = old.gave_up;
+            (e.mem_strikes, e.mem_mb, e.mem_restart) = (old.mem_strikes, old.mem_mb, old.mem_restart);
+            if let Some(kind) = settle(e, now) {
+                self.crashes.lock().unwrap_or_else(|e| e.into_inner()).push(ended(e, kind, now));
+            }
+            if e.inst != old.inst {
+                moved.push(Transition { before: old.inst, after: e.inst.clone() });
+            }
         }
         prune(&mut entries);
-        changed
+        moved
     }
+}
+
+/// One client's change in a poll: what the UI saw before and sees now.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Transition {
+    pub before: Instance,
+    pub after: Instance,
 }
 
 fn client_of(e: &Entry) -> Option<(u32, u64)> {
     (e.adopted && e.alive).then_some((e.inst.pid, e.start_time?)).filter(|&(_, t0)| t0 != 0)
 }
 
-/// At most this many auto-rejoins in a row for one client.
-pub const MAX_REJOINS: u32 = 3;
-
 /// A client to launch again: same account, same target.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Rejoin {
-    /// The instance that ended.
+    /// The instance that ended (or is to be closed).
     pub from: String,
     pub account_id: i64,
     pub target: LaunchTarget,
     /// For the new client: the ended one's `rejoins` + 1.
     pub rejoins: u32,
+    /// Disconnect: an auto-rejoin; crash or hang: an auto-restart.
+    pub cause: CrashKind,
 }
 
-/// A client is worth rejoining when Roblox disconnected it (kicked, server shut down, connection
-/// lost; not the player's own Leave, research: reason 285) and it either still shows the
-/// disconnect dialog (no problem note) or then closed by itself ("Closed unexpectedly"), with
-/// fewer than `MAX_REJOINS` rejoins. A plain exit isn't one: closing Roblox's window leaves no
-/// trace in its log, so it can't be told apart from a crash.
-pub fn wants_rejoin(inst: &Instance, facts: &LogFacts) -> bool {
-    let ok = match inst.state {
-        InstanceState::Disconnected => inst.note.is_none(),
-        InstanceState::Exited => inst.note.as_deref() == Some(UNEXPECTED),
-        _ => false,
-    };
-    ok && facts.disconnected && !facts.left && !facts.replaced && inst.rejoins < MAX_REJOINS
+/// Why a client is worth launching again, if it is (pure; the settings and the crash breaker
+/// decide later whether it happens):
+/// - `Disconnect`: Roblox disconnected it (kicked, server shut down, connection lost) and it
+///   still shows the disconnect dialog (no problem note) or then closed by itself;
+/// - `Crash`: it ended by itself ("Closed unexpectedly") with no disconnect in its log. Closing
+///   Roblox's window by hand leaves no trace in its log, so that looks the same;
+/// - `Hang`: its window has not responded for `HANG_POLLS` polls (no other problem note).
+///
+/// Never when the player left (reason 285 / 273) or another client replaced it.
+pub fn wants_rejoin(inst: &Instance, facts: &LogFacts, hung: bool) -> Option<CrashKind> {
+    if facts.left || facts.replaced {
+        return None;
+    }
+    match inst.state {
+        InstanceState::Exited if inst.note.as_deref() == Some(UNEXPECTED) => {
+            Some(if facts.disconnected { CrashKind::Disconnect } else { CrashKind::Crash })
+        }
+        InstanceState::Exited => None,
+        _ if hung => inst.note.as_deref().is_none_or(|n| n == HUNG).then_some(CrashKind::Hang),
+        InstanceState::Disconnected if inst.note.is_none() => Some(CrashKind::Disconnect),
+        _ => None,
+    }
+}
+
+/// How a client that just ended ended, when badly: hung, disconnected by Roblox, or gone by
+/// itself (`note` as `state_of` gave it). None for a close by the user, a replacement, a wrong
+/// account or a human check (pure).
+fn crash_kind(facts: &LogFacts, hung: bool, note: Option<&str>) -> Option<CrashKind> {
+    if hung {
+        Some(CrashKind::Hang)
+    } else if facts.disconnected && !facts.left {
+        Some(CrashKind::Disconnect)
+    } else if note == Some(UNEXPECTED) && !facts.left {
+        Some(CrashKind::Crash)
+    } else {
+        None
+    }
+}
+
+fn ended(e: &Entry, kind: CrashKind, now: i64) -> Ended {
+    Ended {
+        instance_id: e.inst.id.clone(),
+        account_id: e.inst.account_id,
+        kind,
+        at: now,
+        uptime_ms: (now - e.inst.started_at).max(0),
+        reason: match kind {
+            CrashKind::Hang => Some(HUNG.into()),
+            CrashKind::Mem => Some(format!("Used {} MB of private memory", e.mem_mb)),
+            _ => e.facts.reason.clone(),
+        },
+        place_id: e.inst.place_id,
+        log: e.log.clone(),
+    }
 }
 
 impl Default for Tracker {
@@ -346,6 +572,7 @@ impl Default for Tracker {
 trait Procs {
     fn start_time(&self, pid: u32) -> Option<u64>;
     fn roblox(&self) -> Vec<ProcInfo>;
+    fn hung(&self, pid: u32) -> bool;
 }
 
 struct Live;
@@ -358,6 +585,10 @@ impl Procs for Live {
     fn roblox(&self) -> Vec<ProcInfo> {
         process::roblox_processes()
     }
+
+    fn hung(&self, pid: u32) -> bool {
+        process::hung(pid)
+    }
 }
 
 /// The blocking part of a poll for one entry: liveness, rebinding, log binding and reading.
@@ -368,6 +599,11 @@ fn observe(e: &mut Entry, dir: Option<&Path>, procs: &dyn Procs, roblox: &mut Op
     e.alive = seen == Some(first);
     if !e.adopted && !e.alive {
         e.gone_at.get_or_insert(now);
+    }
+    // ponytail: one window enumeration per client per poll; batch them if clients number hundreds.
+    // Kept once it is gone, so a hung client RoALT then closed still ends as hung.
+    if e.alive && e.adopted {
+        e.hung_polls = if procs.hung(e.inst.pid) { e.hung_polls.saturating_add(1) } else { 0 };
     }
     let Some(dir) = dir else { return };
     let launched = UNIX_EPOCH + Duration::from_millis(e.inst.started_at.max(0) as u64);
@@ -444,23 +680,28 @@ fn may_appear(e: &Entry, now: i64) -> bool {
 
 const BOOTSTRAPPER_GRACE_MS: i64 = 5_000;
 
-/// Recomputes what the UI sees (under the lock, with the current closing flag).
-fn settle(e: &mut Entry, now: i64) {
+/// Recomputes what the UI sees (under the lock, with the current closing flag). Returns how
+/// the client ended when this ended it badly (`crash_kind`).
+fn settle(e: &mut Entry, now: i64) -> Option<CrashKind> {
     if e.facts.in_game && e.in_game_at.is_none() {
         e.in_game_at = Some(now);
     }
     let ended = !e.alive && !may_appear(e, now);
-    let (state, note) = state_of(&e.facts, e.log.is_some(), ended, e.closing, e.expected_user);
+    let (state, mut note) = state_of(&e.facts, e.log.is_some(), ended, e.closing, e.expected_user);
+    // A client RoALT closed for its memory ends as `Mem` (its note: "Closed").
+    let crash = match ended {
+        true if e.closing && e.mem_restart => Some(CrashKind::Mem),
+        true => crash_kind(&e.facts, e.hung(), note.as_deref()),
+        false => None,
+    };
+    if !ended && e.hung() && note.is_none() {
+        note = Some(HUNG.into());
+    }
+    if let Some(g) = e.gave_up.as_ref().filter(|_| !e.closing) {
+        note = Some(g.clone());
+    }
     e.inst.state = state;
     e.inst.note = note;
-    if e.inst.state == InstanceState::InGame {
-        // Rejoins count "in a row": a client that stayed in a game a while starts over.
-        if now - *e.in_game_since.get_or_insert(now) >= REJOIN_RESET_MS {
-            e.inst.rejoins = 0;
-        }
-    } else {
-        e.in_game_since = None;
-    }
     if e.facts.place_id.is_some() {
         e.inst.place_id = e.facts.place_id;
     }
@@ -470,6 +711,7 @@ fn settle(e: &mut Entry, now: i64) {
     if ended {
         e.inst.ended_at = Some(now);
     }
+    crash
 }
 
 /// State and note from what the log said, whether the log is bound, whether the client is
@@ -520,18 +762,23 @@ mod tests {
     const BTID: i64 = 5_550_001;
     const USER: i64 = 261;
 
-    /// Fake processes: what `roblox()` lists and `start_time` finds (bootstrappers included).
-    struct Fake(Mutex<Vec<ProcInfo>>);
+    /// Fake processes: what `roblox()` lists and `start_time` finds (bootstrappers included),
+    /// and which of them don't respond.
+    struct Fake(Mutex<Vec<ProcInfo>>, Mutex<Vec<u32>>);
 
     impl Fake {
         fn new(procs: &[(u32, u64)]) -> Fake {
-            let f = Fake(Mutex::new(Vec::new()));
+            let f = Fake(Mutex::new(Vec::new()), Mutex::new(Vec::new()));
             f.set(procs);
             f
         }
 
         fn set(&self, procs: &[(u32, u64)]) {
             *self.0.lock().unwrap() = procs.iter().map(|&(pid, start_time)| ProcInfo { pid, start_time }).collect();
+        }
+
+        fn set_hung(&self, pids: &[u32]) {
+            *self.1.lock().unwrap() = pids.to_vec();
         }
     }
 
@@ -542,6 +789,10 @@ mod tests {
 
         fn roblox(&self) -> Vec<ProcInfo> {
             self.0.lock().unwrap().clone()
+        }
+
+        fn hung(&self, pid: u32) -> bool {
+            self.1.lock().unwrap().contains(&pid)
         }
     }
 
@@ -684,32 +935,40 @@ mod tests {
         let procs = Fake::new(&[(100, secs)]);
         let poll = |now: i64| t.poll(Some(&dir), &procs, &user_of, now);
 
-        assert!(!poll(start + 1_000));
+        assert!(poll(start + 1_000).is_empty());
         assert_eq!(state(&t, &id), (Starting, None, 100));
 
         let log = dir.join("0.744.0.7441080_20261024T120000Z_Player_ABCDE_last.log");
         append(&dir.join("0.744.0.7441080_20261024T120000Z_Player_ABCDE_CrashHandler_last.log"), &[btid_line(BTID)]);
         append(&log, &[btid_line(BTID)]);
-        assert!(poll(start + 2_000));
+        assert!(!poll(start + 2_000).is_empty());
         assert_eq!(state(&t, &id), (Joining, None, 100));
-        assert!(!poll(start + 3_000));
+        assert!(poll(start + 3_000).is_empty());
 
         append(&log, &join_lines(USER));
         append(&log, &[replicator()]);
-        assert!(poll(start + 4_000));
+        assert!(!poll(start + 4_000).is_empty());
         let i = t.get(&id).unwrap();
         assert_eq!((i.state, i.job_id.as_deref(), i.place_id), (InGame, Some("0d6c3f4e-5b2a-4c1d-9e8f-7a6b5c4d3e2f"), Some(1818)));
+        // In a game: anti-AFK may press keys in it, counting from when it got there.
+        assert_eq!(t.afk_clients().iter().map(|c| (c.pid, c.since)).collect::<Vec<_>>(), [(100, start + 4_000)]);
+        t.mark_afk(&id, start + 4_500);
+        assert_eq!(t.afk_clients()[0].since, start + 4_500);
+        assert!(t.set_anti_afk(&id, false) && t.afk_clients().is_empty());
 
         append(&log, &["[FLog::Network] Disconnection Notification. Reason: 267".into()]);
-        assert!(poll(start + 5_000));
+        let moved = poll(start + 5_000);
+        assert_eq!(moved.iter().map(|m| (m.before.state, m.after.state)).collect::<Vec<_>>(), [(InGame, Disconnected)]);
         assert_eq!(state(&t, &id).0, Disconnected);
+        // The opt-out and the last press outlive the poll.
+        assert_eq!(t.get(&id).map(|i| (i.anti_afk, i.afk_at)), Some((false, Some(start + 4_500))));
 
         // Reached the game, so a vanished process is gone at once.
         procs.set(&[]);
-        assert!(poll(start + 6_000));
+        assert!(!poll(start + 6_000).is_empty());
         assert_eq!(state(&t, &id), (Exited, note("Closed unexpectedly"), 100));
         assert_eq!(t.get(&id).unwrap().ended_at, Some(start + 6_000));
-        assert!(!poll(start + 7_000));
+        assert!(poll(start + 7_000).is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -899,28 +1158,52 @@ mod tests {
     }
 
     #[test]
-    fn rejoins_only_disconnects_roblox_caused_up_to_three_times() {
+    fn rejoins_disconnects_and_restarts_crashes_and_hangs() {
+        use CrashKind::*;
         let base = Tracker::new().register(&info(100, 0, false), target());
-        let inst = |state, note: Option<&str>, rejoins| Instance { state, note: note.map(Into::into), rejoins, ..base.clone() };
+        let inst = |state, note: Option<&str>| Instance { state, note: note.map(Into::into), ..base.clone() };
         let facts = |disconnected, left| {
             let mut f = LogFacts::default();
             (f.disconnected, f.left) = (disconnected, left);
             f
         };
-        let kicked = facts(true, false);
-        assert!(wants_rejoin(&inst(Disconnected, None, 0), &kicked));
-        assert!(wants_rejoin(&inst(Disconnected, None, 2), &kicked));
-        assert!(wants_rejoin(&inst(Exited, Some(UNEXPECTED), 0), &kicked), "closed by itself after the kick");
-        assert!(!wants_rejoin(&inst(Disconnected, None, MAX_REJOINS), &kicked));
-        assert!(!wants_rejoin(&inst(Disconnected, None, 0), &facts(true, true)), "the player left");
-        assert!(!wants_rejoin(&inst(Exited, Some(UNEXPECTED), 0), &facts(false, false)), "a plain exit");
-        for n in ["Closed", WRONG_ACCOUNT, CHALLENGED] {
-            assert!(!wants_rejoin(&inst(Exited, Some(n), 0), &kicked), "{n}");
+        let (kicked, none) = (facts(true, false), facts(false, false));
+        assert_eq!(wants_rejoin(&inst(Disconnected, None), &kicked, false), Some(Disconnect));
+        assert_eq!(wants_rejoin(&inst(Exited, Some(UNEXPECTED)), &kicked, false), Some(Disconnect), "closed by itself after the kick");
+        assert_eq!(wants_rejoin(&inst(Disconnected, None), &facts(true, true), false), None, "the player left");
+        assert_eq!(wants_rejoin(&inst(Exited, Some(UNEXPECTED)), &facts(true, true), false), None, "left, then closed");
+        // Ended by itself with nothing in its log: a crash (or the window closed by hand).
+        assert_eq!(wants_rejoin(&inst(Exited, Some(UNEXPECTED)), &none, false), Some(Crash));
+        let mut replaced = none.clone();
+        replaced.replaced = true;
+        assert_eq!(wants_rejoin(&inst(Exited, Some(UNEXPECTED)), &replaced, false), None);
+        for n in ["Closed", WRONG_ACCOUNT, CHALLENGED, "Gave up after 3 restarts"] {
+            assert_eq!(wants_rejoin(&inst(Exited, Some(n)), &kicked, false), None, "{n}");
+            assert_eq!(wants_rejoin(&inst(InGame, Some(n)), &none, true), None, "hung, {n}");
         }
-        assert!(!wants_rejoin(&inst(Disconnected, Some(CHALLENGED), 0), &kicked));
+        assert_eq!(wants_rejoin(&inst(Disconnected, Some(CHALLENGED)), &kicked, false), None);
         for state in [Starting, Joining, InGame] {
-            assert!(!wants_rejoin(&inst(state, None, 0), &kicked), "{state:?}");
+            assert_eq!(wants_rejoin(&inst(state, None), &none, false), None, "{state:?}");
+            assert_eq!(wants_rejoin(&inst(state, Some(HUNG)), &none, true), Some(Hang), "{state:?}");
         }
+        assert_eq!(wants_rejoin(&inst(Disconnected, Some(HUNG)), &kicked, true), Some(Hang));
+        assert_eq!(wants_rejoin(&inst(Exited, Some("Closed")), &none, true), None, "a hung client RoALT closed");
+    }
+
+    #[test]
+    fn what_ended_badly() {
+        let facts = |disconnected, left| {
+            let mut f = LogFacts::default();
+            (f.disconnected, f.left) = (disconnected, left);
+            f
+        };
+        assert_eq!(crash_kind(&facts(false, false), false, Some(UNEXPECTED)), Some(CrashKind::Crash));
+        assert_eq!(crash_kind(&facts(true, false), false, Some("Closed")), Some(CrashKind::Disconnect));
+        assert_eq!(crash_kind(&facts(false, false), true, Some("Closed")), Some(CrashKind::Hang));
+        for note in ["Closed", "Replaced by another Roblox client", WRONG_ACCOUNT, CHALLENGED] {
+            assert_eq!(crash_kind(&facts(false, false), false, Some(note)), None, "{note}");
+        }
+        assert_eq!(crash_kind(&facts(true, true), false, Some(UNEXPECTED)), None, "the player left");
     }
 
     #[test]
@@ -950,13 +1233,19 @@ mod tests {
         // Kicked (idle, 267) and left by the player (285): only the kick is handed out, once.
         append(&log(100), &["[FLog::Network] Sending disconnect with reason: 267".into()]);
         append(&log(200), &["[FLog::Network] Disconnection Notification. Reason: 285".into()]);
-        // A plain exit (the window closed) is no disconnect.
+        // A plain exit (the window closed, or a crash) is no disconnect: a restart.
         procs.set(&[(100, secs), (200, secs)]);
         poll(start + 2_000);
         assert_eq!(state(&t, &kicked).0, Disconnected);
         assert_eq!(state(&t, &closed), (Exited, note("Closed unexpectedly"), 300));
-        assert_eq!(t.take_rejoins(), vec![Rejoin { from: kicked.clone(), account_id: 7, target: follow.clone(), rejoins: 2 }]);
+        let crash = Rejoin { from: closed.clone(), account_id: 1, target: target(), rejoins: 1, cause: CrashKind::Crash };
+        let kick = Rejoin { from: kicked.clone(), account_id: 7, target: follow.clone(), rejoins: 2, cause: CrashKind::Disconnect };
+        assert_eq!(t.take_rejoins(), vec![kick, crash]);
         assert!(t.take_rejoins().is_empty());
+        // The crash went to the history; the disconnect hasn't ended yet.
+        let ended = t.take_crashes();
+        assert_eq!(ended.iter().map(|c| (c.instance_id.as_str(), c.kind)).collect::<Vec<_>>(), [(closed.as_str(), CrashKind::Crash)]);
+        assert_eq!((ended[0].reason.as_ref(), ended[0].uptime_ms, ended[0].log.as_ref()), (None, 2_000, Some(&log(300))));
         poll(start + 3_000);
         assert!(t.take_rejoins().is_empty());
 
@@ -973,50 +1262,148 @@ mod tests {
     }
 
     #[test]
-    fn rejoins_count_in_a_row_and_a_closed_client_is_not_rejoined() {
+    fn a_closed_client_is_not_rejoined() {
         let dir = temp_dir();
         let t = Tracker::new();
         let start = now_ms();
         let secs = (start / 1000) as u64;
-        let launch = |pid: u32| LaunchInfo { browser_tracker_id: BTID + i64::from(pid), ..info(pid, start, false) };
-        let long = t.register(&launch(100), target()).id;
-        let quick = t.register(&launch(200), target()).id;
-        let log = |pid: u32| dir.join(format!("0.744.0.7441080_20261024T1200{pid}Z_Player_R{pid}_last.log"));
-        for (pid, id) in [(100, &long), (200, &quick)] {
-            t.set_rejoins(id, MAX_REJOINS);
-            append(&log(pid), &[btid_line(BTID + i64::from(pid))]);
-            append(&log(pid), &join_lines(USER));
-            append(&log(pid), &[replicator()]);
-        }
-        let procs = Fake::new(&[(100, secs), (200, secs)]);
+        let id = t.register(&info(100, start, false), target()).id;
+        let log = dir.join("0.744.0.7441080_20261024T120100Z_Player_R100_last.log");
+        append(&log, &[btid_line(BTID)]);
+        append(&log, &join_lines(USER));
+        append(&log, &[replicator()]);
+        let procs = Fake::new(&[(100, secs)]);
         let poll = |now: i64| t.poll(Some(&dir), &procs, &user_of, now);
         poll(start + 1_000);
-        poll(start + 60_000);
-        let kick = |pid| append(&log(pid), &["[FLog::Network] Sending disconnect with reason: 267".into()]);
+        t.set_rejoins(&id, 5);
+        append(&log, &["[FLog::Network] Sending disconnect with reason: 267".into()]);
+        poll(start + 2_000);
+        assert_eq!(t.take_rejoins(), vec![Rejoin { from: id.clone(), account_id: 1, target: target(), rejoins: 6, cause: CrashKind::Disconnect }]);
+        assert!(t.still_wants_rejoin(&id));
 
-        // Kicked after a minute in game: still at the cap.
-        kick(200);
-        poll(start + 61_000);
-        assert_eq!(state(&t, &quick).0, Disconnected);
-        assert!(t.take_rejoins().is_empty());
-
-        // Kicked after five minutes in game: the count started over.
-        poll(start + 1_000 + REJOIN_RESET_MS);
-        assert_eq!(t.get(&long).unwrap().rejoins, 0);
-        kick(100);
-        poll(start + 2_000 + REJOIN_RESET_MS);
-        assert_eq!(t.take_rejoins(), vec![Rejoin { from: long.clone(), account_id: 1, target: target(), rejoins: 1 }]);
-        assert!(t.still_wants_rejoin(&long));
-
-        // Closed by the user during the launch delay: no longer wanted; cleared: neither.
-        t.mark_closing(&long);
-        procs.set(&[(200, secs)]);
-        poll(start + 3_000 + REJOIN_RESET_MS);
-        assert_eq!(state(&t, &long).1, note("Closed"));
-        assert!(!t.still_wants_rejoin(&long));
+        // Closed by the user during the launch delay: no longer wanted at once, then ended as
+        // closed, with the disconnect in the history; cleared: still not.
+        t.mark_closing(&id);
+        assert!(!t.still_wants_rejoin(&id));
+        procs.set(&[]);
+        poll(start + 3_000);
+        assert_eq!(state(&t, &id).1, note("Closed"));
+        assert!(!t.still_wants_rejoin(&id));
+        let ended = t.take_crashes();
+        assert_eq!((ended.len(), ended[0].kind), (1, CrashKind::Disconnect));
+        assert_eq!(ended[0].reason.as_deref(), Some("Sending disconnect with reason: 267"));
         t.clear_ended();
-        assert!(!t.still_wants_rejoin(&long));
+        assert!(!t.still_wants_rejoin(&id));
+
+        // The panic button covers ended ones waiting for a restart too.
+        let crashed = t.register(&LaunchInfo { browser_tracker_id: BTID + 1, ..info(200, start, false) }, target()).id;
+        procs.set(&[(200, secs)]);
+        poll(start + 4_000);
+        procs.set(&[]);
+        poll(start + 200_000);
+        assert!(t.still_wants_rejoin(&crashed));
+        t.mark_all_closing();
+        assert!(!t.still_wants_rejoin(&crashed));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_hung_client_is_restarted_once_and_given_up_on() {
+        let t = Tracker::new();
+        let start = now_ms();
+        let secs = (start / 1000) as u64;
+        let id = t.register(&info(100, start, false), target()).id;
+        let procs = Fake::new(&[(100, secs)]);
+        let poll = |n: i64| t.poll(None, &procs, &user_of, start + n * 1_000);
+        poll(1);
+        procs.set_hung(&[100]);
+        for n in 2..=i64::from(HANG_POLLS) {
+            poll(n);
+        }
+        assert_eq!(state(&t, &id).1, None, "not yet");
+        assert!(t.take_rejoins().is_empty());
+        poll(i64::from(HANG_POLLS) + 1);
+        assert_eq!(state(&t, &id), (Starting, note(HUNG), 100));
+        assert_eq!(t.take_rejoins().iter().map(|r| r.cause).collect::<Vec<_>>(), [CrashKind::Hang]);
+        assert!(t.take_rejoins().is_empty() && t.still_wants_rejoin(&id));
+
+        // Responding again: no longer wanted, and a later hang counts again.
+        procs.set_hung(&[]);
+        poll(40);
+        assert_eq!(state(&t, &id).1, None);
+        assert!(!t.still_wants_rejoin(&id) && t.take_rejoins().is_empty());
+
+        // The breaker gave up: its note stays, and it is not handed out again.
+        procs.set_hung(&[100]);
+        for n in 41..=41 + i64::from(HANG_POLLS) {
+            poll(n);
+        }
+        assert_eq!(t.take_rejoins().len(), 1);
+        t.give_up(&id, "Gave up after 3 restarts".into());
+        poll(80);
+        assert_eq!(state(&t, &id).1, note("Gave up after 3 restarts"));
+        assert!(!t.still_wants_rejoin(&id));
+
+        // It then ends (never reached a game: after 120 s) as hung.
+        procs.set(&[]);
+        poll(200);
+        assert_eq!(state(&t, &id), (Exited, note("Gave up after 3 restarts"), 100));
+        let ended = t.take_crashes();
+        assert_eq!((ended.len(), ended[0].kind, ended[0].reason.as_deref()), (1, CrashKind::Hang, Some(HUNG)));
+    }
+
+    #[test]
+    fn a_client_over_its_memory_limit_is_restarted_once() {
+        let t = Tracker::new();
+        let start = now_ms();
+        let secs = (start / 1000) as u64;
+        let id = t.register(&info(100, start, false), target()).id;
+        let procs = Fake::new(&[(100, secs)]);
+        t.poll(None, &procs, &user_of, start + 1_000);
+        let mb = Mutex::new(5_000u64);
+        let read = |_: u32, _: u64| Some(*mb.lock().unwrap());
+        t.check_memory(4_096, &read);
+        t.check_memory(4_096, &read);
+        assert!(t.take_rejoins().is_empty(), "two samples aren't enough");
+        // Back under it: counting starts over.
+        *mb.lock().unwrap() = 1_000;
+        t.check_memory(4_096, &read);
+        *mb.lock().unwrap() = 5_000;
+        for _ in 0..MEM_STRIKES {
+            t.check_memory(4_096, &read);
+        }
+        t.poll(None, &procs, &user_of, start + 2_000);
+        assert_eq!(t.take_rejoins().iter().map(|r| r.cause).collect::<Vec<_>>(), [CrashKind::Mem]);
+        assert!(t.take_rejoins().is_empty() && t.still_wants_rejoin(&id));
+        t.check_memory(0, &read);
+        assert!(!t.still_wants_rejoin(&id), "turned off");
+        for _ in 0..MEM_STRIKES {
+            t.check_memory(4_096, &read);
+        }
+
+        // RoALT closes it: it ends as a memory restart, with what it used.
+        t.mark_restart(&id, Some(CrashKind::Mem));
+        procs.set(&[]);
+        t.poll(None, &procs, &user_of, start + 3_000);
+        assert_eq!(state(&t, &id).1, note("Closed"));
+        let ended = t.take_crashes();
+        assert_eq!((ended.len(), ended[0].kind, ended[0].reason.as_deref()), (1, CrashKind::Mem, Some("Used 5000 MB of private memory")));
+    }
+
+    #[test]
+    fn a_user_close_over_the_memory_limit_is_not_a_memory_restart() {
+        let t = Tracker::new();
+        let start = now_ms();
+        let id = t.register(&info(100, start, false), target()).id;
+        let procs = Fake::new(&[(100, (start / 1000) as u64)]);
+        t.poll(None, &procs, &user_of, start + 1_000);
+        for _ in 0..MEM_STRIKES {
+            t.check_memory(4_096, &|_, _| Some(5_000));
+        }
+        t.mark_closing(&id);
+        procs.set(&[]);
+        t.poll(None, &procs, &user_of, start + 2_000);
+        assert!(t.take_crashes().is_empty());
     }
 
     #[test]

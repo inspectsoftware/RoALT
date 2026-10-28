@@ -1,6 +1,6 @@
 //! The tray icon (`tray-icon` feature): left click shows the window; the menu has Show RoALT,
-//! Favourites (those with `in_tray`), Close all clients, Lock vault (master-password mode),
-//! Quit.
+//! Favourites (those with `in_tray`), Close all clients, Kill all Roblox, Lock vault
+//! (master-password mode), Quit.
 
 use std::sync::{Mutex, MutexGuard};
 
@@ -56,7 +56,8 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
 
 /// Rebuilds the menu: favourites in tray order by name (ids `fav:<id>`; disabled with the label
 /// "Unlock RoALT to launch" while the vault is locked; "No favourites" when none), "Close all
-/// clients" (disabled when none run), "Lock vault" (only in master-password mode, disabled
+/// clients" (disabled when none run), "Kill all Roblox" (always: it also ends clients RoALT
+/// didn't start), "Lock vault" (only in master-password mode, disabled
 /// while locked). Called after favourites change, the vault locks or unlocks, and clients
 /// start or end. Never fails loudly: errors are logged.
 pub fn refresh(app: &AppHandle) {
@@ -109,7 +110,15 @@ fn menu(app: &AppHandle, v: &View) -> tauri::Result<Menu<Wry>> {
             favourites.append(&item(&format!("fav:{id}"), &name.replace('&', "&&"), true)?)?;
         }
     }
-    let menu = Menu::with_items(app, &[&item("show", "Show RoALT", true)?, &favourites, &item("close-all", "Close all clients", v.running)?])?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &item("show", "Show RoALT", true)?,
+            &favourites,
+            &item("close-all", "Close all clients", v.running)?,
+            &item("kill-all", "Kill all Roblox", true)?,
+        ],
+    )?;
     if v.master {
         menu.append(&item("lock", "Lock vault", !v.locked)?)?;
     }
@@ -128,7 +137,8 @@ pub fn show_main(app: &AppHandle) {
 }
 
 /// Menu ids: "show" → show, unminimize and focus the main window; "close-all" →
-/// `commands::instances_close_all(force: false)` logic; "lock" → `commands::lock_vault`;
+/// `commands::instances_close_all(force: false)` logic; "kill-all" → `commands::kill_all`
+/// (no confirmation: it is the panic button); "lock" → `commands::lock_vault`;
 /// "quit" → exit the app; "fav:<id>" → `launch_favourite`.
 fn on_menu(app: &AppHandle, id: &str) {
     match id {
@@ -138,6 +148,14 @@ fn on_menu(app: &AppHandle, id: &str) {
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = commands::close_running(&app.state::<App>(), false).await {
                     notice(&app, true, format!("Couldn't close the clients: {e}"));
+                }
+            });
+        }
+        "kill-all" => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = commands::kill_all(&app.state::<App>()).await {
+                    notice(&app, true, format!("Couldn't kill every Roblox client: {e}"));
                 }
             });
         }
@@ -178,7 +196,7 @@ async fn launch(app: &AppHandle, id: i64) -> Result<()> {
         }
         1 => {
             let _single = s.bulk.begin_single_launch()?;
-            commands::launch_tracked(app, &s, ids[0], fav.target, Some(fav.id)).await?;
+            commands::launch_tracked(app, &s, ids[0], fav.target, Some(fav.id), None).await?;
         }
         _ => {
             let delay_ms = s.db.settings()?.launch_delay_ms;

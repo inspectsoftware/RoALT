@@ -4,7 +4,7 @@ import {
   api, asError, type AccountSummary, type BulkProgress, type ErrorPayload, type JoinCandidate, type LaunchInfo, type LaunchTarget,
   type MultiInstanceStatus, type SameServer, type Settings,
 } from "../../api";
-import { qk, useBulk, useFavourites, useMultiStatus, usePresence, useSetSettings, useSettings } from "../../data";
+import { qk, useBulk, useFavourites, useMultiStatus, usePresence, useRobloxClient, useSetSettings, useSettings } from "../../data";
 import { NumberField, Segmented, Switch } from "../../ui/controls";
 import { Icon } from "../../ui/Icon";
 import { friendly, toast } from "../../ui/Toast";
@@ -79,6 +79,7 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
   const favourites = useFavourites();
   const multi = useMultiStatus().data;
   const batch = useBulk().data;
+  const client = useRobloxClient().data;
   const settings = useSettings().data;
   const delayMs = settings?.launchDelayMs ?? 6000;
   const setSettings = useSetSettings();
@@ -373,7 +374,7 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
                 onChange={setSameServer}
               />
             )}
-            <span className="flex items-center gap-2.5" title="Relaunch a client Roblox disconnects (kicked, server shut down, connection lost) into the same target. Up to 3 tries.">
+            <span className="flex items-center gap-2.5" title="Relaunch a client Roblox disconnects (kicked, server shut down, connection lost) into the same target, until Settings > Give up after.">
               <Switch
                 label="Auto-rejoin"
                 checked={settings?.autoRejoin ?? false}
@@ -392,6 +393,11 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
               </>
             ) : blocked ? (
               <span className="alert">{blocked}</span>
+            ) : bulk && client?.outdated ? (
+              // Not blocking: Roblox updates itself on the first launch, which can end the clients after it.
+              <span className="alert" title={`Installed ${client.version}, latest ${client.latest}`}>
+                Roblox is out of date: its update can close the other clients. Update it in Settings first.
+              </span>
             ) : account ? (
               <span className="truncate">
                 As <span className="text-text font-medium">{chosen.map(accountName).join(", ")}</span> · <span className="kbd">Ctrl Enter</span>

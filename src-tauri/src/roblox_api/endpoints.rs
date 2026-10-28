@@ -40,3 +40,7 @@ pub const PLACE_ICONS: &str =
 pub fn fill(template: &str, value: impl std::fmt::Display) -> String {
     template.replacen("{}", &value.to_string(), 1)
 }
+
+// Roblox client updates (no cookie). The installer URL is `{SETUP}{clientVersionUpload}-RobloxPlayerInstaller.exe`.
+pub const CLIENT_VERSION: &str = "https://clientsettingscdn.roblox.com/v2/client-version/WindowsPlayer";
+pub const SETUP: &str = "https://setup.rbxcdn.com/";

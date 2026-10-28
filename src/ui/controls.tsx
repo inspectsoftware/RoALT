@@ -34,6 +34,42 @@ export function Segmented<T extends string | number>({ label, value, options, on
   );
 }
 
+/** Text input that saves (trimmed) on blur or Enter; Escape puts the saved value back, and so
+ * does a refused save (`onCommit` rejects; the caller shows why). */
+export function TextField({ label, value, placeholder, className = "", onCommit }: {
+  label: string;
+  value: string;
+  placeholder?: string;
+  className?: string;
+  onCommit: (text: string) => Promise<unknown>;
+}) {
+  const [text, setText] = useState(value);
+  useEffect(() => setText(value), [value]);
+  const commit = () => {
+    const [next, before] = [text.trim(), value];
+    if (next !== before) onCommit(next).catch(() => setText(before));
+  };
+  return (
+    <input
+      className={`field mono ${className}`}
+      aria-label={label}
+      value={text}
+      placeholder={placeholder}
+      spellCheck={false}
+      autoComplete="off"
+      onChange={(e) => setText(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.currentTarget.blur();
+        if (e.key === "Escape" && text !== value) {
+          e.stopPropagation();
+          setText(value);
+        }
+      }}
+    />
+  );
+}
+
 /** Number input that saves on blur or Enter and snaps back when out of range or off-step. */
 export function NumberField({ label, unit, short, min, max, step = 1, value, onCommit }: {
   /** Shown before the field; else `unit` names it for screen readers only. */

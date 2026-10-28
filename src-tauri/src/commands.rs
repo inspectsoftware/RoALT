@@ -1111,7 +1111,6 @@ fn check_fps(f: u32) -> Result<()> {
 }
 
 /// Limits the user can set: a CPU cap of 1-100 %, a trim every 0-1440 minutes, at least one core.
-
 fn check_limits(l: &Limits) -> Result<()> {
     if l.cpu_cap.is_some_and(|c| !(1..=100).contains(&c)) {
         return Err(AppError::Invalid("The CPU limit must be between 1 and 100 %.".into()));
@@ -1900,7 +1899,7 @@ nothing here
 {W}
 {a} {b}");
         assert_eq!(find_cookies(&text), [a.clone(), b.clone()]);
-        assert_eq!(find_cookies(&format!("{a}:user:pass")), [a.clone()]);
+        assert_eq!(find_cookies(&format!("{a}:user:pass")), std::slice::from_ref(&a));
         assert_eq!(find_cookies(&format!("{a}\u{201d}\u{200b}")), [a], "a smart quote or zero-width space ends it");
         assert!(find_cookies("no cookies").is_empty());
     }

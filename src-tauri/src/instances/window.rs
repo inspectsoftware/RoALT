@@ -310,7 +310,7 @@ pub fn fit(w: u32, h: u32, max_w: u32) -> (u32, u32) {
 
 /// GDI's BGRX to opaque RGBA (pure).
 pub fn to_rgba(bgra: &[u8]) -> Vec<u8> {
-    bgra.chunks_exact(4).flat_map(|p| [p[2], p[1], p[0], 255]).collect()
+    bgra.as_chunks::<4>().0.iter().flat_map(|p| [p[2], p[1], p[0], 255]).collect()
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="src-tauri/icons/app-icon.svg" width="96" alt="RoALT logo">
+<img src="docs/images/banner.png" width="900" alt="RoALT: every alt, one click. The free Roblox account manager and multi-launcher for Windows.">
 
 # RoALT
 

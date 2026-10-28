@@ -1,95 +1,562 @@
 <div align="center">
 
-<img src="src-tauri/icons/app-icon.svg" width="88" alt="RoALT logo">
+<img src="src-tauri/icons/app-icon.svg" width="96" alt="RoALT logo">
 
 # RoALT
 
-**A fast, local-only Roblox account manager for Windows.**
-Keep your accounts signed in, check they still work, and launch any of them — or all of them — into a game.
+### Every Roblox account you own, signed in, checked and one click from any game.
 
-[![Latest release](https://img.shields.io/github/v/release/inspectsoftware/RoALT?style=flat-square&color=b4f000&label=release)](https://github.com/inspectsoftware/RoALT/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/inspectsoftware/RoALT/total?style=flat-square&color=2b2b2b)](https://github.com/inspectsoftware/RoALT/releases)
+A fast, local-only account manager and multi-client launcher for Windows.<br>
+Your cookies stay encrypted on your PC. Nothing is sent anywhere except Roblox.
+
+[![Latest release](https://img.shields.io/github/v/release/inspectsoftware/RoALT?style=for-the-badge&color=b4f000&labelColor=1a1a1a&label=release)](https://github.com/inspectsoftware/RoALT/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/inspectsoftware/RoALT/total?style=for-the-badge&color=2b2b2b&labelColor=1a1a1a)](https://github.com/inspectsoftware/RoALT/releases)
+[![Windows 10 | 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?style=for-the-badge&logo=windows&labelColor=1a1a1a)](#-install)
+[![Discord](https://img.shields.io/badge/Discord-join-5865f2?style=for-the-badge&logo=discord&logoColor=white&labelColor=1a1a1a)](https://discord.gg/Q2vrgDKb3)
+
 [![CI](https://img.shields.io/github/actions/workflow/status/inspectsoftware/RoALT/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/inspectsoftware/RoALT/actions/workflows/ci.yml)
-![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?style=flat-square&logo=windows)
-[![Discord](https://img.shields.io/badge/Discord-join%20the%20server-5865f2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/Q2vrgDKb3)
+![Tauri 2](https://img.shields.io/badge/Tauri-2-24c8db?style=flat-square&logo=tauri&logoColor=white)
+![Rust](https://img.shields.io/badge/Rust-2024-dea584?style=flat-square&logo=rust&logoColor=white)
+![React 19](https://img.shields.io/badge/React-19-61dafb?style=flat-square&logo=react&logoColor=white)
+![No telemetry](https://img.shields.io/badge/telemetry-none-b4f000?style=flat-square)
 
-[**Download**](https://github.com/inspectsoftware/RoALT/releases/latest) ·
-[**Discord**](https://discord.gg/Q2vrgDKb3) ·
-[Build from source](#build-from-source) ·
-[Privacy](#privacy)
+<br>
+
+[**⬇ Download**](https://github.com/inspectsoftware/RoALT/releases/latest) &nbsp;·&nbsp;
+[**💬 Discord**](https://discord.gg/Q2vrgDKb3) &nbsp;·&nbsp;
+[Quick start](#-quick-start) &nbsp;·&nbsp;
+[Privacy](#-safety-and-privacy) &nbsp;·&nbsp;
+[For developers](#-for-developers)
+
+<br>
 
 <img src="docs/images/accounts.png" alt="RoALT's Accounts view: a list of accounts with their status, groups and a details panel" width="900">
 
 </div>
 
-## Features
+<br>
 
-| | |
+## 📑 Contents
+
+| For everyone | For developers |
 |---|---|
-| 🔐 **Encrypted vault** | Cookies are encrypted with Windows DPAPI, or with your own master password (Argon2id + AES-256-GCM) and auto-lock. Reveal and copy sit behind Windows Hello or the master password. |
-| 👥 **Accounts at a glance** | Avatars, live presence, Robux, Plus, friends, followers, 2-step status. Groups, aliases, notes, favourites, search and filters. Validate one or all in a click. |
-| 🚀 **Launch anything** | Paste a game link, place ID, job ID, private server or share link, a profile or `@username` — RoALT works out what it is. Join a friend, or save a target as a favourite. |
-| 🪟 **Multi-instance** | Run several clients side by side. Launch a batch one after another, all into **the same server** if you like. |
-| 🔁 **Auto-rejoin and restart** | A client that gets disconnected rejoins the same game on its own. Opt-in: crashed, frozen or memory-hungry clients restart too. A crash breaker gives up on an account after too many tries; accounts can be allowed to stay disconnected. Crash history with the log's reason. |
-| 🛑 **Kill all** | Hold one button (or use the tray) to end every Roblox process and stop pending launches and rejoins. |
-| ⚙️ **Launch control** | Custom launch arguments (default and per account), a cooldown between launches, a configurable close grace. |
-| 📈 **Monitor** | CPU, memory, disk/network and uptime per client, with sparklines and totals. |
-| 💤 **Anti-AFK** | Off by default. While you're away from the PC, every few minutes each client is briefly brought to the front and gets one Space press, so Roblox doesn't kick it after 20 idle minutes. Per-client opt-out. |
-| 🔔 **Discord alerts** | Crashes, disconnects, restarts and finished batches posted to your own webhook (kept encrypted in the vault). Opt-in. |
-| 🎚️ **Per-client limits** | Cap one client's CPU (down to 5%), put it in efficiency mode, pin it to cores or trim its memory, so background accounts don't slow your PC. An adaptive mode limits every client that isn't in front. |
-| 📶 **Bandwidth limit** | Opt-in cap on all Roblox clients' upload, through a Windows QoS policy. |
-| ⬆️ **Roblox updates** | Shows when Roblox is out of date and installs the update from Roblox's own installer, checked for Roblox's signature first. Optional auto-update when no client runs. |
-| 🗺️ **Server browser** | Browse public servers by players or ping, see private servers, and send any account into the one you pick. |
-| 🧰 **Quality of life** | Tray menu with favourites, encrypted backups, relaunch an ended client in one click, keyboard shortcuts, dark and light themes. |
+| [What is RoALT?](#-what-is-roalt) | [Architecture](#-architecture) |
+| [Features](#-features) | [Tech stack](#-tech-stack) |
+| [Install](#-install) | [Build from source](#-build-from-source) |
+| [Quick start](#-quick-start) | [Project layout](#-project-layout) |
+| [Safety and privacy](#-safety-and-privacy) | [Testing](#-testing) |
+| [FAQ](#-faq) | [Contributing](#-contributing) |
+| [Community](#-community) | [Cut a release](#-cut-a-release) |
 
-## Install
+<br>
+
+## 💡 What is RoALT?
+
+If you play Roblox on more than one account, you know the routine: sign out, sign in, find the game again,
+and only ever one client open at a time. RoALT removes all of that.
+
+- **Add each account once**, through Roblox's own sign-in page. RoALT keeps it signed in.
+- **See every account at a glance**: online status, Robux, friends, whether the sign-in still works.
+- **Paste any game link** and launch one account, or ten, into it. Even into the same server.
+- **Run several Roblox windows side by side**, and let RoALT bring back any that crash or get kicked.
+
+It runs entirely on your PC. There is no RoALT account, no RoALT server and no tracking.
+
+<br>
+
+## ✨ Features
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### 🔐 Encrypted vault
+Cookies are encrypted with **Windows DPAPI**, or with your own **master password** (Argon2id + AES-256-GCM)
+with auto-lock. Reveal and copy sit behind **Windows Hello** or the master password.
+
+</td>
+<td width="50%" valign="top">
+
+### 👥 Accounts at a glance
+Avatars, live presence, Robux, Plus, friends, followers and 2-step status. Groups, aliases, notes,
+favourites, search and filters. Validate one or all in a click.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+### 🚀 Launch anything
+Paste a game link, place ID, job ID, private server or share link, a profile or `@username`:
+RoALT works out what it is. Join a friend, or save a target as a favourite.
+
+</td>
+<td valign="top">
+
+### 🪟 Multi-instance
+Run several clients side by side. Launch a batch one after another, all into **the same server**
+if you like, with live progress per account.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+### 🔁 Auto-rejoin and restart
+A disconnected client rejoins the same game on its own. Opt-in: crashed, frozen or memory-hungry
+clients restart too. A crash breaker gives up on an account after too many tries.
+
+</td>
+<td valign="top">
+
+### 🗺️ Server browser
+Browse public servers by players or ping, see your private servers, and send any accounts into
+the one you pick.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+### 📈 Monitor
+CPU, memory, disk/network and uptime per client, with sparklines and totals, refreshed every 2 seconds.
+
+</td>
+<td valign="top">
+
+### 🎚️ Performance tools
+Cap one client's CPU (down to 5%), use efficiency mode, pin cores or trim memory. An adaptive mode
+limits every client that isn't in front. Opt-in upload limit for all clients.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+### 🔔 Discord alerts
+Crashes, disconnects, restarts and finished batches posted to **your own** webhook, kept encrypted
+in the vault. Opt-in.
+
+</td>
+<td valign="top">
+
+### ⬆️ Roblox updates
+Shows when Roblox is out of date and installs the update with Roblox's own installer, after checking
+it is signed by Roblox Corporation. Optional auto-update when no client runs.
+
+</td>
+</tr>
+</table>
+
+<details>
+<summary><b>All features, in detail</b></summary>
+<br>
+
+| Area | What you get |
+|---|---|
+| 🔐 **Vault** | DPAPI by default (opens silently). Optional master password with auto-lock after idle. Encrypted `.roalt` backups you can export and import. Copied cookies are kept out of clipboard history and cleared after 30 s. |
+| 👥 **Accounts** | Add through Roblox's sign-in page (passkeys and security keys work) or by pasting a cookie. Groups, alias, notes, colour, favourite, drag to reorder. Presence, Robux, Plus / Premium (legacy), friend and follower counts, join date, email and 2-step status. "Open on roblox.com" signed in as that account. |
+| 🚀 **Launch** | Game links, place IDs, `roblox://` links, job IDs, private server links, `roblox.com/share` links (both formats), universes, profiles, `@username`. Join a friend or one of your other accounts. Favourites in the sidebar and tray. `Ctrl+Enter` to launch. |
+| 🪟 **Batches** | Accounts launch strictly one after another with a stagger (default 6 s). **Same server**: *Pick a server* finds one with room for everyone first; *Follow the first* sends the rest to wherever the first account landed. Cancel at any time; one click re-picks the accounts that didn't launch. |
+| 🔁 **Recovery** | Auto-rejoin after kicks, shutdowns and lost connections (not after you leave on purpose). Opt-in auto-restart for crashes, frozen windows (30 s) and a memory limit. Crash breaker: default 3 relaunches in 10 minutes, with growing backoff. Per-account "Allow disconnect". Crash history with the log's reason. |
+| 🛑 **Kill all** | Hold one button in the sidebar (or use the tray) to end every Roblox process and stop pending launches and rejoins. |
+| ⚙️ **Launch control** | Custom launch arguments (default and per account, checked before use and never logged), a cooldown between launches, a configurable close grace (1–60 s). |
+| 🎚️ **Limits** | Per client: CPU cap, efficiency mode, core affinity, working-set trim (every N minutes or "Trim now"). Adaptive manager for background clients; your manual limits always win. |
+| 📶 **Bandwidth** | One upload cap for all Roblox clients through a Windows QoS policy. Applied only when you click Apply (admin prompt); cleared when Windows restarts. |
+| 💤 **Anti-AFK** | Off by default. While you are away from the PC, every few minutes each client is briefly brought to the front and gets one Space press, so Roblox doesn't kick it after 20 idle minutes. Stops the moment you touch the mouse. Per-client opt-out. |
+| 🧰 **Comfort** | Tray menu with favourites, close to tray, relaunch an ended client in one click, movable data folder, dark and light themes, keyboard shortcuts. |
+
+</details>
+
+> [!TIP]
+> **New in development:** a **memory throttle** (Settings → Performance): a client over a RAM limit gets a CPU cap,
+> which lowers its frame rate until its memory drops again. A **dashboard** with every running client as a live
+> window thumbnail, with a right-click menu, is on the way too.
+
+<br>
+
+## 📥 Install
 
 1. Download **`RoALT-Setup-<version>.exe`** from the [latest release](https://github.com/inspectsoftware/RoALT/releases/latest).
 2. Run it. No admin rights needed; it installs to `%LOCALAPPDATA%\Programs\RoALT`.
+3. Start RoALT from the Start menu or the desktop icon.
 
-**Needs:** Windows 10 1809 or later, or Windows 11 (x64), with the Microsoft Edge WebView2 Runtime. Setup offers to download it when it's missing.
+| Requirement | |
+|---|---|
+| Windows | 10 (1809 or later) or 11, x64 |
+| WebView2 Runtime | Built into Windows 11. Setup offers to download it when missing. |
+| Roblox | Installed normally (RoALT can install or update it for you) |
 
 > [!NOTE]
-> The installer isn't code-signed yet, so SmartScreen warns on first run. Check the file's SHA-256 against
-> `SHA256SUMS.txt` on the release, then choose **More info → Run anyway**.
+> The installer isn't code-signed yet, so Windows SmartScreen warns on first run. To be sure the file is genuine,
+> compare its SHA-256 with `SHA256SUMS.txt` on the release page, then choose **More info → Run anyway**.
+>
+> ```powershell
+> Get-FileHash .\RoALT-Setup-0.4.0.exe -Algorithm SHA256
+> ```
 
-Your accounts and settings live in `%LOCALAPPDATA%\RoALT`. Uninstalling keeps them unless you choose to delete them.
+Your accounts and settings live in `%LOCALAPPDATA%\RoALT`. Uninstalling keeps them unless you tick
+**"also delete my data"**.
 
-## Privacy
+<br>
 
-- RoALT talks **only** to `*.roblox.com` and `*.rbxcdn.com`. The one exception is opt-in: if you paste a
-  Discord webhook in the Discord tab, alerts go to that webhook on `discord.com`. Nothing goes there until you
-  do; the webhook URL is kept encrypted in the vault, and messages name accounts by display name and username only.
-- Roblox updates come from Roblox only: the version from `clientsettingscdn.roblox.com`, the installer from
-  `setup.rbxcdn.com`, run only when its signature is Roblox Corporation's.
-- No telemetry, no update server for RoALT, no account with us. Everything stays on your PC.
-- RoALT never reads or modifies the Roblox client. Limits and multi-instance work through Windows itself.
-  The optional anti-AFK briefly brings a client to the front and presses Space the way a keyboard does.
-- The optional bandwidth limit adds a Windows QoS policy (`RoALT-Roblox`, cleared when Windows restarts) through an admin prompt, only when you click Apply.
-  It is the only change RoALT makes to Windows itself.
+## 🏁 Quick start
 
-## Community
+<details open>
+<summary><b>1. Add your first account</b></summary>
+<br>
+
+Press **Add account** (or `Ctrl+N`). A clean Roblox sign-in window opens: sign in as usual, including 2-step or
+passkeys. RoALT keeps the sign-in, closes the window and throws its browser profile away. You can also paste a
+`.ROBLOSECURITY` cookie; it is checked before it is saved.
+
+</details>
+
+<details>
+<summary><b>2. (Optional) Set a master password</b></summary>
+<br>
+
+By default the vault is locked to your Windows account, so it opens silently. For extra protection, set a master
+password in **Settings**. RoALT then asks for it on start and locks itself after you've been idle.
+
+</details>
+
+<details>
+<summary><b>3. Launch a game</b></summary>
+<br>
+
+Go to **Launch** (`Ctrl+2`), paste a game link, tick an account and press **Launch** (`Ctrl+Enter`).
+Tick several accounts to launch a batch. Turn on **Same server** to put them all in one server.
+
+</details>
+
+<details>
+<summary><b>4. Run several clients at once</b></summary>
+<br>
+
+Turn on **Multi-instance** in the sidebar before you start Roblox. If Roblox is already open, RoALT says so and offers
+**Close Roblox**. Every client RoALT starts shows up under Running, with its state, server and uptime.
+
+</details>
+
+<details>
+<summary><b>5. Let it look after your clients</b></summary>
+<br>
+
+In **Settings → Launching**, turn on **Auto-rejoin** (and, if you like, **Auto-restart**). Open **Monitor**
+(`Ctrl+5`) to see what each client uses, and **Discord** (`Ctrl+6`) to get alerts on your phone.
+
+</details>
+
+<details>
+<summary><b>⌨️ Keyboard shortcuts</b></summary>
+<br>
+
+| Keys | Action |
+|---|---|
+| `Ctrl+1` … `Ctrl+6` | Accounts, Launch, Servers, Settings, Monitor, Discord |
+| `Ctrl+N` | Add account |
+| `Ctrl+F` | Search accounts |
+| `Ctrl+Enter` | Launch |
+| `F5` | Refresh |
+
+</details>
+
+<br>
+
+## 🔒 Safety and privacy
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+#### ✅ What RoALT does
+
+- Talks **only** to `*.roblox.com` and `*.rbxcdn.com`.
+- Encrypts every cookie with **AES-256-GCM** under a key protected by **Windows DPAPI**, plus your master password if you set one.
+- Signs you in through **Roblox's own page**, in a throw-away browser profile.
+- Installs Roblox updates **only** when the installer is signed by Roblox Corporation.
+- Redacts launch tickets from anything it reads in Roblox's logs.
+
+</td>
+<td width="50%" valign="top">
+
+#### 🚫 What RoALT never does
+
+- **Never** reads or modifies the Roblox client or its memory.
+- **Never** sends telemetry. There is no RoALT server and no RoALT account.
+- **Never** writes cookies, tickets or launch arguments to its logs.
+- **Never** changes Windows settings, except the opt-in bandwidth limit.
+- **Never** contacts Discord unless you paste a webhook.
+
+</td>
+</tr>
+</table>
+
+<details>
+<summary><b>The details</b></summary>
+<br>
+
+- **Discord (opt-in).** If you paste a webhook in the Discord tab, alerts go to that webhook on `discord.com`. The URL is
+  kept encrypted in the vault, and messages name accounts by display name and username only, with mentions disabled.
+  Nothing is sent while the vault is locked.
+- **Roblox updates** come from Roblox only: the version from `clientsettingscdn.roblox.com`, the installer from
+  `setup.rbxcdn.com`, run only when its signature checks out as Roblox Corporation's.
+- **Multi-instance** works by creating one named Windows object before Roblox starts. RoALT also holds Roblox's shared
+  sign-in files while its clients run, so clients can't sign each other out.
+- **Limits** go through Windows itself (job objects, priority, affinity). RoALT only ever opens a client with the
+  narrow rights a change needs, never to read its memory.
+- **Anti-AFK (opt-in)** briefly brings a client to the front and presses Space the way a keyboard does.
+- **Bandwidth limit (opt-in)** adds a Windows QoS policy named `RoALT-Roblox` through an admin prompt, only when you click
+  Apply. Windows drops it on restart. It is the only change RoALT makes to Windows.
+
+</details>
+
+> [!IMPORTANT]
+> Your `.ROBLOSECURITY` cookie is the key to your account. RoALT keeps it encrypted, but never share a cookie,
+> a `.roalt` backup or its password with anyone, including people who say they are helping you.
+
+<br>
+
+## ❓ FAQ
+
+<details>
+<summary><b>Is RoALT safe to use with my account?</b></summary>
+<br>
+
+RoALT signs in the same way the Roblox website does and never touches the Roblox client. Roblox has said that
+multi-instance methods which don't modify the client are not affected by its modified-client enforcement, but it
+doesn't officially support running several clients at once. Use RoALT only with accounts you own.
+
+</details>
+
+<details>
+<summary><b>Why does Windows warn me when I run the installer?</b></summary>
+<br>
+
+The installer isn't code-signed yet, so SmartScreen doesn't recognise it. Check the SHA-256 against
+`SHA256SUMS.txt` on the release, then choose **More info → Run anyway**.
+
+</details>
+
+<details>
+<summary><b>Multi-instance says Roblox is already running.</b></summary>
+<br>
+
+Roblox's tray app or an open client already holds the lock RoALT needs. Click **Close Roblox** when RoALT offers it, then
+launch from RoALT.
+
+</details>
+
+<details>
+<summary><b>An account shows "Cookie expired" or needs verification.</b></summary>
+<br>
+
+Roblox ended that sign-in, or wants a human check. Open the account on roblox.com from its menu and complete the
+check, or remove it and add it again.
+
+</details>
+
+<details>
+<summary><b>I forgot my master password.</b></summary>
+<br>
+
+It can't be recovered: that is what makes it safe. Remove the data folder (`%LOCALAPPDATA%\RoALT`) and add your
+accounts again, or import a `.roalt` backup whose password you know.
+
+</details>
+
+<details>
+<summary><b>Does it work with Bloxstrap?</b></summary>
+<br>
+
+Yes. RoALT launches through the registered bootstrapper and follows its clients. It won't install Roblox updates over a
+bootstrapper, since the bootstrapper keeps Roblox up to date itself.
+
+</details>
+
+<details>
+<summary><b>Where is my data? Can I move it?</b></summary>
+<br>
+
+In `%LOCALAPPDATA%\RoALT`. **Settings → Data** opens it or moves it to another folder or drive.
+
+</details>
+
+<br>
+
+## 💬 Community
 
 Questions, ideas or bug reports? Join the **[Discord server](https://discord.gg/Q2vrgDKb3)** or
 [open an issue](https://github.com/inspectsoftware/RoALT/issues).
 
-## Build from source
+<br>
 
-Needs Node.js 24, Rust (stable, with the Visual Studio Build Tools' C++ workload) and, for the
-installer, [Inno Setup 6.6 or newer](https://jrsoftware.org/isdl.php).
+---
 
-```powershell
-npm ci
-npm run tauri dev                                                          # run it
-powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1        # dist-installer\RoALT-Setup-<version>.exe
-powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1 -Dev   # also keeps installers\RoALT-Setup-<version>-dev-<stamp>.exe
+<div align="center">
+
+# 🔧 For developers
+
+</div>
+
+## 🧭 Architecture
+
+RoALT is a [Tauri 2](https://tauri.app) app: a Rust backend that owns every secret, process and network call, and a
+React UI that talks to it over typed IPC. The UI never sees a cookie unless you reveal one.
+
+```mermaid
+flowchart LR
+    UI["React UI<br/>src/features/*"] -- "invoke / events<br/>(src/api.ts, ts-rs types)" --> CMD["commands.rs"]
+    CMD --> VAULT["vault<br/>DPAPI · Argon2id · AES-GCM"]
+    CMD --> API["roblox_api<br/>CSRF · rate limits · cookie rotation"]
+    CMD --> LAUNCH["launcher<br/>target · uri · bulk · update"]
+    CMD --> INST["instances<br/>tracker · limits · rejoin · metrics"]
+    CMD --> DISC["discord<br/>webhook alerts"]
+    VAULT --> DB[("SQLite<br/>roalt.db")]
+    LAUNCH --> API
+    LAUNCH --> RBX["RobloxPlayerBeta.exe"]
+    INST -- "PID + log file" --> RBX
+    INST --> DISC
+    API --> NET(("*.roblox.com"))
 ```
 
-`npm run dev` alone runs the UI in a browser against a built-in mock of the backend.
-How it works is in [docs/DESIGN.md](docs/DESIGN.md); what each milestone added is in [docs/MILESTONES.md](docs/MILESTONES.md).
+| Module | Role |
+|---|---|
+| [`vault/`](src-tauri/src/vault) | Envelope encryption: one random data key encrypts every secret (AES-256-GCM, row-bound AAD). The key is wrapped with DPAPI, or with an Argon2id key from the master password and then DPAPI. Windows Hello re-auth, `.roalt` backups. |
+| [`roblox_api/`](src-tauri/src/roblox_api) | The one typed Roblox client. Every URL in `endpoints.rs`. CSRF from the real request's 403, per-route queues driven by `x-ratelimit-*`, rotated `.ROBLOSECURITY` saved atomically, three error-body shapes parsed. |
+| [`launcher/`](src-tauri/src/launcher) | `target.rs` parses any pasted link locally; `uri.rs` builds the `roblox-player:` URI exactly like the website; `bulk.rs` runs batches and same-server; `update.rs` + `authenticode.rs` install Roblox updates after `WinVerifyTrust`. |
+| [`instances/`](src-tauri/src/instances) | `tracker.rs` ties each client to its account by PID, start time and log file; `logwatch.rs` reads job IDs and disconnects; `rejoin.rs` and the crash breaker; `limits.rs` CPU caps, affinity, efficiency mode, trims; `metrics.rs`; `multi.rs` the singleton lock; `qos.rs`; `afk.rs`. |
+| [`discord.rs`](src-tauri/src/discord.rs) | Webhook alerts: host-checked URL, events coalesced every 2 s, `retry_after` honoured. |
+| [`webview.rs`](src-tauri/src/webview.rs) | Sign-in and session windows on temporary WebView2 profiles, deleted after use. |
+| [`storage/`](src-tauri/src/storage) | SQLite through `rusqlite` with numbered migrations. Running clients live in memory only. |
 
 <details>
-<summary><b>Cut a release</b></summary>
+<summary><b>How a launch works</b></summary>
+<br>
+
+1. Validate the account, then resolve a share link or universe with **that account's** cookie.
+2. `GET auth.roblox.com/v1/client-assertion/`, then POST `authentication-ticket` with it, as the website does.
+3. Build the `roblox-player:` URI with a fresh `browsertrackerid`, then start the client from the path in
+   `HKCU\Software\ROBLOX Corporation\Environments\roblox-player`.
+4. Record the PID and creation time and close the process handle at once.
+5. Bind the client's `_Player_` log by that tracker ID, then read its job ID, user ID and disconnects. If Roblox
+   relaunches itself during an update, the tracker re-binds through the log's `userid:`.
+
+</details>
+
+<details>
+<summary><b>Process-handle rules</b></summary>
+<br>
+
+Every sample or change opens a short-lived handle checked against the client's start time, with only the right it
+needs: `PROCESS_QUERY_LIMITED_INFORMATION` for metrics, `PROCESS_SET_QUOTA` for trims, `PROCESS_SET_INFORMATION` for
+affinity and efficiency mode. Never `PROCESS_VM_READ` or `PROCESS_DUP_HANDLE`; only the CPU-cap job handle is kept.
+
+</details>
+
+The full design, with every Roblox behaviour verified and its source, is in [docs/DESIGN.md](docs/DESIGN.md).
+What each milestone added and how to test it is in [docs/MILESTONES.md](docs/MILESTONES.md).
+
+<br>
+
+## 🧱 Tech stack
+
+| Layer | Tools |
+|---|---|
+| Shell | Tauri 2.12, WebView2 |
+| Backend | Rust (edition 2024), tokio, reqwest (rustls), rusqlite + rusqlite_migration, `windows` 0.62 |
+| Crypto | aes-gcm, argon2, zeroize, Windows DPAPI and Windows Hello |
+| Frontend | React 19, TypeScript, Vite, Tailwind CSS 4, TanStack Query 5 |
+| IPC types | [ts-rs](https://github.com/Aleph-Alpha/ts-rs): Rust types exported to `src/bindings/` |
+| Installer | Inno Setup 6.6, GitHub Actions (CI and tagged draft releases) |
+
+<br>
+
+## 🔨 Build from source
+
+**Needs:** Node.js 24, Rust (stable, with the Visual Studio Build Tools' C++ workload) and, for the installer,
+[Inno Setup 6.6 or newer](https://jrsoftware.org/isdl.php).
+
+```powershell
+git clone https://github.com/inspectsoftware/RoALT.git
+cd RoALT
+npm ci
+npm run tauri dev        # run the app with hot reload
+```
+
+| Command | What it does |
+|---|---|
+| `npm run tauri dev` | Runs the full app. |
+| `npm run dev` | Runs the UI alone in a browser, against a built-in mock of the backend (`src/dev/mockIpc.ts`). |
+| `npm run build` | Type-checks and builds the UI into `dist/`. |
+| `npm run bindings` | Regenerates the TypeScript types in `src/bindings/` from the Rust types. Run it after changing a `#[ts(export)]` type. |
+| `powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1` | Release build plus installer: `dist-installer\RoALT-Setup-<version>.exe` and its SHA-256. |
+| `…\build-installer.ps1 -Dev` | Also keeps `installers\RoALT-Setup-<version>-dev-<stamp>.exe`, one per change. |
+
+> [!TIP]
+> Set `ROALT_DATA_DIR` to a scratch folder to run a build without touching your real accounts.
+
+<br>
+
+## 📁 Project layout
+
+```text
+├─ src/                    React UI
+│  ├─ App.tsx              window shell, navigation, shortcuts
+│  ├─ api.ts               one typed wrapper per backend command
+│  ├─ bindings/            ts-rs generated types (committed)
+│  ├─ dev/mockIpc.ts       mock backend for `npm run dev`
+│  ├─ ui/                  shared components
+│  └─ features/            accounts · launch · servers · monitor · discord · settings · vault
+├─ src-tauri/              Rust backend
+│  ├─ src/
+│  │  ├─ main.rs           builder, plugins, managed state
+│  │  ├─ commands.rs       IPC layer
+│  │  ├─ model.rs          shared types (exported to TS)
+│  │  ├─ vault/  roblox_api/  launcher/  instances/  storage/
+│  │  ├─ discord.rs  webview.rs  tray.rs  error.rs
+│  ├─ tests/fixtures/      recorded Roblox responses (no real cookies)
+│  └─ tauri.conf.json
+├─ installer/RoALT.iss     Inno Setup script
+├─ scripts/                build-installer.ps1
+├─ docs/                   DESIGN.md · MILESTONES.md · research/
+└─ .github/workflows/      ci.yml · release.yml
+```
+
+<br>
+
+## 🧪 Testing
+
+```powershell
+npm run typecheck                              # TypeScript
+cd src-tauri
+cargo test --locked                            # Rust unit tests
+cargo clippy --all-targets --locked -- -D warnings
+```
+
+The Rust tests cover link parsing, URI building (byte-for-byte against the website's output), vault and backup
+round-trips, and response parsing from recorded fixtures. They never use real cookies. CI runs all of the above on
+`windows-latest` for every push and pull request.
+
+<br>
+
+## 🤝 Contributing
+
+Bug reports, ideas and pull requests are welcome.
+
+1. Open an [issue](https://github.com/inspectsoftware/RoALT/issues) or ask on [Discord](https://discord.gg/Q2vrgDKb3) first for anything big.
+2. Keep changes small and focused, and match the surrounding code.
+3. Run the [tests](#-testing) and `npm run bindings` if you changed a shared type.
+4. Never commit a real cookie, ticket or webhook, including in fixtures or screenshots.
+
+<br>
+
+## 📦 Cut a release
+
+<details>
+<summary><b>Steps</b></summary>
+<br>
 
 1. Set the same version in `src-tauri/tauri.conf.json`, `package.json` and `src-tauri/Cargo.toml`,
    then run `cargo update -p roalt --offline` in `src-tauri` so `Cargo.lock` matches (CI builds `--locked`).
@@ -99,8 +566,15 @@ How it works is in [docs/DESIGN.md](docs/DESIGN.md); what each milestone added i
 
 </details>
 
-## Disclaimer
+<br>
+
+## 📜 Disclaimer
 
 RoALT is an independent project, not affiliated with or endorsed by Roblox Corporation. Use it only
 with accounts you own. Roblox doesn't officially support running several clients at once and may
 change how its client behaves at any time.
+
+<div align="center">
+<br>
+<sub>Made for people with too many alts. &nbsp;·&nbsp; <a href="https://discord.gg/Q2vrgDKb3">Discord</a> &nbsp;·&nbsp; <a href="https://github.com/inspectsoftware/RoALT/releases/latest">Download</a></sub>
+</div>

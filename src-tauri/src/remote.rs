@@ -36,7 +36,7 @@ use crate::App;
 use crate::commands::now_ms;
 use crate::discord::{hex, unhex};
 use crate::error::{AppError, Result};
-use crate::model::{AccountStatus, BulkRequest, GameInfo, InstanceState, LaunchTarget, ParsedInput, RemoteStatus, SameServer};
+use crate::model::{AccountStatus, BulkRequest, InstanceState, LaunchTarget, ParsedInput, RemoteStatus, SameServer};
 use crate::vault::Secret;
 use crate::vault::master::random_bytes;
 
@@ -403,13 +403,8 @@ struct ClientRow {
     throttled: bool,
 }
 
-/// The game's name from what the app cached (`commands::game_info`); never asks Roblox.
 fn game_name(s: &App, place_id: i64) -> String {
-    s.db.cache_get(&format!("game:{place_id}"), i64::MAX / 2, now_ms())
-        .ok()
-        .flatten()
-        .and_then(|(json, _)| serde_json::from_str::<GameInfo>(&json).ok())
-        .map_or_else(|| format!("Place {place_id}"), |g| g.name)
+    crate::commands::cached_game_name(s, place_id).unwrap_or_else(|| format!("Place {place_id}"))
 }
 
 async fn clients(State(app): State<AppHandle>, h: HeaderMap) -> Response {

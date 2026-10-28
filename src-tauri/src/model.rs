@@ -220,6 +220,9 @@ pub struct Settings {
     /// Ask GitHub for a newer RoALT at start and every 6 hours (`self_update`); it is offered,
     /// never installed without a click.
     pub self_update: bool,
+    /// Discord rich presence through the Discord app on this PC (`rpc`): "Playing RoALT" with
+    /// the game and how many alts run.
+    pub discord_presence: bool,
     /// Minimize each client (without taking the focus) once, when its window first appears.
     pub minimize_on_launch: bool,
     /// System-wide key combination for Kill all, like "Ctrl+Shift+F12"; "" for none.
@@ -392,6 +395,7 @@ impl Default for Settings {
             discord: DiscordEvents::default(),
             auto_update: false,
             self_update: true,
+            discord_presence: true,
             minimize_on_launch: false,
             panic_hotkey: String::new(),
             clean_logs: false,
@@ -455,6 +459,8 @@ pub struct SettingsPatch {
     pub auto_update: Option<bool>,
     #[ts(optional)]
     pub self_update: Option<bool>,
+    #[ts(optional)]
+    pub discord_presence: Option<bool>,
     #[ts(optional)]
     pub minimize_on_launch: Option<bool>,
     #[ts(optional)]

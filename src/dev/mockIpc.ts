@@ -75,7 +75,7 @@ let settings: Settings = {
   adaptive: { enabled: false, background: { cpuCap: 25, eco: true, trimEveryMin: null, affinity: null } }, bandwidthKbps: 0,
   antiAfk: { enabled: false, intervalMin: 15, mode: "focus" },
   discord: { crash: true, hang: true, memRestart: true, disconnect: true, restart: true, breaker: true, batchDone: true, launch: false, statusEveryMin: 0 },
-  autoUpdate: false, selfUpdate: true, minimizeOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0,
+  autoUpdate: false, selfUpdate: true, discordPresence: true, minimizeOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0,
   remote: { enabled: false, port: 47800 },
 };
 let remotePin = "48213907";

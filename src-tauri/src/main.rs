@@ -8,6 +8,7 @@ mod launcher;
 mod model;
 mod remote;
 mod roblox_api;
+mod rpc;
 mod self_update;
 mod storage;
 mod tray;
@@ -352,6 +353,7 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
     instances::Tracker::spawn(app.handle().clone());
     instances::afk::spawn(app.handle().clone());
     discord::spawn(app.handle().clone());
+    rpc::spawn(app.handle().clone());
     launcher::update::spawn(app.handle().clone());
     self_update::spawn(app.handle().clone());
     remind_bandwidth(app.handle().clone());

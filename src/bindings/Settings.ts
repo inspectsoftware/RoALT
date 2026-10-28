@@ -108,6 +108,11 @@ autoUpdate: boolean,
  */
 selfUpdate: boolean, 
 /**
+ * Discord rich presence through the Discord app on this PC (`rpc`): "Playing RoALT" with
+ * the game and how many alts run.
+ */
+discordPresence: boolean, 
+/**
  * Minimize each client (without taking the focus) once, when its window first appears.
  */
 minimizeOnLaunch: boolean, 

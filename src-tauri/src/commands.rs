@@ -986,6 +986,15 @@ pub fn bulk_current(s: State<'_, App>) -> Option<BulkProgress> {
 // ---------- servers ----------
 
 /// The game behind a place: name, creator, players, icon, whether it sells private servers.
+/// The game's name from what the app cached (`game_info`), however old; never asks Roblox.
+pub(crate) fn cached_game_name(s: &App, place_id: i64) -> Option<String> {
+    s.db.cache_get(&format!("game:{place_id}"), i64::MAX / 2, now_ms())
+        .ok()
+        .flatten()
+        .and_then(|(json, _)| serde_json::from_str::<GameInfo>(&json).ok())
+        .map(|g| g.name)
+}
+
 /// Cached for `settings.cache_minutes` (key `game:<place_id>`, JSON of `GameInfo`). No cookie.
 /// `NotFound` when Roblox knows no such place (no universe) or no such game.
 #[tauri::command]
@@ -1886,6 +1895,7 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
     if let Some(a) = patch.auto_update { v.auto_update = a }
     let self_update = patch.self_update.filter(|&u| u != v.self_update);
     if let Some(u) = self_update { v.self_update = u }
+    if let Some(p) = patch.discord_presence { v.discord_presence = p }
     if let Some(m) = patch.minimize_on_launch { v.minimize_on_launch = m }
     if let Some(c) = patch.clean_logs { v.clean_logs = c }
     if let Some(d) = patch.launch_delay_ms {

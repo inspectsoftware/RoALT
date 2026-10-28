@@ -146,6 +146,9 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
             onChange={(density) => set.mutate({ density })}
           />
         </Row>
+        <Row title="Show on Discord" hint="Your Discord profile shows “Playing RoALT” with the game and how many alts run. Only while Discord is open on this PC.">
+          <Switch label="Show on Discord" checked={settings.discordPresence} onChange={(discordPresence) => set.mutate({ discordPresence })} />
+        </Row>
         <Row title="Close to tray" hint="The window hides; running clients and auto-rejoin keep working.">
           <Switch label="Close to tray" checked={settings.closeToTray} onChange={(closeToTray) => set.mutate({ closeToTray })} />
         </Row>

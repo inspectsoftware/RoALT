@@ -60,8 +60,14 @@ export function Icon({ name, size = 16, fill = false, className }: { name: IconN
 export function Logo() {
   return (
     <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-      <rect x="1" y="1" width="10" height="10" fill="var(--accent)" />
-      <rect x="6.75" y="6.75" width="10.5" height="10.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <rect x="1" y="1" width="9" height="9" rx="1" fill="var(--accent)" />
+      {/* The app icon's tilted tile with a hole (src-tauri/icons/app-icon.svg). */}
+      <mask id="logo-hole">
+        <rect width="18" height="18" fill="#fff" />
+        {/* In the tile's own (rotated) space. */}
+        <rect x="10.3" y="10.3" width="2.4" height="2.4" rx="0.4" fill="#000" />
+      </mask>
+      <rect transform="rotate(15 11.5 11.5)" x="7.5" y="7.5" width="8" height="8" rx="1" fill="currentColor" mask="url(#logo-hole)" />
     </svg>
   );
 }

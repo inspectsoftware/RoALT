@@ -183,7 +183,7 @@ launch accounts, signed in with an 8-digit PIN.
 | 🎞️ **FPS cap** | A default frame-rate cap (5–360) and a per-account override, written to Roblox's `ClientAppSettings.json` just before each launch and put back a few seconds later. Skipped when a bootstrapper such as Bloxstrap manages Roblox. |
 | 📶 **Bandwidth** | One upload cap for all Roblox clients through a Windows QoS policy. Applied only when you click Apply (admin prompt); cleared when Windows restarts. |
 | 💤 **Anti-AFK** | Off by default. While you are away from the PC, every few minutes each client is briefly brought to the front and gets one Space press, so Roblox doesn't kick it after 20 idle minutes. Stops the moment you touch the mouse. Or **in the background**: the Space press is posted to the window without bringing it to the front, even when minimized (Roblox may not count it in every game; auto-rejoin stays the fallback). Per-client opt-out. |
-| 🔔 **Discord** | Crash, disconnect, restart and batch alerts, plus an opt-in alert when a client gets into a game. Mute alerts per account. |
+| 🔔 **Discord** | Crash, disconnect, restart and batch alerts, plus an opt-in alert when a client gets into a game. Mute alerts per account. **Rich presence** (on by default, a switch in Settings): your profile shows "Playing RoALT", idling or with the game and how many alts run. |
 | 📱 **Web dashboard** | Opt-in, off by default. A small page on your PC's LAN address: running clients with Close and Force, Kill all, and launch ticked accounts into a pasted link. 8-digit PIN, 30-day sign-in, rate-limited. |
 | 🔄 **RoALT updates** | Looks for a new RoALT on GitHub Releases at start and every 6 hours (can be turned off; *Check now* in Settings). A banner offers it; *Update now* downloads it, checks its release signature, installs it silently and restarts RoALT. Never installs on its own. |
 | 🧰 **Comfort** | Tray menu with favourites, close to tray, relaunch an ended client in one click, movable data folder, keyboard shortcuts. Dark, light or system theme, any accent colour, and your own background image. |
@@ -209,7 +209,7 @@ launch accounts, signed in with an 8-digit PIN.
 > compare its SHA-256 with `SHA256SUMS.txt` on the release page, then choose **More info → Run anyway**.
 >
 > ```powershell
-> Get-FileHash .\RoALT-Setup-0.6.0.exe -Algorithm SHA256
+> Get-FileHash .\RoALT-Setup-0.6.1.exe -Algorithm SHA256
 > ```
 
 Your accounts and settings live in `%LOCALAPPDATA%\RoALT`. Uninstalling keeps them unless you tick
@@ -306,7 +306,7 @@ In **Settings → Launching**, turn on **Auto-rejoin** (and, if you like, **Auto
 - **Never** sends telemetry. There is no RoALT server and no RoALT account.
 - **Never** writes cookies, tickets or launch arguments to its logs.
 - **Never** changes Windows settings, except the opt-in bandwidth limit.
-- **Never** contacts Discord unless you paste a webhook.
+- **Never** contacts Discord's servers unless you paste a webhook. Rich presence goes only to the Discord app on your PC.
 
 </td>
 </tr>
@@ -316,7 +316,9 @@ In **Settings → Launching**, turn on **Auto-rejoin** (and, if you like, **Auto
 <summary><b>The details</b></summary>
 <br>
 
-- **Discord (opt-in).** If you paste a webhook in the Discord tab, alerts go to that webhook on `discord.com`. The URL is
+- **Discord rich presence (on by default).** RoALT tells the Discord app on this PC, over its local pipe, the game's
+  name and how many clients run. Discord shows that on your profile. Turn it off under **Settings → Show on Discord**.
+- **Discord alerts (opt-in).** If you paste a webhook in the Discord tab, alerts go to that webhook on `discord.com`. The URL is
   kept encrypted in the vault, and messages name accounts by display name and username only, with mentions disabled.
   Nothing is sent while the vault is locked.
 - **Roblox updates** come from Roblox only: the version from `clientsettingscdn.roblox.com`, the installer from

@@ -37,11 +37,17 @@ const COST: (u32, u32, u32) = (1024, 1, 1);
 
 /// Argon2id(password, kdf) → 32-byte key.
 pub fn derive_key(password: &str, kdf: &Kdf) -> Result<Zeroizing<[u8; 32]>> {
-    let params = Params::new(kdf.m_kib, kdf.t, kdf.p, Some(32)).map_err(|_| AppError::Crypto)?;
+    let params = Params::new(kdf.m_kib, kdf.t, kdf.p, Some(32)).map_err(|e| {
+        log::warn!("bad argon2 parameters (m {} KiB, t {}, p {}): {e}", kdf.m_kib, kdf.t, kdf.p);
+        AppError::Crypto
+    })?;
     let mut key = Zeroizing::new([0u8; 32]);
     Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
         .hash_password_into(password.as_bytes(), &kdf.salt, key.as_mut())
-        .map_err(|_| AppError::Crypto)?;
+        .map_err(|e| {
+            log::warn!("argon2 hashing failed: {e}");
+            AppError::Crypto
+        })?;
     Ok(key)
 }
 

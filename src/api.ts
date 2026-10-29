@@ -1,5 +1,5 @@
 // Typed wrappers for every Tauri command and event. Types come from src/bindings (ts-rs).
-import { invoke } from "@tauri-apps/api/core";
+import { invoke as rawInvoke, type InvokeArgs } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { AccountInfo } from "./bindings/AccountInfo";
 import type { AccountPatch } from "./bindings/AccountPatch";
@@ -78,6 +78,23 @@ export function asError(e: unknown): ErrorPayload {
   if (e && typeof e === "object" && "kind" in e && "message" in e) return e as ErrorPayload;
   return { kind: "internal", message: String(e) };
 }
+
+/** A line into roalt.log (the Debug tab), target "ui". Never throws. */
+export function debugLog(level: "error" | "warn" | "info" | "debug", message: string) {
+  rawInvoke("debug_log", { level, message }).catch(() => {});
+}
+
+/** `invoke`, logging rejections Rust didn't make (unknown command, bad arguments, not allowed):
+ * Rust logs its own AppErrors. Never logs arguments or results (passwords, cookies, PINs). */
+function invoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
+  return rawInvoke<T>(cmd, args).catch((e: unknown) => {
+    if (!(e && typeof e === "object" && "kind" in e && "message" in e)) debugLog("error", `invoke ${cmd} failed: ${String(e)}`);
+    throw e;
+  });
+}
+
+/** One `log://log` event (tauri-plugin-log's Webview target): level 1 trace … 5 error. */
+export type LogRecord = { level: number; message: string };
 
 export const api = {
   vaultStatus: () => invoke<VaultStatus>("vault_status"),
@@ -213,6 +230,8 @@ export const api = {
   dataDirMove: (path: string) => invoke<void>("data_dir_move", { path }),
   /** RoALT's own log folder (data folder\logs) in Explorer. */
   logsOpen: () => invoke<void>("logs_open"),
+  /** The last lines of roalt.log, oldest first. */
+  debugTail: (lines: number) => invoke<string[]>("debug_tail", { lines }),
   backgroundSet: (path: string) => invoke<void>("background_set", { path }),
   backgroundClear: () => invoke<void>("background_clear"),
   backgroundGet: () => invoke<ArrayBuffer>("background_get"),
@@ -245,6 +264,7 @@ export const events = {
   onVaultLocked: (f: () => void): Promise<UnlistenFn> => listen("vault://locked", f),
   onInstancesChanged: (f: () => void): Promise<UnlistenFn> => listen("instances://changed", f),
   onNotice: (f: (n: Notice) => void): Promise<UnlistenFn> => listen<Notice>("app://notice", (e) => f(e.payload)),
+  onLog: (f: (r: LogRecord) => void): Promise<UnlistenFn> => listen<LogRecord>("log://log", (e) => f(e.payload)),
   onBulkProgress: (f: (p: BulkProgress) => void): Promise<UnlistenFn> => listen<BulkProgress>("bulk://progress", (e) => f(e.payload)),
   /** The client or its versions changed (version check at start and every 30 min, an install). */
   onRobloxClient: (f: (c: RobloxClient) => void): Promise<UnlistenFn> => listen<RobloxClient>("roblox://client", (e) => f(e.payload)),

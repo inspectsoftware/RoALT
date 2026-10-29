@@ -65,7 +65,10 @@ pub fn write(path: &Path, password: &str, payload: &BackupPayload) -> Result<()>
     }
     out.extend_from_slice(&kdf.salt);
     let json = Zeroizing::new(
-        serde_json::to_vec(payload).map_err(|_| AppError::Internal(tr!("Could not encode the backup.")))?,
+        serde_json::to_vec(payload).map_err(|e| {
+            log::warn!("could not encode the backup ({:?})", e.classify());
+            AppError::Internal(tr!("Could not encode the backup."))
+        })?,
     );
     let key = master::derive_key(password, &kdf)?;
     let sealed = master::seal(&key, &out, &json)?;
@@ -79,18 +82,26 @@ pub fn read(path: &Path, password: &str) -> Result<BackupPayload> {
     let bytes = fs::read(path)?;
     let not_backup = || AppError::Invalid(tr!("This isn't a RoALT backup."));
     if bytes.len() < HEADER_LEN + SEAL_OVERHEAD || !bytes.starts_with(MAGIC) {
+        log::debug!("not a backup: bad magic or truncated ({} bytes)", bytes.len());
         return Err(not_backup());
     }
     let (header, sealed) = bytes.split_at(HEADER_LEN);
     let word = |i: usize| u32::from_le_bytes([header[i], header[i + 1], header[i + 2], header[i + 3]]);
     let kdf = Kdf { m_kib: word(8), t: word(12), p: word(16), salt: header[20..].to_vec() };
     if kdf.m_kib > MAX_M_KIB || kdf.t > MAX_T || kdf.p > MAX_P {
+        log::debug!("not a backup: absurd KDF cost (m {} KiB, t {}, p {})", kdf.m_kib, kdf.t, kdf.p);
         return Err(not_backup());
     }
-    let key = master::derive_key(password, &kdf).map_err(|_| not_backup())?;
+    let key = master::derive_key(password, &kdf).map_err(|e| {
+        log::debug!("not a backup: key derivation failed: {e}");
+        not_backup()
+    })?;
     let json = master::open(&key, header, sealed).map_err(|_| AppError::WrongPassword)?;
-    // The serde error could quote a cookie, so it is dropped.
-    serde_json::from_slice(&json).map_err(|_| not_backup())
+    // The serde error could quote a cookie: only where it broke is logged.
+    serde_json::from_slice(&json).map_err(|e| {
+        log::warn!("backup payload unreadable ({:?} at {}:{})", e.classify(), e.line(), e.column());
+        not_backup()
+    })
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {

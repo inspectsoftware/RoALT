@@ -60,7 +60,10 @@ fn public_of(nets: &[Seen]) -> bool {
 pub fn scan() -> NetworkStatus {
     // On its own thread: COM as multithreaded on the main thread breaks the window's
     // `OleInitialize` (RPC_E_CHANGED_MODE, the app doesn't start).
-    let read = std::thread::spawn(networks).join().unwrap_or_else(|_| Err(windows::core::Error::empty()));
+    let read = std::thread::spawn(networks).join().unwrap_or_else(|_| {
+        log::warn!("network: COM thread panicked");
+        Err(windows::core::Error::empty())
+    });
     match read {
         Ok(nets) => NetworkStatus { public: public_of(&nets) },
         Err(e) => {
@@ -94,7 +97,11 @@ fn networks() -> windows::core::Result<Vec<Seen>> {
 
 /// Why launching, or the web dashboard, isn't allowed now; None when it is.
 pub fn blocked(s: &App) -> Option<String> {
-    if !s.network.get().public || s.db.settings().is_ok_and(|v| v.allow_public_networks) {
+    if !s.network.get().public || s
+        .db
+        .settings()
+        .inspect_err(|e| log::warn!("network: settings unreadable, public networks not allowed: {e}"))
+        .is_ok_and(|v| v.allow_public_networks) {
         return None;
     }
     Some(tr!(
@@ -131,8 +138,10 @@ pub fn spawn(app: AppHandle) {
 /// Joined a public network: what runs stops (see the module docs).
 fn enforce(app: &AppHandle, why: &str) {
     let s = app.state::<App>();
-    if let Some(batch) = s.bulk.current().filter(|b| !b.done) {
-        let _ = s.bulk.cancel(&batch.batch_id);
+    if let Some(batch) = s.bulk.current().filter(|b| !b.done)
+        && let Err(e) = s.bulk.cancel(&batch.batch_id)
+    {
+        log::warn!("public network: could not stop batch {}: {e}", batch.batch_id);
     }
     let dashboard = s.remote.stop();
     let lock = s.vault.mode() == VaultMode::Master && !s.vault.is_locked();

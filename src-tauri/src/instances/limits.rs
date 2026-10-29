@@ -116,13 +116,13 @@ impl Limiter {
         for (id, a) in applied {
             let mut r = Ok(());
             if let Some(job) = a.job.as_ref().filter(|_| a.limits.cpu_cap.is_some()) {
-                r = r.and(set_cap(job, None));
+                r = r.and(set_cap(job, None).inspect_err(|e| log::debug!("instance {id}: CPU cap not taken off: {e}")));
             }
             if a.limits.eco {
-                r = r.and(set_eco(a.pid, a.t0, false));
+                r = r.and(set_eco(a.pid, a.t0, false).inspect_err(|e| log::debug!("instance {id}: efficiency mode not taken off: {e}")));
             }
             if a.limits.affinity.is_some() {
-                r = r.and(set_affinity(a.pid, a.t0, None));
+                r = r.and(set_affinity(a.pid, a.t0, None).inspect_err(|e| log::debug!("instance {id}: cores not given back: {e}")));
             }
             if let Err(e) = r {
                 log::warn!("could not take the limits off instance {id}: {e}");

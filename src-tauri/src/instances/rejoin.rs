@@ -43,10 +43,24 @@ pub fn handle(app: &AppHandle, rejoins: Vec<Rejoin>) {
         return;
     }
     let s = app.state::<App>();
-    let Ok(v) = s.db.settings() else { return };
+    let v = match s.db.settings() {
+        Ok(v) => v,
+        Err(e) => {
+            log::error!("auto-rejoin/restart: could not read settings, {} pending dropped: {e}", rejoins.len());
+            return;
+        }
+    };
     for r in rejoins.into_iter().filter(|r| enabled(&v, r.cause)) {
         // Who the account is now, so an id removed and reused during the wait is told apart.
-        let account = s.db.account(r.account_id).ok();
+        let account = s
+            .db
+            .account(r.account_id)
+            .inspect_err(|e| {
+                if !matches!(e, crate::error::AppError::NotFound) {
+                    log::warn!("auto-rejoin: could not read account {}: {e}", r.account_id);
+                }
+            })
+            .ok();
         if account.as_ref().is_some_and(|a| a.allow_disconnect) {
             continue;
         }
@@ -67,7 +81,10 @@ fn enabled(v: &Settings, cause: CrashKind) -> bool {
 
 async fn rejoin(app: &AppHandle, r: Rejoin, user_id: Option<i64>) {
     let s = app.state::<App>();
-    let v = s.db.settings().unwrap_or_default();
+    let v = s.db.settings().unwrap_or_else(|e| {
+        log::warn!("auto-rejoin of instance {}: could not read settings, using defaults: {e}", r.from);
+        Settings::default()
+    });
     let window = Duration::from_secs(u64::from(v.breaker_window_min) * 60);
     let n = with_recent(r.account_id, |t| recent(t, Instant::now(), window));
     // The backoff is waited before taking a turn, so one account's doesn't hold up the rest.
@@ -89,7 +106,16 @@ async fn rejoin(app: &AppHandle, r: Rejoin, user_id: Option<i64>) {
     if !s.tracker.still_wants_rejoin(&r.from) {
         return;
     }
-    let account = s.db.account(r.account_id).ok().filter(|a| Some(a.user_id) == user_id);
+    let account = s
+        .db
+        .account(r.account_id)
+        .inspect_err(|e| {
+            if !matches!(e, crate::error::AppError::NotFound) {
+                log::warn!("auto-rejoin: could not read account {}: {e}", r.account_id);
+            }
+        })
+        .ok()
+        .filter(|a| Some(a.user_id) == user_id);
     let name = account.as_ref().map_or_else(|| tr!("An account"), name_of);
     let rejoin = r.cause == CrashKind::Disconnect;
     let again = if rejoin { "rejoins" } else { "restarts" };
@@ -162,9 +188,13 @@ async fn rejoin(app: &AppHandle, r: Rejoin, user_id: Option<i64>) {
         while s.tracker.get(&r.from).is_some_and(|i| i.state != InstanceState::Exited) && Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
+        if s.tracker.get(&r.from).is_some_and(|i| i.state != InstanceState::Exited) {
+            log::debug!("auto-{again}: instance {} still not exited after 5 s; launching anyway", r.from);
+        }
     }
     // Kill all pressed while the old client was closing.
     if s.bulk.kills() != kills {
+        log::debug!("auto-{again} of instance {} dropped: Kill all was pressed", r.from);
         return;
     }
     // The launch's own FPS cap carries over.
@@ -227,7 +257,7 @@ fn skip_reason(s: &App, r: &Rejoin, account: Option<&AccountSummary>, batch: boo
             && matches!(i.state, InstanceState::Starting | InstanceState::Joining | InstanceState::InGame)
     };
     let others = |i: &Instance| i.id != r.from && i.state != InstanceState::Exited;
-    if !s.db.settings().is_ok_and(|v| enabled(&v, r.cause)) {
+    if !s.db.settings().inspect_err(|e| log::warn!("auto-rejoin of instance {}: could not read settings: {e}", r.from)).is_ok_and(|v| enabled(&v, r.cause)) {
         Some(match r.cause {
             CrashKind::Disconnect => tr!("auto-rejoin was turned off"),
             CrashKind::Mem => tr!("the memory restart was turned off"),

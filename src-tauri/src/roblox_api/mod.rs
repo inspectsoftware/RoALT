@@ -83,7 +83,8 @@ impl Client {
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(20))
             .build()
-            .map_err(|e| e.to_string());
+            .map_err(|e| e.without_url().to_string())
+            .inspect_err(|e| log::error!("Roblox http client unavailable: {e}"));
         Client { http, on_rotate, base, csrf: Mutex::default(), windows: Mutex::default() }
     }
 
@@ -117,7 +118,10 @@ impl Client {
                 // A failed retry keeps what earlier answers already resolved.
                 let page: Thumbnails = match self.get(endpoints::HEADSHOTS, &url, 0, None).await {
                     Ok(p) => p,
-                    Err(_) if retry > 0 => break,
+                    Err(e) if retry > 0 => {
+                        log::debug!("headshots: retry {retry} for {} pending id(s) failed: {e}", pending.len());
+                        break;
+                    }
                     Err(e) => return Err(e),
                 };
                 pending = sort_thumbnails(page, &mut out);
@@ -150,7 +154,11 @@ impl Client {
             let body = serde_json::json!({ "userIds": chunk, "fields": ["hasRobloxSubscription"] });
             let (_, bytes, _) = self.request(Method::POST, url, url, Some(&body), 0, None).await?;
             let page: Profiles = json(&bytes)?;
+            let (rows, before) = (page.profile_details.len(), out.len());
             out.extend(page.profile_details.into_iter().filter_map(|p| Some((p.user_id, p.has_roblox_subscription?))));
+            if out.len() - before < rows {
+                log::debug!("plus: {} of {rows} profile(s) without hasRobloxSubscription", rows - (out.len() - before));
+            }
         }
         Ok(out)
     }
@@ -222,6 +230,9 @@ impl Client {
         let body = assertion.unwrap_or(&empty);
         let (headers, _, _) = self.request(Method::POST, url, url, Some(body), account_id, Some(cookie)).await?;
         let ticket = headers.get(TICKET_HEADER).and_then(|v| v.to_str().ok()).filter(|t| !t.is_empty());
+        if ticket.is_none() {
+            log::warn!("account {account_id}: auth ticket header missing or unreadable");
+        }
         ticket.map(Secret::new).ok_or_else(|| AppError::Roblox("no ticket".into()))
     }
 
@@ -303,7 +314,12 @@ impl Client {
             url.push_str(&crate::launcher::uri::encode(c));
         }
         let list: ServerList = self.get(route, &url, account_id, cookie).await?;
-        let servers = list.data.unwrap_or_default().into_iter().filter_map(|r| {
+        if list.data.is_none() {
+            log::debug!("servers_public: place {place_id} answer has no data");
+        }
+        let rows = list.data.unwrap_or_default();
+        let total = rows.len();
+        let servers: Vec<GameServer> = rows.into_iter().filter_map(|r| {
             Some(GameServer {
                 // A job id goes into a launch URI: GUIDs only (DESIGN §6).
                 id: r.id.filter(|id| crate::launcher::target::is_uuid(id))?,
@@ -313,8 +329,11 @@ impl Client {
                 ping: r.ping,
                 friend_count: r.friend_count,
             })
-        });
-        Ok(ServerPage { servers: servers.collect(), next_cursor: list.next_page_cursor.filter(|c| !c.is_empty()) })
+        }).collect();
+        if servers.len() < total {
+            log::debug!("servers_public: place {place_id}: {} of {total} row(s) dropped", total - servers.len());
+        }
+        Ok(ServerPage { servers, next_cursor: list.next_page_cursor.filter(|c| !c.is_empty()) })
     }
 
     /// `GET apis.roblox.com/universes/v1/places/{placeId}/universe` (no cookie): the place's
@@ -336,6 +355,7 @@ impl Client {
         for chunk in valid_ids(universe_ids).chunks(50) {
             let url = endpoints::fill(endpoints::GAMES, csv(chunk));
             let page: Data<Game> = self.get(endpoints::GAMES, &url, 0, None).await?;
+            let (rows, before) = (page.data.len(), out.len());
             out.extend(page.data.into_iter().filter_map(|g| {
                 Some(GameDetails {
                     universe_id: g.id?,
@@ -348,6 +368,9 @@ impl Client {
                     private_servers: g.create_vip_servers_allowed.unwrap_or_default(),
                 })
             }));
+            if out.len() - before < rows {
+                log::debug!("games: {} of {rows} row(s) without id or rootPlaceId", rows - (out.len() - before));
+            }
         }
         Ok(out)
     }
@@ -385,8 +408,13 @@ impl Client {
             url.push_str(&crate::launcher::uri::encode(c));
         }
         let list: PrivateServerList = self.get(route, &url, account_id, Some(cookie)).await?;
-        let servers = list.data.unwrap_or_default().into_iter().filter_map(|r| {
+        let rows = list.data.unwrap_or_default();
+        let total = rows.len();
+        let (mut bad_job, mut bad_code) = (0usize, 0usize);
+        let servers: Vec<PrivateServer> = rows.into_iter().filter_map(|r| {
             let (owner_id, owner_name) = r.owner.map_or((None, None), |o| (o.id, o.name));
+            bad_job += usize::from(r.id.as_deref().is_some_and(|id| !is_uuid(id)));
+            bad_code += usize::from(r.access_code.as_deref().is_some_and(|c| !is_uuid(c)));
             Some(PrivateServer {
                 vip_server_id: r.vip_server_id?,
                 name: r.name.unwrap_or_default(),
@@ -397,9 +425,15 @@ impl Client {
                 job_id: r.id.filter(|id| is_uuid(id)),
                 access_code: r.access_code.filter(|code| is_uuid(code)),
             })
-        });
+        }).collect();
+        if servers.len() < total || bad_job + bad_code > 0 {
+            log::debug!(
+                "private_servers: place {place_id}: {} of {total} row(s) without vipServerId, {bad_job} job id(s) and {bad_code} access code(s) not GUIDs",
+                total - servers.len()
+            );
+        }
         Ok(PrivateServerPage {
-            servers: servers.collect(),
+            servers,
             next_cursor: list.next_page_cursor.filter(|c| !c.is_empty()),
             join_restricted: list.game_join_restricted.unwrap_or_default(),
         })
@@ -421,9 +455,13 @@ impl Client {
         let (url, _) = self.target(url)?;
         let mut resp = http.get(url).timeout(Duration::from_secs(300)).send().await.map_err(network)?;
         if !resp.status().is_success() {
+            log::warn!("download: HTTP {}", resp.status().as_u16());
             return Err(AppError::Roblox(format!("download: HTTP {}", resp.status().as_u16())));
         }
-        let too_big = || AppError::Roblox(format!("download over {} MB", max / 1_000_000));
+        let too_big = || {
+            log::warn!("download: over {max} bytes, refused");
+            AppError::Roblox(format!("download over {} MB", max / 1_000_000))
+        };
         let total = resp.content_length();
         if total.is_some_and(|t| t > max) {
             return Err(too_big());
@@ -486,6 +524,7 @@ impl Client {
                 && let Some(new) = rotated_cookie(&headers).filter(|new| new.expose() != current.expose())
             {
                 if account_id != 0 {
+                    log::debug!("account {account_id}: cookie rotated by Roblox");
                     (self.on_rotate)(account_id, new.clone());
                 }
                 rotated = Some(new);
@@ -499,6 +538,7 @@ impl Client {
                 let wait = limits.reset.or(limits.retry_after).unwrap_or(1 << (attempts - 1)).max(1);
                 self.set_window(route, 0, wait);
                 if attempts >= MAX_ATTEMPTS {
+                    log::warn!("rate limited on {route} {attempts} times, giving up");
                     return Err(AppError::RateLimited(wait));
                 }
                 log::info!("rate limited on {route}, retrying in {wait} s");
@@ -519,13 +559,18 @@ impl Client {
                     "Pick an account to sort by Recommended or Best latency: Roblox only does that for a signed-in account."
                 )));
             }
-            return Err(classify(status, &headers, &bytes));
+            let e = classify(status, &headers, &bytes);
+            log::warn!("{route}: HTTP {status}, code {:?}: {e}", error_code(&bytes));
+            return Err(e);
         }
     }
 
     /// The URL to call and whether it gets the website's `Referer` / `Origin`.
     fn target(&self, url: &str) -> Result<(Url, bool)> {
-        let bad = |_| AppError::Internal("bad Roblox URL".into());
+        let bad = |e: url::ParseError| {
+            log::error!("bad Roblox URL: {e}");
+            AppError::Internal("bad Roblox URL".into())
+        };
         let mut u = Url::parse(url).map_err(bad)?;
         let web = matches!(u.host_str(), Some("auth.roblox.com" | "apis.roblox.com"));
         if let Some(base) = &self.base {
@@ -614,7 +659,10 @@ fn rotated_cookie(h: &HeaderMap) -> Option<Secret> {
 
 fn cookie_header(cookie: &Secret) -> Result<HeaderValue> {
     let raw = Zeroizing::new(format!(".ROBLOSECURITY={}", cookie.expose()));
-    let mut v = HeaderValue::from_str(&raw).map_err(|_| AppError::CookieInvalid)?;
+    let mut v = HeaderValue::from_str(&raw).map_err(|_| {
+        log::warn!("cookie has bytes not allowed in a header");
+        AppError::CookieInvalid
+    })?;
     v.set_sensitive(true);
     Ok(v)
 }
@@ -646,7 +694,17 @@ fn network(e: reqwest::Error) -> AppError {
     } else {
         tr!("connection failed")
     };
-    match e.url().and_then(Url::host_str) {
+    let host = e.url().and_then(Url::host_str).map(str::to_owned);
+    // The cause chain (TLS, DNS, refused...) without the URL.
+    let e = e.without_url();
+    let mut why = e.to_string();
+    let mut src = std::error::Error::source(&e);
+    while let Some(s) = src {
+        why.push_str(&format!(": {s}"));
+        src = s.source();
+    }
+    log::warn!("Roblox request to {} failed: {why}", host.as_deref().unwrap_or("?"));
+    match host {
         Some(host) => AppError::Network(format!("{what} ({host})")),
         None => AppError::Network(what),
     }
@@ -655,16 +713,28 @@ fn network(e: reqwest::Error) -> AppError {
 /// `clientVersionUpload` of a client-version answer, only when it is a plain version name.
 fn client_version_of(body: &[u8]) -> Result<String> {
     let v: String = field(json(body)?, "clientVersionUpload")?;
-    if crate::launcher::update::is_version(&v) { Ok(v) } else { Err(unreadable()) }
+    if crate::launcher::update::is_version(&v) {
+        Ok(v)
+    } else {
+        log::debug!("client version: unexpected clientVersionUpload {:?}", v.chars().take(64).collect::<String>());
+        Err(unreadable())
+    }
 }
 
 fn json<T: DeserializeOwned>(body: &[u8]) -> Result<T> {
-    serde_json::from_slice(body).map_err(|_| unreadable())
+    serde_json::from_slice(body).map_err(|e| {
+        // The category and place only: the message can quote the body.
+        log::warn!("unreadable Roblox answer: {:?} error at line {} column {}", e.classify(), e.line(), e.column());
+        unreadable()
+    })
 }
 
 /// One top-level field of a JSON object answer; missing or mistyped is unreadable.
 fn field<T: DeserializeOwned>(mut v: Value, name: &str) -> Result<T> {
-    serde_json::from_value(v.get_mut(name).map(Value::take).unwrap_or_default()).map_err(|_| unreadable())
+    serde_json::from_value(v.get_mut(name).map(Value::take).unwrap_or_default()).map_err(|e| {
+        log::warn!("unreadable Roblox answer: field \"{name}\" is missing or {:?}", e.classify());
+        unreadable()
+    })
 }
 
 fn unreadable() -> AppError {
@@ -693,7 +763,7 @@ fn sort_thumbnails(page: Thumbnails, out: &mut HashMap<i64, String>) -> Vec<i64>
                 out.insert(t.target_id, url);
             }
             ("Pending", _) => pending.push(t.target_id),
-            _ => {}
+            (state, _) => log::debug!("thumbnail for {} dropped ({state})", t.target_id),
         }
     }
     pending
@@ -715,7 +785,13 @@ fn enabled_methods(config: TwoStepConfig) -> Vec<String> {
         .methods
         .iter()
         .filter(|m| m.enabled)
-        .filter_map(|m| name(&m.media_type))
+        .filter_map(|m| {
+            let n = name(&m.media_type);
+            if n.is_none() {
+                log::debug!("2-step: unknown mediaType {}", m.media_type);
+            }
+            n
+        })
         .filter(|n| !matches!(*n, "RecoveryCode" | "Password"))
         .map(String::from)
         .collect()

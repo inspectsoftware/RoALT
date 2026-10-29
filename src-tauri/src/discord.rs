@@ -255,6 +255,7 @@ pub struct Outbox {
 impl Outbox {
     fn push(&mut self, e: Event) {
         if self.queue.len() == MAX_QUEUED {
+            log::warn!("discord: outbox full ({MAX_QUEUED}), oldest event dropped");
             self.queue.pop_front();
         }
         self.queue.push_back(e);
@@ -298,7 +299,8 @@ impl Discord {
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(15))
             .build()
-            .map_err(|e| e.without_url().to_string());
+            .map_err(|e| e.without_url().to_string())
+            .inspect_err(|e| log::error!("discord: http client unavailable: {e}"));
         Discord { outbox: Mutex::default(), http, last_status: Mutex::new(None) }
     }
 
@@ -404,8 +406,18 @@ async fn post(s: &App, hook: &Webhook, body: &Value) -> Result<Option<Duration>>
 /// Queues an event when its toggle is on, a webhook is set and the vault is unlocked.
 pub fn notify(app: &AppHandle, event: Event) {
     let s = app.state::<App>();
-    let wanted = s.db.settings().is_ok_and(|v| event.wanted(&v.discord));
-    if wanted && !s.vault.is_locked() && s.db.setting_value(KEY).is_ok_and(|v| v.is_some()) {
+    let wanted = s
+        .db
+        .settings()
+        .inspect_err(|e| log::warn!("discord: event dropped, settings unreadable: {e}"))
+        .is_ok_and(|v| event.wanted(&v.discord));
+    if wanted
+        && !s.vault.is_locked()
+        && s.db
+            .setting_value(KEY)
+            .inspect_err(|e| log::warn!("discord: event dropped, webhook setting unreadable: {e}"))
+            .is_ok_and(|v| v.is_some())
+    {
         s.discord.outbox().push(event);
     }
 }
@@ -417,7 +429,12 @@ pub fn transitions(app: &AppHandle, moved: &[Transition]) {
         if kind.is_none() && !launched(t) {
             continue;
         }
-        let a = app.state::<App>().db.account(t.after.account_id).ok();
+        let a = app
+            .state::<App>()
+            .db
+            .account(t.after.account_id)
+            .inspect_err(|e| log::debug!("discord: account {} unreadable: {e}", t.after.account_id))
+            .ok();
         if a.as_ref().is_some_and(|a| a.discord_muted) {
             continue;
         }
@@ -510,7 +527,10 @@ async fn queue_status(app: &AppHandle) {
         s.metrics.sample(&s.tracker.clients())
     })
     .await
-    .unwrap_or_default();
+    .unwrap_or_else(|e| {
+        log::warn!("discord: status metrics failed: {e}");
+        Vec::new()
+    });
     if !m.is_empty() {
         let ram_mb = m.iter().map(|c| c.working_set_mb).sum();
         // CPU needs an earlier sample of the same client; without one it's left out, not 0%.

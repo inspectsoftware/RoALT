@@ -12,7 +12,7 @@ use url::Url;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_COOKIE_SAME_SITE_KIND_LAX, ICoreWebView2_2, ICoreWebView2Settings4,
 };
-use windows::Win32::Foundation::CloseHandle;
+use windows::Win32::Foundation::{CloseHandle, WAIT_TIMEOUT};
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
 use windows::core::{Interface, PCWSTR, w};
 use zeroize::Zeroizing;
@@ -68,7 +68,9 @@ pub async fn capture_login(app: &AppHandle, data_dir: &Path) -> Result<Secret> {
         Ok(pid) => (Some(pid), wait_for_cookie(app.clone(), label).await),
         Err(e) => (None, Err(e)),
     };
-    let _ = window.destroy();
+    if let Err(e) = window.destroy() {
+        log::debug!("could not destroy login window login-{id}: {e}");
+    }
     drop(slot);
     cleanup(pid, profile).await;
     cookie
@@ -114,7 +116,9 @@ pub async fn open_session(
     let pid = match harden(&window, Some(cookie)).await {
         Ok(pid) => pid,
         Err(e) => {
-            let _ = window.destroy();
+            if let Err(e) = window.destroy() {
+                log::debug!("could not destroy session window {label}: {e}");
+            }
             cleanup(None, profile).await;
             return Err(e);
         }
@@ -146,7 +150,8 @@ pub fn sweep_temp_profiles(data_dir: &Path) {
             return;
         }
     };
-    for path in entries.flatten().map(|e| e.path()) {
+    let entries = entries.filter_map(|e| e.inspect_err(|e| log::debug!("could not read an old browser profile entry: {e}")).ok());
+    for path in entries.map(|e| e.path()) {
         let removed = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
         if let Err(e) = removed {
             log::warn!("could not delete old browser profile {}: {e}", path.display());
@@ -195,7 +200,10 @@ async fn harden(window: &WebviewWindow, cookie: Option<Secret>) -> Result<u32> {
         let _ = tx.send(r);
     })?;
     // The closure is dropped unrun if the window is already gone.
-    rx.await.map_err(|_| AppError::Cancelled)?
+    rx.await.map_err(|_| {
+        log::debug!("webview setup skipped: window {} already gone", window.label());
+        AppError::Cancelled
+    })?
 }
 
 fn harden_webview(pv: &PlatformWebview, cookie: Option<&Secret>) -> windows::core::Result<u32> {
@@ -221,6 +229,34 @@ fn harden_webview(pv: &PlatformWebview, cookie: Option<&Secret>) -> windows::cor
         let mut pid = 0;
         wv.BrowserProcessId(&mut pid)?;
         Ok(pid)
+    }
+}
+
+/// Logs WebView2 renderer/GPU/browser process failures of `window` (a white screen otherwise
+/// leaves no trace).
+pub fn log_process_failures(window: &WebviewWindow) {
+    let label = window.label().to_string();
+    let r = window.with_webview(move |pv| {
+        use webview2_com::ProcessFailedEventHandler;
+        let label = label.clone();
+        let handler = ProcessFailedEventHandler::create(Box::new(move |_, args| {
+            let mut kind = Default::default();
+            if let Some(args) = args {
+                // SAFETY: a live args interface handed to the event handler.
+                unsafe { args.ProcessFailedKind(&mut kind)? };
+            }
+            log::error!("WebView2 process failed in window \"{label}\" (kind {})", kind.0);
+            Ok(())
+        }));
+        let mut token = Default::default();
+        // SAFETY: COM call on the main thread (with_webview) on a live controller.
+        let added = unsafe { pv.controller().CoreWebView2().and_then(|wv| wv.add_ProcessFailed(&handler, &mut token)) };
+        if let Err(e) = added {
+            log::warn!("could not watch WebView2 process failures: {e}");
+        }
+    });
+    if let Err(e) = r {
+        log::warn!("could not watch WebView2 process failures: {e}");
     }
 }
 
@@ -255,7 +291,9 @@ fn end_session(app: &AppHandle, label: &str, title: &str, pid: u32, profile: &Pa
             }
         };
         on_close(last);
-        let _ = window.destroy();
+        if let Err(e) = window.destroy() {
+            log::debug!("could not destroy session window {label}: {e}");
+        }
     }
     wait_for_exit(pid);
     remove_profile(profile);
@@ -287,6 +325,7 @@ fn poll_cookie(app: &AppHandle, label: &str) -> Result<Secret> {
             }
             Err(e) => {
                 failures += 1;
+                log::debug!("login window {label}: reading cookies failed ({failures}/5): {e}");
                 if failures == 5 {
                     return Err(e.into());
                 }
@@ -325,7 +364,9 @@ fn wait_for_exit(pid: u32) {
     // SAFETY: the handle is used only here and closed before returning.
     unsafe {
         if let Ok(h) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) {
-            WaitForSingleObject(h, 5_000);
+            if WaitForSingleObject(h, 5_000) == WAIT_TIMEOUT {
+                log::debug!("browser process {pid} still running after 5 s");
+            }
             let _ = CloseHandle(h);
         }
     }

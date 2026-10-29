@@ -121,7 +121,10 @@ impl Db {
             M::up(include_str!("migrations/006_tracked.sql")),
         ])
             .to_latest(&mut conn)
-            .map_err(|e| AppError::Storage(e.to_string()))?;
+            .map_err(|e| {
+                log::error!("database migration failed: {e}");
+                AppError::Storage(e.to_string())
+            })?;
         Ok(Db { conn: Mutex::new(conn), file })
     }
 
@@ -151,7 +154,12 @@ impl Db {
     }
 
     fn conn(&self) -> MutexGuard<'_, Connection> {
-        self.conn.lock().unwrap_or_else(|e| e.into_inner())
+        self.conn.lock().unwrap_or_else(|e| {
+            log::warn!("database lock was poisoned by an earlier panic; recovering");
+            // Cleared so this is logged once, not on every query.
+            self.conn.clear_poison();
+            e.into_inner()
+        })
     }
 
     pub fn vault_record(&self) -> Result<Option<VaultRecord>> {
@@ -159,7 +167,14 @@ impl Db {
         let rec = self
             .conn()
             .query_row(sql, [], |r| {
-                let mode = if r.get::<_, String>(0)? == "master" { VaultMode::Master } else { VaultMode::Dpapi };
+                let mode = match r.get::<_, String>(0)?.as_str() {
+                    "master" => VaultMode::Master,
+                    "dpapi" => VaultMode::Dpapi,
+                    other => {
+                        log::warn!("unknown vault mode {other:?}; treating it as dpapi");
+                        VaultMode::Dpapi
+                    }
+                };
                 let kdf = match (r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?) {
                     (Some(salt), Some(m_kib), Some(t), Some(p)) => Some(Kdf { salt, m_kib, t, p }),
                     _ => None,
@@ -379,7 +394,16 @@ impl Db {
     pub fn settings(&self) -> Result<Settings> {
         let sql = "SELECT value FROM settings WHERE key = 'settings'";
         let json: Option<String> = self.conn().query_row(sql, [], |r| r.get(0)).optional()?;
-        Ok(json.and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default())
+        // The JSON may hold secrets (webhook URLs): only where it broke is logged.
+        Ok(json
+            .and_then(|j| {
+                serde_json::from_str(&j)
+                    .inspect_err(|e| {
+                        log::error!("stored settings are corrupt ({:?} at {}:{}); using defaults", e.classify(), e.line(), e.column())
+                    })
+                    .ok()
+            })
+            .unwrap_or_default())
     }
 
     pub fn save_settings(&self, s: &Settings) -> Result<()> {
@@ -409,12 +433,14 @@ impl Db {
             "SELECT id, name, target, account_ids, in_tray, sort_order, last_used_at FROM favourites ORDER BY sort_order, id",
         )?;
         let rows = st.query_map([], |r| {
-            let ids: String = r.get(3)?;
+            let (id, ids): (i64, String) = (r.get(0)?, r.get(3)?);
             Ok(FavouriteRow {
-                id: r.get(0)?,
+                id,
                 name: r.get(1)?,
                 target: r.get(2)?,
-                account_ids: serde_json::from_str(&ids).unwrap_or_default(),
+                account_ids: serde_json::from_str(&ids)
+                    .inspect_err(|e| log::warn!("favourite {id}: corrupt account ids ({e}); using none"))
+                    .unwrap_or_default(),
                 in_tray: r.get(4)?,
                 sort_order: r.get(5)?,
                 last_used_at: r.get(6)?,
@@ -503,7 +529,14 @@ impl Db {
                 id: r.get(0)?,
                 instance_id: r.get(1)?,
                 account_id: r.get(2)?,
-                kind: CrashKind::parse(&r.get::<_, String>(3)?),
+                kind: {
+                    let s: String = r.get(3)?;
+                    let kind = CrashKind::parse(&s);
+                    if kind.as_str() != s {
+                        log::debug!("unknown crash kind {s:?}");
+                    }
+                    kind
+                },
                 at: r.get(4)?,
                 uptime_ms: r.get(5)?,
                 reason: r.get(6)?,
@@ -574,7 +607,14 @@ fn account_row(r: &Row) -> rusqlite::Result<AccountSummary> {
         favourite: r.get(7)?,
         sort_order: r.get(8)?,
         group_ids: groups.map(|s| s.split(',').filter_map(|x| x.parse().ok()).collect()).unwrap_or_default(),
-        status: AccountStatus::parse(&r.get::<_, String>(10)?),
+        status: {
+            let s: String = r.get(10)?;
+            let status = AccountStatus::parse(&s);
+            if status.as_str() != s {
+                log::debug!("unknown account status {s:?}");
+            }
+            status
+        },
         status_checked_at: r.get(11)?,
         created_at: r.get(12)?,
         allow_disconnect: r.get(13)?,

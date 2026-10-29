@@ -7,7 +7,7 @@
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{FILETIME, HANDLE, HWND, LPARAM, WAIT_TIMEOUT, WPARAM};
+use windows::Win32::Foundation::{E_ACCESSDENIED, FILETIME, HANDLE, HWND, LPARAM, WAIT_TIMEOUT, WPARAM};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
@@ -24,6 +24,7 @@ use windows::core::{BOOL, Owned};
 use crate::error::{AppError, Result};
 
 const CLIENT_EXE: &str = "RobloxPlayerBeta.exe";
+const INSTALLER_EXE: &str = "RobloxPlayerInstaller.exe";
 /// 1601-01-01 (FILETIME's epoch) to 1970-01-01, in 100 ns ticks.
 const UNIX_EPOCH_TICKS: u64 = 116_444_736_000_000_000;
 
@@ -36,19 +37,38 @@ pub struct ProcInfo {
 
 /// Running `RobloxPlayerBeta.exe` processes.
 pub fn roblox_processes() -> Vec<ProcInfo> {
+    named(CLIENT_EXE)
+}
+
+/// Whether Roblox's own installer runs: it updates the client, then starts it again.
+pub fn installer_running() -> bool {
+    !named(INSTALLER_EXE).is_empty()
+}
+
+/// Running processes whose executable is `exe`.
+fn named(exe: &str) -> Vec<ProcInfo> {
     let mut out = Vec::new();
     // SAFETY: the snapshot handle is owned and closed on drop; `e` is a zeroed PROCESSENTRY32W
     // with dwSize set, as Process32FirstW/NextW require.
     unsafe {
-        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return out };
+        let snap = match CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) {
+            Ok(snap) => snap,
+            Err(e) => {
+                // Polled every second: said once.
+                static ONCE: std::sync::Once = std::sync::Once::new();
+                ONCE.call_once(|| log::warn!("could not list processes: {e}"));
+                return out;
+            }
+        };
         let snap = Owned::new(snap);
         let mut e = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
         let mut more = Process32FirstW(*snap, &mut e).is_ok();
         while more {
-            if is_client(&e.szExeFile)
-                && let Some(start_time) = start_time(e.th32ProcessID)
-            {
-                out.push(ProcInfo { pid: e.th32ProcessID, start_time });
+            if is_named(&e.szExeFile, exe) {
+                match start_time(e.th32ProcessID) {
+                    Some(start_time) => out.push(ProcInfo { pid: e.th32ProcessID, start_time }),
+                    None => log::debug!("{exe} process {} can't be opened; left out", e.th32ProcessID),
+                }
             }
             more = Process32NextW(*snap, &mut e).is_ok();
         }
@@ -103,7 +123,9 @@ fn terminate(pid: u32, t0: u64) -> Result<()> {
         }
         // Termination is asynchronous: wait (≤ 3 s) until its objects are gone, so taking the
         // multi-instance lock right after doesn't find Roblox's event still there.
-        WaitForSingleObject(*h, 3_000);
+        if WaitForSingleObject(*h, 3_000) == WAIT_TIMEOUT {
+            log::debug!("process {pid} still not gone 3 s after TerminateProcess");
+        }
     }
     Ok(())
 }
@@ -196,7 +218,20 @@ pub fn foreground_pid() -> Option<u32> {
 
 pub(super) fn open(pid: u32, rights: PROCESS_ACCESS_RIGHTS) -> Option<Owned<HANDLE>> {
     // SAFETY: on success the handle is ours; Owned closes it on drop.
-    unsafe { OpenProcess(rights, false, pid).ok().map(|h| Owned::new(h)) }
+    match unsafe { OpenProcess(rights, false, pid) } {
+        // SAFETY: as above.
+        Ok(h) => Some(unsafe { Owned::new(h) }),
+        Err(e) => {
+            // Polled every second; a process that is gone is normal, access denied (an elevated
+            // client) is said once.
+            if e.code() == E_ACCESSDENIED {
+                static ONCE: std::sync::Once = std::sync::Once::new();
+                ONCE.call_once(|| log::warn!("process {pid}: access denied (is Roblox running as administrator?)"));
+            }
+            log::debug!("could not open process {pid}: {e}");
+            None
+        }
+    }
 }
 
 /// Start of the process behind `h` in Unix seconds, `None` once it has exited (signalled).
@@ -209,15 +244,18 @@ pub(super) fn started(h: HANDLE) -> Option<u64> {
         if WaitForSingleObject(h, 0) != WAIT_TIMEOUT {
             return None;
         }
-        GetProcessTimes(h, &mut created, &mut exited, &mut kernel, &mut user).ok()?;
+        GetProcessTimes(h, &mut created, &mut exited, &mut kernel, &mut user)
+            .inspect_err(|e| log::debug!("process times unreadable: {e}"))
+            .ok()?;
     }
     let ticks = (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime);
     Some(ticks.saturating_sub(UNIX_EPOCH_TICKS) / 10_000_000)
 }
 
-fn is_client(exe: &[u16]) -> bool {
+/// Whether a snapshot's NUL-terminated executable name is `name` (pure).
+fn is_named(exe: &[u16], name: &str) -> bool {
     let len = exe.iter().position(|&c| c == 0).unwrap_or(exe.len());
-    String::from_utf16_lossy(&exe[..len]).eq_ignore_ascii_case(CLIENT_EXE)
+    String::from_utf16_lossy(&exe[..len]).eq_ignore_ascii_case(name)
 }
 
 #[cfg(test)]
@@ -307,7 +345,9 @@ mod tests {
     fn roblox_processes_does_not_panic() {
         let _ = roblox_processes();
         let utf16 = |s: &str| s.encode_utf16().collect::<Vec<_>>();
-        assert!(is_client(&utf16("robloxplayerbeta.EXE\0junk")));
-        assert!(!is_client(&utf16("RobloxPlayerBeta.exe.bak")));
+        assert!(is_named(&utf16("robloxplayerbeta.EXE\0junk"), CLIENT_EXE));
+        assert!(!is_named(&utf16("RobloxPlayerBeta.exe.bak"), CLIENT_EXE));
+        assert!(is_named(&utf16("RobloxPlayerInstaller.exe\0"), INSTALLER_EXE));
+        let _ = installer_running();
     }
 }

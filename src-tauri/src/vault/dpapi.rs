@@ -23,7 +23,10 @@ pub fn protect_with(data: &[u8], entropy: &[u8]) -> Result<Vec<u8>> {
     unsafe {
         CryptProtectData(&input, PCWSTR::null(), Some(&entropy), None, None, CRYPTPROTECT_UI_FORBIDDEN, &mut out)
     }
-    .map_err(|_| AppError::Crypto)?;
+    .map_err(|e| {
+        log::error!("DPAPI protect failed: {e}");
+        AppError::Crypto
+    })?;
     Ok(take(out).to_vec())
 }
 
@@ -37,7 +40,10 @@ pub fn unprotect_with(blob_in: &[u8], entropy: &[u8]) -> Result<Zeroizing<Vec<u8
     let mut out = CRYPT_INTEGER_BLOB::default();
     // SAFETY: as in `protect`.
     unsafe { CryptUnprotectData(&input, None, Some(&entropy), None, None, CRYPTPROTECT_UI_FORBIDDEN, &mut out) }
-        .map_err(|_| AppError::Crypto)?;
+        .map_err(|e| {
+            log::error!("DPAPI unprotect failed: {e}");
+            AppError::Crypto
+        })?;
     Ok(take(out))
 }
 

@@ -71,7 +71,10 @@ pub fn refresh(app: &AppHandle) {
         if shown().as_ref() == Some(&view) {
             return;
         }
-        let Some(tray) = handle.tray_by_id(TRAY) else { return };
+        let Some(tray) = handle.tray_by_id(TRAY) else {
+            log::warn!("tray icon missing; menu not updated");
+            return;
+        };
         match menu(&handle, &view).and_then(|m| tray.set_menu(Some(m))) {
             Ok(()) => *shown() = Some(view),
             Err(e) => log::warn!("could not update the tray menu: {e}"),
@@ -133,9 +136,11 @@ fn menu(app: &AppHandle, v: &View) -> tauri::Result<Menu<Wry>> {
 /// Shows, unminimizes and focuses the main window (it may be hidden in the tray).
 pub fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
-        let _ = w.show();
-        let _ = w.unminimize();
-        let _ = w.set_focus();
+        for r in [w.show(), w.unminimize(), w.set_focus()] {
+            if let Err(e) = r {
+                log::debug!("tray: could not show the main window: {e}");
+            }
+        }
     }
 }
 
@@ -160,6 +165,8 @@ fn on_menu(app: &AppHandle, id: &str) {
         _ => {
             if let Some(fav) = id.strip_prefix("fav:").and_then(|n| n.parse().ok()) {
                 launch_favourite(app, fav);
+            } else {
+                log::debug!("tray: unknown menu id {id}");
             }
         }
     }
@@ -193,8 +200,18 @@ async fn launch(app: &AppHandle, id: i64) -> Result<()> {
     let s = app.state::<App>();
     let row = s.db.favourites()?.into_iter().find(|f| f.id == id).ok_or(AppError::NotFound)?;
     let fav = commands::favourite_of(&s, row)?;
-    let ids: Vec<i64> =
-        fav.account_ids.iter().copied().filter(|&a| s.db.account(a).is_ok_and(|a| a.status == AccountStatus::Valid)).collect();
+    let ids: Vec<i64> = fav
+        .account_ids
+        .iter()
+        .copied()
+        .filter(|&a| match s.db.account(a) {
+            Ok(a) => a.status == AccountStatus::Valid,
+            Err(e) => {
+                log::warn!("tray: could not read account {a} of favourite {id}: {e}");
+                false
+            }
+        })
+        .collect();
     match ids.len() {
         0 => {
             show_main(app);

@@ -5,7 +5,7 @@
 pub mod authenticode;
 pub mod bulk;
 pub mod client;
-pub mod fps;
+pub mod client_settings;
 pub mod target;
 pub mod update;
 pub mod uri;
@@ -138,44 +138,50 @@ fn args_for(s: &App, account_id: i64) -> Result<Vec<String>> {
 /// One launch: resolve → `client-assertion` (failure ignored) → `authentication-ticket` →
 /// URI with a fresh `browsertrackerid` → start the client (`client::find` + `client::start`,
 /// with the account's or the default launch arguments after the URI). Just before the client
-/// starts, `fps_cap`, else the account's or the default FPS cap, goes into Roblox's flag file (`fps`, put back
-/// once the client has loaded its flags, `fps::wait_until_read`; launches wait for each other
-/// meanwhile), unless a
-/// bootstrapper manages the client (logged).
+/// starts, `fps_cap`, else the account's or the default FPS cap, and the lowest graphics when
+/// `Settings.low_graphics` is on, go into Roblox's settings file (`client_settings`). It returns
+/// once the client has started; a task keeps `client_settings::LOCK` until the client has read
+/// the file and the user's own are back, so the next launch waits for that, not the caller.
 /// `AppError::Locked` when the vault is locked; cookie errors as the API client maps them.
 pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget, fps_cap: Option<u32>) -> Result<LaunchInfo> {
+    // First: the previous launch's client may still be reading the settings file, and this
+    // launch's exe, ticket and start time should come after that wait, not before it.
+    let held = client_settings::LOCK.lock().await;
     let cookie = account_cookie(s, account_id)?;
     // Before any network call: no ticket is fetched when Roblox isn't installed or the
     // arguments are refused.
     let exe = client::find()?;
     let args = args_for(s, account_id)?;
     let (join, warning) = resolve(&s.api, account_id, &cookie, target).await?;
-    let assertion = s.api.client_assertion(account_id, &cookie).await.ok();
+    let assertion = s
+        .api
+        .client_assertion(account_id, &cookie)
+        .await
+        .inspect_err(|e| log::warn!("client assertion for account {account_id} failed, ticket fetched without it: {e}"))
+        .ok();
     let ticket = s.api.authentication_ticket(account_id, &cookie, assertion.as_ref()).await?;
     let (browser_tracker_id, started_at) = (uri::new_browser_tracker_id(), crate::commands::now_ms());
     let place = uri::PlaceLaunch { join: &join, browser_tracker_id, join_attempt_id: Uuid::new_v4() };
-    let fps = match fps_cap.or(s.db.account(account_id)?.fps_cap) {
-        Some(own) => own,
-        None => s.db.settings()?.fps_cap,
-    };
-    let flags = fps::LOCK.lock().await;
-    let undo = if client::managed_by_bootstrapper(&exe) {
-        if fps != 0 {
-            log::info!("FPS cap skipped for account {account_id}: a bootstrapper manages Roblox's flags");
-        }
-        None
-    } else {
-        fps::apply(&exe.path, fps)
-    };
+    let settings = s.db.settings()?;
+    let fps = fps_cap.or(s.db.account(account_id)?.fps_cap).unwrap_or(settings.fps_cap);
+    let undo = client_settings::apply(&s.db, fps, settings.low_graphics);
     let since = std::time::SystemTime::now();
     let started = client::start(&exe, &uri::player_uri(&ticket, started_at, &place), &args);
-    if let Some(undo) = undo {
-        if started.is_ok() {
-            fps::wait_until_read(browser_tracker_id, since).await;
+    match (undo, &started) {
+        (Some(undo), Ok((pid, pid_start))) => {
+            // A bootstrapper's own process exits by design: only the log tells then.
+            let client = (!exe.bootstrapper).then_some((*pid, *pid_start));
+            tauri::async_runtime::spawn(async move {
+                client_settings::wait_until_read(browser_tracker_id, since, client).await;
+                if let Err(e) = tokio::task::spawn_blocking(move || undo.put_back()).await {
+                    log::warn!("Roblox settings: putting the user's own back failed: {e}");
+                }
+                drop(held);
+            });
         }
-        undo.put_back();
+        (Some(undo), Err(_)) => undo.put_back(),
+        (None, _) => {}
     }
-    drop(flags);
     let (pid, pid_start) = started?;
 
     log::info!("launched account {account_id} (pid {pid}, bootstrapper: {}, {} extra argument(s))", exe.bootstrapper, args.len());

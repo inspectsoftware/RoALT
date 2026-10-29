@@ -1,5 +1,5 @@
 //! A client's window as the dashboard sees it: a small picture of it (`thumbnail`, through
-//! `PrintWindow` with `PW_RENDERFULLCONTENT`, which copies what the compositor already has, so
+//! Windows.Graphics.Capture, `capture`, which copies what the compositor already has, so
 //! nothing is read from the client's memory) and showing, minimizing or bringing it to the front
 //! (`show`), making it small (`micro`, back with the window placement it had) and laying all
 //! of them out in a grid (`tile`). Window calls only (`SetWindowPos` and friends, as dragging a
@@ -8,14 +8,9 @@
 use std::sync::{Mutex, MutexGuard};
 
 use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::Graphics::Gdi::{
-    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleBitmap, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC,
-    DeleteObject, GetDC, GetMonitorInfoW, HALFTONE, HGDIOBJ, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, ReleaseDC,
-    SRCCOPY, SelectObject, SetStretchBltMode, StretchBlt,
-};
-use windows::Win32::Storage::Xps::{PRINT_WINDOW_FLAGS, PW_CLIENTONLY, PrintWindow};
+use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClientRect, GetWindowPlacement, GetWindowRect, IsIconic, IsZoomed, PW_RENDERFULLCONTENT, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE,
+    GetClientRect, GetWindowPlacement, GetWindowRect, IsIconic, IsZoomed, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE,
     SWP_NOMOVE, SWP_NOZORDER, SW_MINIMIZE, SW_RESTORE, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE,
     SetWindowPlacement, SetWindowPos, ShowWindow, ShowWindowAsync, WINDOWPLACEMENT, WPF_RESTORETOMAXIMIZED,
 };
@@ -24,6 +19,7 @@ use super::{afk, process};
 use crate::error::{AppError, Result};
 
 /// One picture: `width` × `height` pixels, RGBA, rows top-down (as canvas `ImageData` wants).
+#[derive(Clone)]
 pub struct Thumb {
     pub width: u32,
     pub height: u32,
@@ -41,61 +37,13 @@ pub enum Show {
 }
 
 /// The client's window at most `max_w` pixels wide (its aspect kept); None while it is
-/// minimized, not responding (PrintWindow would wait for it), has no window yet or can't be drawn.
+/// minimized, has no window yet or can't be captured.
 pub fn thumbnail(pid: u32, max_w: u32) -> Option<Thumb> {
     let (hwnd, minimized) = process::main_window(pid)?;
-    if minimized || process::hung(pid) {
+    if minimized {
         return None;
     }
-    let mut r = RECT::default();
-    // SAFETY: reads one window's client size into a local.
-    unsafe { GetClientRect(hwnd, &mut r) }.ok()?;
-    let (cw, ch) = (r.right - r.left, r.bottom - r.top);
-    if cw <= 0 || ch <= 0 {
-        return None;
-    }
-    let (tw, th) = fit(cw as u32, ch as u32, max_w);
-    // SAFETY: every GDI object made here is selected out and deleted before returning; the DIB's
-    // bits are copied out while it is alive and of the size asked for.
-    unsafe {
-        let screen = GetDC(None);
-        let full = CreateCompatibleDC(Some(screen));
-        let small = CreateCompatibleDC(Some(screen));
-        let big = CreateCompatibleBitmap(screen, cw, ch);
-        let info = BITMAPINFO {
-            bmiHeader: BITMAPINFOHEADER {
-                biSize: size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: tw as i32,
-                biHeight: -(th as i32),
-                biPlanes: 1,
-                biBitCount: 32,
-                biCompression: BI_RGB.0,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let mut bits = std::ptr::null_mut();
-        let dib = CreateDIBSection(Some(small), &info, DIB_RGB_COLORS, &mut bits, None, 0).ok();
-        let mut out = None;
-        if let Some(dib) = dib {
-            let old_full = SelectObject(full, HGDIOBJ(big.0));
-            let old_small = SelectObject(small, HGDIOBJ(dib.0));
-            let drawn = PrintWindow(hwnd, full, PRINT_WINDOW_FLAGS(PW_CLIENTONLY.0 | PW_RENDERFULLCONTENT)).as_bool();
-            SetStretchBltMode(small, HALFTONE);
-            if drawn && StretchBlt(small, 0, 0, tw as i32, th as i32, Some(full), 0, 0, cw, ch, SRCCOPY).as_bool() {
-                let bgra = std::slice::from_raw_parts(bits as *const u8, (tw * th * 4) as usize);
-                out = Some(Thumb { width: tw, height: th, rgba: to_rgba(bgra) });
-            }
-            SelectObject(small, old_small);
-            SelectObject(full, old_full);
-            let _ = DeleteObject(HGDIOBJ(dib.0));
-        }
-        let _ = DeleteObject(HGDIOBJ(big.0));
-        let _ = DeleteDC(small);
-        let _ = DeleteDC(full);
-        ReleaseDC(None, screen);
-        out
-    }
+    super::capture::picture(hwnd, max_w)
 }
 
 /// Shows, minimizes or focuses the client's window. Minimize and Restore are queued, so a
@@ -166,9 +114,13 @@ pub fn micro(id: &str, pid: u32, on: bool) -> Result<(u32, u32)> {
         normal(hwnd, false);
         if let Some((fw, fh)) = frame(hwnd) {
             // SAFETY: a window-manager call on a top-level window; it waits for the client to take it.
-            let _ = unsafe {
+            if let Err(e) = unsafe {
                 SetWindowPos(hwnd, None, 0, 0, MICRO.0 as i32 + fw, MICRO.1 as i32 + fh, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOMOVE)
-            };
+            } {
+                log::debug!("micro window of instance {id}: resize failed: {e}");
+            }
+        } else {
+            log::debug!("micro window of instance {id}: window frame unreadable, not resized");
         }
     } else {
         let before = {
@@ -197,6 +149,7 @@ pub fn tile(clients: &[(String, u32)], near: HWND, micro: bool) -> Vec<String> {
     // SAFETY: reads the monitor nearest to a window into a local with cbSize set; with
     // MONITOR_DEFAULTTONEAREST there always is one.
     if !unsafe { GetMonitorInfoW(MonitorFromWindow(near, MONITOR_DEFAULTTONEAREST), &mut mi) }.as_bool() {
+        log::warn!("tile: monitor info unreadable, nothing laid out: {}", std::io::Error::last_os_error());
         return Vec::new();
     }
     let w = mi.rcWork;
@@ -219,7 +172,9 @@ pub fn tile(clients: &[(String, u32)], near: HWND, micro: bool) -> Vec<String> {
         normal(hwnd, true);
         // SAFETY: a window-manager call on a top-level window; queued (ASYNC) so one slow client
         // doesn't hold up the rest.
-        let _ = unsafe { SetWindowPos(hwnd, None, x, y, cw, ch, SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS) };
+        if let Err(e) = unsafe { SetWindowPos(hwnd, None, x, y, cw, ch, SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS) } {
+            log::debug!("tile: instance {id} not moved: {e}");
+        }
     }
     wins.into_iter().map(|w| w.0.to_owned()).collect()
 }
@@ -268,8 +223,9 @@ fn remember(id: &str, pid: u32, hwnd: HWND) {
     }
     let mut wp = WINDOWPLACEMENT { length: size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };
     // SAFETY: reads one window's placement into a local with length set.
-    if unsafe { GetWindowPlacement(hwnd, &mut wp) }.is_ok() {
-        s.push((id.to_owned(), pid, wp));
+    match unsafe { GetWindowPlacement(hwnd, &mut wp) } {
+        Ok(()) => s.push((id.to_owned(), pid, wp)),
+        Err(e) => log::debug!("instance {id}: window placement not remembered: {e}"),
     }
 }
 
@@ -302,13 +258,7 @@ fn client_size(hwnd: HWND) -> Option<(u32, u32)> {
     Some(((r.right - r.left).max(0) as u32, (r.bottom - r.top).max(0) as u32))
 }
 
-/// A `w` × `h` picture scaled to at most `max_w` wide (pure; never upscaled, at least 1 × 1).
-pub fn fit(w: u32, h: u32, max_w: u32) -> (u32, u32) {
-    let tw = w.min(max_w).max(1);
-    (tw, (u64::from(h) * u64::from(tw) / u64::from(w.max(1))).max(1) as u32)
-}
-
-/// GDI's BGRX to opaque RGBA (pure).
+/// BGRX to opaque RGBA (pure).
 pub fn to_rgba(bgra: &[u8]) -> Vec<u8> {
     bgra.as_chunks::<4>().0.iter().flat_map(|p| [p[2], p[1], p[0], 255]).collect()
 }
@@ -318,11 +268,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pictures_fit_and_turn_rgba() {
-        assert_eq!(fit(1920, 1080, 320), (320, 180));
-        assert_eq!(fit(200, 100, 320), (200, 100), "never upscaled");
-        assert_eq!(fit(5000, 1, 320), (320, 1));
-        assert_eq!(fit(0, 0, 320), (1, 1));
+    fn pictures_turn_rgba() {
         assert_eq!(to_rgba(&[1, 2, 3, 0, 4, 5, 6, 9]), [3, 2, 1, 255, 6, 5, 4, 255]);
     }
 

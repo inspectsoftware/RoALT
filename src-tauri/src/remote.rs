@@ -205,7 +205,10 @@ fn store_new_pin(s: &App) -> Result<Secret> {
 fn stored_pin(s: &App) -> Result<Secret> {
     let Some(stored) = s.db.setting_value(KEY)? else { return store_new_pin(s) };
     match unhex(&stored).ok_or(AppError::Crypto).and_then(|blob| s.vault.decrypt_secret(PIN_AAD, &blob)) {
-        Err(AppError::Crypto) => store_new_pin(s),
+        Err(AppError::Crypto) => {
+            log::warn!("web dashboard: stored PIN unreadable, making a new one");
+            store_new_pin(s)
+        }
         r => r,
     }
 }
@@ -252,7 +255,13 @@ fn make_cert(ip: Option<Ipv4Addr>) -> Result<(Vec<u8>, Zeroizing<Vec<u8>>)> {
 }
 
 fn stored_cert(s: &App) -> Result<Option<StoredCert>> {
-    Ok(s.db.setting_value(CERT_ROW)?.and_then(|j| serde_json::from_str(&j).ok()))
+    Ok(s.db.setting_value(CERT_ROW)?.and_then(|j| {
+        serde_json::from_str(&j)
+            .inspect_err(|e| {
+                log::warn!("web dashboard: stored certificate unreadable ({:?} at {}:{})", e.classify(), e.line(), e.column())
+            })
+            .ok()
+    }))
 }
 
 /// The certificate and its key for serving now: the stored one while it is for this LAN
@@ -264,7 +273,7 @@ fn cert(s: &App) -> Result<(Vec<u8>, Zeroizing<Vec<u8>>)> {
             Ok((cert, s.vault.decrypt(CERT_AAD, &key)?))
         });
         match opened {
-            Err(AppError::Crypto) => {}
+            Err(AppError::Crypto) => log::warn!("web dashboard: stored certificate key unreadable, making a new one"),
             r => return r,
         }
     }
@@ -306,7 +315,15 @@ pub fn status(s: &App) -> Result<RemoteStatus> {
         None => s.db.settings()?.remote.port,
     };
     let urls = lan_ip().map(|ip| format!("https://{ip}:{port}")).into_iter().collect();
-    let fingerprint = stored_cert(s)?.and_then(|c| unhex(&c.cert)).map(|der| fingerprint(&der));
+    let fingerprint = stored_cert(s)?
+        .and_then(|c| {
+            let der = unhex(&c.cert);
+            if der.is_none() {
+                log::debug!("web dashboard: stored certificate is not hex");
+            }
+            der
+        })
+        .map(|der| fingerprint(&der));
     Ok(RemoteStatus { running: s.remote.port().is_some(), urls, fingerprint })
 }
 
@@ -314,9 +331,11 @@ pub fn status(s: &App) -> Result<RemoteStatus> {
 /// nothing). ponytail: the main adapter only; list every adapter (GetAdaptersAddresses) if
 /// people run RoALT on several networks at once.
 fn lan_ip() -> Option<Ipv4Addr> {
-    let sock = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
-    sock.connect((Ipv4Addr::new(8, 8, 8, 8), 53)).ok()?;
-    match sock.local_addr().ok()?.ip() {
+    let addr = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
+        .and_then(|sock| sock.connect((Ipv4Addr::new(8, 8, 8, 8), 53)).and_then(|()| sock.local_addr()))
+        .inspect_err(|e| log::debug!("web dashboard: no LAN address: {e}"))
+        .ok()?;
+    match addr.ip() {
         IpAddr::V4(ip) if !ip.is_loopback() && !ip.is_unspecified() => Some(ip),
         _ => None,
     }
@@ -429,6 +448,7 @@ async fn ip_hosts_only(req: Request, next: Next) -> Response {
 }
 
 fn refuse(code: StatusCode, message: &str) -> Response {
+    log::warn!("web dashboard refused a request ({code}): {message}");
     (code, Json(json!({ "error": message }))).into_response()
 }
 
@@ -455,6 +475,7 @@ fn gate(s: &App, h: &HeaderMap, post: bool) -> Option<Response> {
 
 /// Gives an `AppError` (its message is user-facing and secret-free) to the page.
 fn failed(e: AppError) -> Response {
+    e.log();
     let code = if matches!(e, AppError::Invalid(_) | AppError::NotFound | AppError::Locked) { StatusCode::BAD_REQUEST } else { StatusCode::INTERNAL_SERVER_ERROR };
     refuse(code, &e.to_string())
 }
@@ -520,10 +541,19 @@ async fn clients(State(app): State<AppHandle>, h: HeaderMap) -> Response {
         s.metrics.sample(&s.tracker.clients())
     })
     .await
-    .unwrap_or_default();
+    .unwrap_or_else(|e| {
+        log::warn!("web dashboard: client metrics failed: {e}");
+        Vec::new()
+    });
     let s = app.state::<App>();
-    let names: HashMap<i64, String> =
-        s.db.accounts().unwrap_or_default().iter().map(|a| (a.id, crate::launcher::bulk::name_of(a))).collect();
+    let names: HashMap<i64, String> = s
+        .db
+        .accounts()
+        .unwrap_or_else(|e| {
+            log::warn!("web dashboard: accounts unreadable: {e}");
+            Vec::new()
+        })
+        .iter().map(|a| (a.id, crate::launcher::bulk::name_of(a))).collect();
     let now = now_ms();
     let rows: Vec<ClientRow> = s
         .tracker

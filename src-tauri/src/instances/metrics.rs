@@ -59,7 +59,9 @@ impl Sampler {
         {
             return m.clone();
         }
-        let cores = std::thread::available_parallelism().map_or(1, |n| n.get()) as f64;
+        let cores = std::thread::available_parallelism()
+            .inspect_err(|e| log::debug!("metrics: core count unknown, using 1: {e}"))
+            .map_or(1, |n| n.get()) as f64;
         let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
         last.retain(|id, _| clients.iter().any(|c| c.0 == *id));
         let now = Instant::now();
@@ -105,8 +107,11 @@ pub fn read(pid: u32, t0: u64) -> Option<Reading> {
     // local PROCESS_MEMORY_COUNTERS_EX whose `cb` says its size, and starts with the plain
     // PROCESS_MEMORY_COUNTERS; `io` is a local.
     unsafe {
-        K32GetProcessMemoryInfo(*h, (&raw mut mem).cast::<PROCESS_MEMORY_COUNTERS>(), mem.cb).ok().ok()?;
-        GetProcessIoCounters(*h, &mut io).ok()?;
+        K32GetProcessMemoryInfo(*h, (&raw mut mem).cast::<PROCESS_MEMORY_COUNTERS>(), mem.cb)
+            .ok()
+            .inspect_err(|e| log::debug!("metrics: memory of process {pid} unreadable: {e}"))
+            .ok()?;
+        GetProcessIoCounters(*h, &mut io).inspect_err(|e| log::debug!("metrics: I/O of process {pid} unreadable: {e}")).ok()?;
     }
     Some(Reading {
         cpu,
@@ -121,7 +126,9 @@ fn cpu_ticks(h: HANDLE) -> Option<u64> {
     let (mut created, mut exited, mut kernel, mut user) =
         (FILETIME::default(), FILETIME::default(), FILETIME::default(), FILETIME::default());
     // SAFETY: `h` is live with PROCESS_QUERY_LIMITED_INFORMATION; the out pointers are locals.
-    unsafe { GetProcessTimes(h, &mut created, &mut exited, &mut kernel, &mut user) }.ok()?;
+    unsafe { GetProcessTimes(h, &mut created, &mut exited, &mut kernel, &mut user) }
+        .inspect_err(|e| log::debug!("metrics: CPU time unreadable: {e}"))
+        .ok()?;
     let ticks = |f: FILETIME| (u64::from(f.dwHighDateTime) << 32) | u64::from(f.dwLowDateTime);
     Some(ticks(kernel) + ticks(user))
 }

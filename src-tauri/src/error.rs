@@ -55,6 +55,16 @@ impl AppError {
         }
     }
 
+    /// Logs this error (English, secret-free like every message) at a level fit for its kind.
+    pub fn log(&self) {
+        let level = match self {
+            Self::Cancelled | Self::Invalid(_) | Self::Locked | Self::WrongPassword | Self::NotFound => log::Level::Debug,
+            Self::Internal(_) | Self::Storage(_) | Self::Crypto => log::Level::Error,
+            _ => log::Level::Warn,
+        };
+        log::log!(level, "{} error: {self}", self.kind());
+    }
+
     /// The message in the current language (Display stays English, for logs).
     pub fn message(&self) -> String {
         match self {
@@ -87,6 +97,8 @@ pub struct ErrorPayload {
 
 impl Serialize for AppError {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        // Only IPC serializes an AppError: every command error the UI gets is logged here once.
+        self.log();
         ErrorPayload { kind: self.kind().into(), message: self.message() }.serialize(s)
     }
 }

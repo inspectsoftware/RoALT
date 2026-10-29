@@ -1,6 +1,7 @@
 //! Following the clients RoALT starts: one entry per launch, polled once a second.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -128,6 +129,8 @@ struct Entry {
     mem_restart: bool,
     /// Its main window has been seen (`first_windows`), so "Minimize on launch" is done with it.
     window_seen: bool,
+    /// A failure to read its log was already logged at warn (later ones go to debug).
+    log_warned: bool,
 }
 
 impl Entry {
@@ -153,6 +156,7 @@ impl Entry {
             mem_mb: 0,
             mem_restart: false,
             window_seen: false,
+            log_warned: false,
         }
     }
 
@@ -240,7 +244,15 @@ impl Tracker {
             return;
         }
         let rows: Vec<(String, String)> =
-            now.iter().filter_map(|c| Some((c.inst.id.clone(), serde_json::to_string(c).ok()?))).collect();
+            now.iter()
+                .filter_map(|c| match serde_json::to_string(c) {
+                    Ok(j) => Some((c.inst.id.clone(), j)),
+                    Err(e) => {
+                        log::warn!("tracked instance {} not saved: {:?} error", c.inst.id, e.classify());
+                        None
+                    }
+                })
+                .collect();
         match db.save_tracked(&rows) {
             Ok(()) => *last = now,
             Err(e) => log::warn!("could not save the tracked clients: {e}"),
@@ -546,9 +558,37 @@ impl Tracker {
                 let handle = app.clone();
                 let (moved, rejoins, throttle_moved) = tauri::async_runtime::spawn_blocking(move || {
                     let s = handle.state::<crate::App>();
-                    let v = s.db.settings().unwrap_or_default();
-                    let user_of = |account_id| s.db.account(account_id).ok().map(|a| a.user_id);
-                    let moved = s.tracker.poll(logwatch::logs_dir().as_deref(), &Live, &user_of, crate::commands::now_ms());
+                    // Polled every second: a settings error is said once, until it reads again.
+                    static SETTINGS_BAD: AtomicBool = AtomicBool::new(false);
+                    let v = match s.db.settings() {
+                        Ok(v) => {
+                            SETTINGS_BAD.store(false, Ordering::Relaxed);
+                            v
+                        }
+                        Err(e) => {
+                            if !SETTINGS_BAD.swap(true, Ordering::Relaxed) {
+                                log::warn!("tracker: could not read settings, using defaults: {e}");
+                            }
+                            crate::model::Settings::default()
+                        }
+                    };
+                    let user_of = |account_id| {
+                        s.db.account(account_id)
+                            .inspect_err(|e| {
+                                if !matches!(e, crate::error::AppError::NotFound) {
+                                    // Polled every second: debug, not warn.
+                                    log::debug!("tracker: could not read account {account_id}, wrong-account check off: {e}");
+                                }
+                            })
+                            .ok()
+                            .map(|a| a.user_id)
+                    };
+                    let dir = logwatch::logs_dir();
+                    if dir.is_none() {
+                        static ONCE: std::sync::Once = std::sync::Once::new();
+                        ONCE.call_once(|| log::warn!("LOCALAPPDATA not set: Roblox client logs can't be followed"));
+                    }
+                    let moved = s.tracker.poll(dir.as_deref(), &Live, &user_of, crate::commands::now_ms());
                     // The shared login files are held only while RoALT's clients run (or launch).
                     s.multi.release_if(|| !s.tracker.any_running());
                     // Also gives a client re-adopted under a new pid its limits again.
@@ -578,6 +618,15 @@ impl Tracker {
                         log::info!("cleaned {} Roblox logs ({} MB)", done.files, done.bytes >> 20);
                     }
                     for c in s.tracker.take_crashes() {
+                        log::warn!(
+                            "instance {} of account {} ended: {:?} after {} s, place {:?}, reason {:?}",
+                            c.instance_id,
+                            c.account_id,
+                            c.kind,
+                            c.uptime_ms / 1000,
+                            c.place_id,
+                            c.reason
+                        );
                         let row = crate::storage::NewCrash {
                             instance_id: &c.instance_id,
                             account_id: c.account_id,
@@ -596,7 +645,20 @@ impl Tracker {
                     (moved, s.tracker.take_rejoins(), throttle_moved)
                 })
                 .await
-                .unwrap_or_default();
+                .unwrap_or_else(|e| {
+                    log::error!("tracker poll failed: {e}");
+                    Default::default()
+                });
+                for t in &moved {
+                    let (b, a) = (&t.before, &t.after);
+                    if b.state != a.state || b.note != a.note {
+                        // Ordinary progress (and the user's own close) at info; problems at warn.
+                        let problem = a.state == InstanceState::Disconnected || a.note.as_ref().is_some_and(|n| *n != closed());
+                        let level = if problem { log::Level::Warn } else { log::Level::Info };
+                        let note = a.note.as_deref().unwrap_or("");
+                        log::log!(level, "instance {} of account {}: {:?} -> {:?} {note}", a.id, a.account_id, b.state, a.state);
+                    }
+                }
                 if !moved.is_empty() || throttle_moved {
                     crate::commands::instances_changed(&app);
                     crate::discord::transitions(&app, &moved);
@@ -656,7 +718,16 @@ impl Tracker {
 fn restore(app: &AppHandle) {
     let s = app.state::<crate::App>();
     let saved: Vec<Saved> = match s.db.tracked() {
-        Ok(rows) => rows.iter().filter_map(|j| serde_json::from_str(j).ok()).collect(),
+        Ok(rows) => rows
+            .iter()
+            .filter_map(|j| {
+                serde_json::from_str(j)
+                    .inspect_err(|e| {
+                        log::warn!("a saved tracked client was dropped: {:?} error at {}:{}", e.classify(), e.line(), e.column())
+                    })
+                    .ok()
+            })
+            .collect(),
         Err(e) => return log::warn!("could not read the tracked clients: {e}"),
     };
     if saved.is_empty() {
@@ -664,9 +735,13 @@ fn restore(app: &AppHandle) {
     }
     // What the database holds, so `persist` drops the ones not followed again.
     *s.tracker.persisted.lock().unwrap_or_else(|e| e.into_inner()) = saved.clone();
+    let total = saved.len();
     let found = s.tracker.readopt(saved, &process::roblox_processes());
     s.multi.adopt(&found);
     log::info!("following {} client(s) from before RoALT restarted", found.len());
+    if total > found.len() {
+        log::debug!("{} saved client(s) no longer running, dropped", total - found.len());
+    }
     s.tracker.persist(&s.db, true);
 }
 
@@ -817,6 +892,7 @@ fn observe(e: &mut Entry, dir: Option<&Path>, procs: &dyn Procs, roblox: &mut Op
         && let Some(created) = created_secs(&path).filter(|&c| c > after + LOG_SKEW_SECS)
         && let Some(p) = pick_client(roblox.get_or_insert_with(|| procs.roblox()), Some(created), after, taken)
     {
+        log::debug!("instance {}: rebound from process {} to {} (updater relaunch)", e.inst.id, e.inst.pid, p.pid);
         adopt(e, p, taken);
         if e.log.as_ref() != Some(&path) {
             e.log = Some(path);
@@ -832,12 +908,23 @@ fn observe(e: &mut Entry, dir: Option<&Path>, procs: &dyn Procs, roblox: &mut Op
         && let Some(path) = &e.log
         && let Some(p) = pick_client(roblox.get_or_insert_with(|| procs.roblox()), created_secs(path), after, taken)
     {
+        log::debug!("instance {}: adopted client process {} behind bootstrapper {}", e.inst.id, p.pid, e.inst.pid);
         adopt(e, p, taken);
     }
     if let Some(path) = &e.log {
-        match logwatch::read_new(path, e.offset, &mut e.facts) {
+        let (account, id) = (e.inst.account_id, &e.inst.id);
+        let on_problem = |p: &str, n: usize| {
+            let times = if n > 1 { format!(" (x{n})") } else { String::new() };
+            // Read every second and the client repeats its problems: info, not warn.
+            log::info!(target: "roblox", "account {account} instance {id}: {p}{times}");
+        };
+        match logwatch::read_new(path, e.offset, &mut e.facts, on_problem) {
             Ok(offset) => e.offset = offset,
-            Err(err) => log::debug!("instance {}: client log not readable: {err}", e.inst.id),
+            Err(err) if e.log_warned => log::debug!("instance {}: client log not readable: {err}", e.inst.id),
+            Err(err) => {
+                e.log_warned = true;
+                log::warn!("instance {}: client log not readable: {err}", e.inst.id);
+            }
         }
     }
 }
@@ -861,7 +948,10 @@ fn pick_client(procs: &[ProcInfo], log_created: Option<u64>, after: u64, taken: 
 }
 
 fn created_secs(path: &Path) -> Option<u64> {
-    let created = std::fs::metadata(path).ok()?.created().ok()?;
+    let created = std::fs::metadata(path)
+        .and_then(|m| m.created())
+        .inspect_err(|e| log::debug!("log creation time unreadable: {e}"))
+        .ok()?;
     Some(created.duration_since(UNIX_EPOCH).ok()?.as_secs())
 }
 

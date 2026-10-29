@@ -89,14 +89,17 @@ unsafe fn verified_signer(data: &WINTRUST_DATA) -> Option<String> {
     unsafe {
         let prov = WTHelperProvDataFromStateData(data.hWVTStateData);
         if prov.is_null() {
+            log::debug!("signer unreadable: no provider data");
             return None;
         }
         let sgnr = WTHelperGetProvSignerFromChain(prov, 0, false, 0);
         if sgnr.is_null() {
+            log::debug!("signer unreadable: no signer in the chain");
             return None;
         }
         let cert = WTHelperGetProvCertFromChain(sgnr, 0);
         if cert.is_null() || (*cert).pCert.is_null() {
+            log::debug!("signer unreadable: no certificate");
             return None;
         }
         name_of((*cert).pCert)
@@ -115,7 +118,11 @@ unsafe fn name_of(cert: *const CERT_CONTEXT) -> Option<String> {
         name.truncate(written.saturating_sub(1) as usize);
         name
     };
-    Some(String::from_utf16_lossy(&name)).filter(|n| !n.is_empty())
+    let name = Some(String::from_utf16_lossy(&name)).filter(|n| !n.is_empty());
+    if name.is_none() {
+        log::debug!("signer unreadable: certificate has no name");
+    }
+    name
 }
 
 #[cfg(test)]

@@ -57,7 +57,11 @@ fn resolve(pref: &str) -> usize {
         let base = tag.split(['-', '_']).next().unwrap_or("").to_ascii_lowercase();
         LANGS.iter().position(|l| *l == base)
     };
-    pick(pref).or_else(|| pick(&system_language())).unwrap_or(0)
+    let own = pick(pref);
+    if own.is_none() && !pref.is_empty() {
+        log::debug!("unknown language {pref:?}; following Windows");
+    }
+    own.or_else(|| pick(&system_language())).unwrap_or(0)
 }
 
 /// Makes `pref` the language of all text made from now on.
@@ -75,6 +79,9 @@ fn system_language() -> String {
     use windows::Win32::Globalization::{GetUserDefaultUILanguage, LCIDToLocaleName};
     let mut buf = [0u16; 85];
     let n = unsafe { LCIDToLocaleName(GetUserDefaultUILanguage() as u32, Some(&mut buf), 0) };
+    if n == 0 {
+        log::debug!("LCIDToLocaleName failed: {}", windows::core::Error::from_thread());
+    }
     String::from_utf16_lossy(&buf[..(n.max(1) as usize - 1)])
 }
 

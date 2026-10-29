@@ -40,7 +40,9 @@ fn key_literal(key: &[u8]) -> Zeroizing<String> {
 /// Sets the key on a fresh connection and proves it is the right one (a wrong key or a plain
 /// file fails the first read).
 pub fn unlock(conn: &Connection, key: &[u8]) -> Result<()> {
-    conn.execute_batch(&format!("PRAGMA key = {};", key_literal(key).as_str()))?;
+    // The SQL holds the key: a rusqlite error may quote it, so it never leaves here.
+    conn.execute_batch(&format!("PRAGMA key = {};", key_literal(key).as_str()))
+        .map_err(|_| AppError::Storage("setting the database key failed".into()))?;
     // ponytail: no `cipher_memory_security`: its locked-memory allocator overflows the stack
     // on Windows (seen in tests); the key itself is zeroized here (`Zeroizing`).
     conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))
@@ -52,6 +54,7 @@ pub fn read_key(db: &Path) -> Result<Zeroizing<Vec<u8>>> {
     let blob = std::fs::read(beside(db, ".key"))?;
     let key = unprotect_with(&blob, ENTROPY)?;
     if key.len() != 32 {
+        log::error!("database key file holds {} bytes, not 32", key.len());
         return Err(AppError::Crypto);
     }
     Ok(key)
@@ -74,7 +77,9 @@ pub fn write_key(path: &Path, key: &[u8]) -> Result<()> {
 /// Exports the database open on `conn` into the new file `to`, encrypted with `key`.
 pub fn export(conn: &Connection, to: &Path, key: &[u8]) -> Result<()> {
     let to = to.to_str().ok_or_else(|| AppError::Invalid(tr!("That folder's name can't be used.")))?;
-    conn.execute(&format!("ATTACH DATABASE ?1 AS enc KEY {}", key_literal(key).as_str()), [to])?;
+    // The SQL holds the key: a rusqlite error may quote it, so it never leaves here.
+    conn.execute(&format!("ATTACH DATABASE ?1 AS enc KEY {}", key_literal(key).as_str()), [to])
+        .map_err(|_| AppError::Storage("attaching the encrypted copy failed".into()))?;
     let done = (|| {
         conn.query_row("SELECT sqlcipher_export('enc')", [], |_| Ok(()))?;
         // Not copied by sqlcipher_export; the migrations go by it.
@@ -82,7 +87,13 @@ pub fn export(conn: &Connection, to: &Path, key: &[u8]) -> Result<()> {
         conn.execute_batch(&format!("PRAGMA enc.user_version = {version};"))
     })()
     .map_err(AppError::from);
-    conn.execute_batch("DETACH DATABASE enc;")?;
+    if let Err(e) = conn.execute_batch("DETACH DATABASE enc;") {
+        // Only the DETACH error is returned: keep the export's own.
+        if let Err(d) = &done {
+            log::error!("database export failed: {d}");
+        }
+        return Err(e.into());
+    }
     done
 }
 
@@ -121,14 +132,17 @@ pub fn resume(db: &Path) -> Result<()> {
     if !plain.exists() {
         return Ok(());
     }
-    if !db.exists() && enc.exists() {
-        std::fs::rename(&enc, db)?;
-    }
-    if key_new.exists() {
-        std::fs::rename(&key_new, beside(db, ".key"))?;
-    }
-    remove(&plain)?;
-    remove_journal(&plain)?;
+    (|| -> Result<()> {
+        if !db.exists() && enc.exists() {
+            std::fs::rename(&enc, db)?;
+        }
+        if key_new.exists() {
+            std::fs::rename(&key_new, beside(db, ".key"))?;
+        }
+        remove(&plain)?;
+        remove_journal(&plain)
+    })()
+    .inspect_err(|e| log::error!("could not finish an interrupted database encryption: {e}"))?;
     log::info!("finished encrypting the database after an interrupted start");
     Ok(())
 }
@@ -147,7 +161,9 @@ pub fn migrate(db: &Path) -> Result<Zeroizing<Vec<u8>>> {
     {
         let copy = Connection::open(&enc)?;
         unlock(&copy, &key)?;
-        if fingerprint(&copy)? != before {
+        let after = fingerprint(&copy)?;
+        if after != before {
+            log::error!("encrypted database copy doesn't match: before {before:?}, after {after:?}");
             drop(copy);
             remove(&enc)?;
             return Err(AppError::Storage("the encrypted copy of the database didn't match it".into()));

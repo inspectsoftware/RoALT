@@ -70,6 +70,13 @@ pub fn logs_dir() -> Option<PathBuf> {
 pub fn find_log(dir: &Path, browser_tracker_id: i64, since: SystemTime) -> Option<PathBuf> {
     let since = since.checked_sub(SINCE_SLACK).unwrap_or(UNIX_EPOCH);
     let mut candidates: Vec<(SystemTime, PathBuf)> = std::fs::read_dir(dir)
+        .inspect_err(|e| {
+            // Polled every second: "no logs yet" is normal, anything else is said once.
+            static ONCE: std::sync::Once = std::sync::Once::new();
+            if e.kind() != std::io::ErrorKind::NotFound {
+                ONCE.call_once(|| log::warn!("Roblox logs folder unreadable: {e}"));
+            }
+        })
         .ok()?
         .filter_map(|e| e.ok())
         .filter(|e| {
@@ -106,6 +113,7 @@ pub fn stale(files: Vec<(PathBuf, u64, SystemTime)>, now: SystemTime, keep: &[Pa
 /// of (a client still writing it) is skipped. What it deleted.
 pub fn clean(dir: &Path, keep: &[PathBuf]) -> crate::model::LogsCleaned {
     let files = std::fs::read_dir(dir)
+        .inspect_err(|e| log::warn!("could not read the Roblox logs folder to clean it: {e}"))
         .into_iter()
         .flatten()
         .filter_map(|e| e.ok())
@@ -115,11 +123,17 @@ pub fn clean(dir: &Path, keep: &[PathBuf]) -> crate::model::LogsCleaned {
         })
         .collect();
     let mut done = crate::model::LogsCleaned::default();
+    let mut failed = 0;
     for (path, len) in stale(files, SystemTime::now(), keep) {
         if std::fs::remove_file(&path).is_ok() {
             done.files += 1;
             done.bytes += len;
+        } else {
+            failed += 1;
         }
+    }
+    if failed > 0 {
+        log::debug!("log clean: {failed} files could not be deleted (in use or no permission)");
     }
     done
 }
@@ -133,8 +147,9 @@ fn names_tracker(path: &Path, browser_tracker_id: i64) -> bool {
 }
 
 /// Reads lines appended since `offset` (opened shared, so Roblox keeps writing), updates
-/// `facts`, returns the new offset. A partial last line is left for the next read.
-pub fn read_new(path: &Path, offset: u64, facts: &mut LogFacts) -> std::io::Result<u64> {
+/// `facts`, returns the new offset. A partial last line is left for the next read. The client's
+/// own errors and warnings (`problem_of`) go to `on_problem`, repeats within one read counted.
+pub fn read_new(path: &Path, offset: u64, facts: &mut LogFacts, mut on_problem: impl FnMut(&str, usize)) -> std::io::Result<u64> {
     let mut f = open_shared(path)?;
     // Shorter than what was read: a new file under the same name, start over.
     let offset = if f.metadata()?.len() < offset { 0 } else { offset };
@@ -142,10 +157,39 @@ pub fn read_new(path: &Path, offset: u64, facts: &mut LogFacts) -> std::io::Resu
     let mut buf = Vec::new();
     f.read_to_end(&mut buf)?;
     let Some(end) = buf.iter().rposition(|&b| b == b'\n') else { return Ok(offset) };
+    let mut problems: Vec<(String, usize)> = Vec::new();
     for line in buf[..end].split(|&b| b == b'\n') {
-        parse_line(&String::from_utf8_lossy(line), facts);
+        let line = String::from_utf8_lossy(line);
+        if let Some(p) = problem_of(&line) {
+            match problems.iter_mut().find(|(q, _)| q == p) {
+                Some((_, n)) => *n += 1,
+                None => problems.push((p.to_owned(), 1)),
+            }
+        }
+        parse_line(&line, facts);
     }
+    problems.iter().for_each(|(p, n)| on_problem(p, *n));
     Ok(offset + end as u64 + 1)
+}
+
+/// A client error or warning line from its `[..Error]` / `[..Warning]` tag on, at most 300
+/// characters; None for anything else and for any line that could carry a ticket, cookie or
+/// link (pure).
+pub fn problem_of(line: &str) -> Option<&str> {
+    let start = line.find('[')?;
+    let tag = &line[start + 1..start + line[start..].find(']')?];
+    if !(tag.ends_with("Error") || tag.ends_with("Warning")) {
+        return None;
+    }
+    let lower = line.to_ascii_lowercase();
+    if ["gameinfo", "ticket", "placelauncher", "roblosecurity", "cookie", "accesscode", "linkcode", "http"]
+        .iter()
+        .any(|w| lower.contains(w))
+    {
+        return None;
+    }
+    let rest = line[start..].trim_end();
+    Some(&rest[..rest.char_indices().nth(300).map_or(rest.len(), |(i, _)| i)])
 }
 
 /// One log line into `facts` (pure).
@@ -272,6 +316,17 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("roalt-logwatch-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn client_problems_are_kept_without_secrets() {
+        let l = "2024-05-01T12:00:00.123Z,1.2,1a2c,6 [FLog::Error] Texture failed to load";
+        assert_eq!(problem_of(l), Some("[FLog::Error] Texture failed to load"));
+        assert_eq!(problem_of("x,6 [DFLog::RenderError] boom"), Some("[DFLog::RenderError] boom"));
+        assert_eq!(problem_of("x,6 [FLog::Warning] gameinfo:abc"), None);
+        assert_eq!(problem_of("x,6 [FLog::Error] bad https://roblox.com/x?ticket=1"), None);
+        assert_eq!(problem_of("x,6 [FLog::Output] fine"), None);
+        assert_eq!(problem_of("no tag"), None);
     }
 
     #[test]
@@ -410,7 +465,7 @@ mod tests {
         let len = |p: &Path| std::fs::metadata(p).unwrap().len();
         std::fs::write(&p, line(&format!("[FLog::LogWin32BTId] LogWin32BTId, App, web launch, websiteBTId is {BTID}"))).unwrap();
         let mut f = LogFacts::default();
-        let o1 = read_new(&p, 0, &mut f).unwrap();
+        let o1 = read_new(&p, 0, &mut f, |_, _| {}).unwrap();
         assert_eq!((o1, f.browser_tracker_id), (len(&p), Some(BTID)));
 
         let join = line(&format!("[FLog::Output] ! Joining game '{JOB}' place {PLACE} at 10.9.2.90"));
@@ -419,21 +474,21 @@ mod tests {
         // A whole line with an invalid UTF-8 byte, then half of the next one.
         w.write_all(b"2026-10-19T09:08:04.000Z,1.0,0a50,6 \xff noise\n").unwrap();
         w.write_all(head.as_bytes()).unwrap();
-        let o2 = read_new(&p, o1, &mut f).unwrap();
+        let o2 = read_new(&p, o1, &mut f, |_, _| {}).unwrap();
         assert_eq!(o2, len(&p) - head.len() as u64);
         assert_eq!(f.job_id, None);
-        assert_eq!(read_new(&p, o2, &mut f).unwrap(), o2);
+        assert_eq!(read_new(&p, o2, &mut f, |_, _| {}).unwrap(), o2);
 
         w.write_all(tail.as_bytes()).unwrap();
         w.write_all(line("[FLog::Network] Replicator created: 000000007A26CF00").as_bytes()).unwrap();
-        let o3 = read_new(&p, o2, &mut f).unwrap();
+        let o3 = read_new(&p, o2, &mut f, |_, _| {}).unwrap();
         assert_eq!(o3, len(&p));
         assert_eq!((f.job_id.as_deref(), f.place_id, f.in_game), (Some(JOB), Some(PLACE), true));
         drop(w);
 
         // Replaced by a shorter file: read from the start.
         std::fs::write(&p, line("[FLog::Network] Lost connection with reason : You have been kicked from the game")).unwrap();
-        let o4 = read_new(&p, o3, &mut f).unwrap();
+        let o4 = read_new(&p, o3, &mut f, |_, _| {}).unwrap();
         assert_eq!(o4, len(&p));
         assert!(f.disconnected);
         std::fs::remove_dir_all(&dir).unwrap();

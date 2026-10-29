@@ -49,6 +49,7 @@ pub fn find() -> Result<ClientExe> {
         .find(|p| p.is_file() && !in_store(p))
         .or_else(|| newest(versions_dirs().iter().flat_map(|d| players_in(d)).filter(|(p, _)| !in_store(p))));
     let path = path.ok_or_else(|| {
+        log::warn!("no Roblox client: none in the registry (clientExe, roblox-player handler, version) or under {:?} (Store builds excluded)", versions_dirs());
         AppError::Invalid(tr!(
             "Roblox isn't installed. Install it from roblox.com, then try again. (The Microsoft Store version can't be used: install the one from roblox.com.)"
         ))
@@ -132,7 +133,10 @@ pub fn start(exe: &ClientExe, uri: &Secret, extra: &[String]) -> Result<(u32, u6
         .stderr(Stdio::null())
         .spawn()
         .map_err(|e| AppError::Internal(tr!("Could not start Roblox: {why}", why = e)))?;
-    let started = crate::instances::process::start_time(child.id()).unwrap_or(0);
+    let started = crate::instances::process::start_time(child.id()).unwrap_or_else(|| {
+        log::warn!("Roblox client pid {} start time unreadable; tracking it without one", child.id());
+        0
+    });
     // Dropping the Child closes its process and thread handles; the process keeps running.
     Ok((child.id(), started))
 }

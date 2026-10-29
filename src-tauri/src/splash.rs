@@ -69,7 +69,7 @@ pub fn start(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
     let handle = app.clone();
     std::thread::spawn(move || {
         sleep(FALLBACK);
-        grow(&handle);
+        grow(&handle, true);
     });
     Ok(())
 }
@@ -93,15 +93,26 @@ fn lerp(a: Rect, b: Rect, t: f64) -> Rect {
 }
 
 /// Grows the window from where it is to the target; once (later calls do nothing).
-fn grow(app: &AppHandle) {
+/// `fallback`: called by the timer, not the UI.
+fn grow(app: &AppHandle, fallback: bool) {
     let Some(target) = app.state::<Pending>().0.lock().unwrap().take() else { return };
-    let Some(w) = app.get_webview_window("main") else { return };
+    if fallback {
+        log::warn!("splash: the UI never called splash_done; growing the window anyway");
+    }
+    let Some(w) = app.get_webview_window("main") else {
+        log::warn!("splash: main window missing at grow");
+        return;
+    };
     let from = match (w.outer_position(), w.outer_size()) {
         (Ok(p), Ok(s)) => Rect { x: p.x, y: p.y, w: s.width as i32, h: s.height as i32 },
-        _ => target.rect,
+        (p, s) => {
+            log::debug!("splash: window rect unreadable ({:?}, {:?})", p.err(), s.err());
+            target.rect
+        }
     };
     // Tauri's HWND comes from its own `windows` version.
-    if let Ok(hwnd) = w.hwnd().map(|h| HWND(h.0 as _)) {
+    let hwnd = w.hwnd().map(|h| HWND(h.0 as _)).inspect_err(|e| log::debug!("splash: no hwnd: {e}"));
+    if let Ok(hwnd) = hwnd {
         let start = Instant::now();
         loop {
             let t = (start.elapsed().as_secs_f64() / GROW.as_secs_f64()).min(1.0);
@@ -116,19 +127,29 @@ fn grow(app: &AppHandle) {
         }
     } else {
         let r = target.rect;
-        let _ = w.set_size(PhysicalSize::new(r.w as u32, r.h as u32));
-        let _ = w.set_position(PhysicalPosition::new(r.x, r.y));
+        if let Err(e) = w.set_size(PhysicalSize::new(r.w as u32, r.h as u32)) {
+            log::warn!("splash: could not size the window: {e}");
+        }
+        if let Err(e) = w.set_position(PhysicalPosition::new(r.x, r.y)) {
+            log::warn!("splash: could not place the window: {e}");
+        }
     }
-    let _ = w.set_min_size(Some(LogicalSize::new(MIN.0, MIN.1)));
-    if target.maximized {
-        let _ = w.maximize();
+    if let Err(e) = w.set_min_size(Some(LogicalSize::new(MIN.0, MIN.1))) {
+        log::warn!("splash: could not set the minimum size: {e}");
+    }
+    if target.maximized
+        && let Err(e) = w.maximize()
+    {
+        log::warn!("splash: could not maximize the window: {e}");
     }
 }
 
 /// The UI's animation reached the grow: the window grows into the app. Resolves once it has.
 #[tauri::command]
 pub async fn splash_done(app: AppHandle) {
-    let _ = tauri::async_runtime::spawn_blocking(move || grow(&app)).await;
+    if let Err(e) = tauri::async_runtime::spawn_blocking(move || grow(&app, false)).await {
+        log::warn!("splash: grow failed: {e}");
+    }
 }
 
 #[cfg(test)]

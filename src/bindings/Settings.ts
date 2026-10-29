@@ -125,10 +125,14 @@ panicHotkey: string,
  */
 cleanLogs: boolean, 
 /**
- * Target FPS written to Roblox's `ClientAppSettings.json` before each launch
- * (`launcher::fps`), unless the account has its own; 0: leave Roblox alone, else 5..=360.
+ * FPS cap given to each client a launch starts (Roblox's own Maximum Frame Rate,
+ * `launcher::client_settings`), unless the account has its own; 0: leave Roblox alone, else 5..=360.
  */
 fpsCap: number, 
+/**
+ * Start clients at Roblox's lowest graphics quality (`launcher::client_settings`).
+ */
+lowGraphics: boolean, 
 /**
  * The LAN web dashboard (`remote`); its PIN is in the vault, not here.
  */

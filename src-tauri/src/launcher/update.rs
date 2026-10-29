@@ -151,7 +151,7 @@ async fn check(app: &AppHandle) {
         Err(e) => log::info!("Roblox version check failed: {e}"),
     }
     let c = publish(app);
-    let enabled = s.db.settings().is_ok_and(|v| v.auto_update);
+    let enabled = s.db.settings().inspect_err(|e| log::warn!("auto-update: settings unreadable, skipped: {e}")).is_ok_and(|v| v.auto_update);
     let running = crate::instances::process::roblox_processes().len();
     if !may_auto_update(enabled, &c, running, s.bulk.any_busy() || s.update.installing() || s.self_update.installing()) {
         return;
@@ -242,7 +242,11 @@ async fn run_install(app: &AppHandle, s: &App) -> Result<()> {
     log::info!("running Roblox's installer ({version}, signature checked)");
     let code = blocking(move || run(&exe, INSTALL_TIMEOUT)).await?;
     drop(pinned);
-    log::info!("Roblox's installer exited with {code:?}");
+    if code == Some(0) {
+        log::info!("Roblox's installer exited with {code:?}");
+    } else {
+        log::warn!("Roblox's installer exited with {code:?}");
+    }
     match client::find() {
         Ok(e) => {
             let installed = installed_version(&e.path);
@@ -275,8 +279,12 @@ fn run(exe: &Path, timeout: Duration) -> Result<Option<i32>> {
         }
         if Instant::now() > deadline {
             // Ended, so launches aren't let in under a live installer and its folder can go.
-            let _ = child.kill();
-            let _ = child.wait();
+            if let Err(e) = child.kill() {
+                log::warn!("could not end Roblox's installer (pid {}): {e}", child.id());
+            }
+            if let Err(e) = child.wait() {
+                log::warn!("could not wait for Roblox's installer (pid {}): {e}", child.id());
+            }
             return Err(AppError::Internal(tr!("Roblox's installer took over 10 minutes and was stopped. Try again, or install Roblox from roblox.com.")));
         }
         std::thread::sleep(Duration::from_millis(250));

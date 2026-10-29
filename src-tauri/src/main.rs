@@ -234,6 +234,7 @@ fn main_window(app: &TauriApp, data_dir: &Path) -> tauri::Result<()> {
         ));
     }
     let w = builder.build()?;
+    webview::log_process_failures(&w);
     splash::start(app.handle(), &w)
 }
 
@@ -250,12 +251,19 @@ fn spawn_auto_lock(handle: AppHandle) {
             // encrypted when it closes, which needs the vault open. So is a client auto-rejoin
             // or auto-restart follows: relaunching needs its cookie.
             if handle.webview_windows().keys().any(|l| l.starts_with("session-") || l.starts_with("login-"))
-                || (s.tracker.any_running() && s.db.settings().is_ok_and(|v| v.auto_rejoin || v.auto_restart_on_crash))
+                || (s.tracker.any_running()
+                    && s.db
+                        .settings()
+                        .inspect_err(|e| log::debug!("auto-lock: could not read settings: {e}"))
+                        .is_ok_and(|v| v.auto_rejoin || v.auto_restart_on_crash))
             {
                 s.vault.touch();
                 continue;
             }
-            let minutes = s.db.settings().map(|v| v.auto_lock_minutes).unwrap_or(15);
+            let minutes = s.db.settings().map(|v| v.auto_lock_minutes).unwrap_or_else(|e| {
+                log::debug!("auto-lock: could not read settings, using 15 min: {e}");
+                15
+            });
             if minutes > 0 && s.vault.idle() >= Duration::from_secs(minutes as u64 * 60) {
                 commands::lock_vault(&handle);
             }
@@ -263,13 +271,41 @@ fn spawn_auto_lock(handle: AppHandle) {
     });
 }
 
+/// The log folder once known: `fatal` writes there itself when the logger isn't up yet.
+static LOG_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
 /// A startup failure the user must see: there is no window to show it in.
 fn fatal(message: &str) -> ! {
+    use std::io::Write;
     use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
     log::error!("{message}");
+    // Before the log plugin exists `log::error!` goes nowhere, so append the line directly.
+    if let Some(dir) = LOG_DIR.get()
+        && let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("roalt.log"))
+    {
+        let _ = writeln!(f, "[fatal] {message}");
+    }
     // SAFETY: a plain modal message box with no owner window.
     unsafe { MessageBoxW(None, &windows::core::HSTRING::from(message), windows::core::w!("RoALT"), MB_ICONERROR | MB_OK) };
     std::process::exit(1)
+}
+
+/// Panics go to the log (release has no console and aborts on panic, so nothing else sees them).
+fn panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let what = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "(no message)".into());
+        let at = info.location().map(|l| l.to_string()).unwrap_or_default();
+        let thread = std::thread::current().name().unwrap_or("unnamed").to_string();
+        log::error!("panic in thread {thread} at {at}: {what}");
+        log::logger().flush();
+        previous(info);
+    }));
 }
 
 fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::result::Result<(), String> {
@@ -366,6 +402,7 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
     instances::Tracker::spawn(app.handle().clone());
     instances::afk::spawn(app.handle().clone());
     network::spawn(app.handle().clone());
+    launcher::client_settings::spawn(app.handle().clone());
     discord::spawn(app.handle().clone());
     rpc::spawn(app.handle().clone());
     launcher::update::spawn(app.handle().clone());
@@ -378,7 +415,10 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
 fn remind_bandwidth(handle: AppHandle) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(5)).await;
-        if commands::bandwidth(&handle.state::<App>()).is_ok_and(|b| b.kbps > 0 && !b.active) {
+        if commands::bandwidth(&handle.state::<App>())
+            .inspect_err(|e| log::debug!("bandwidth reminder: could not read the limit: {e}"))
+            .is_ok_and(|b| b.kbps > 0 && !b.active)
+        {
             commands::notice(
                 &handle,
                 true,
@@ -392,10 +432,14 @@ fn remind_bandwidth(handle: AppHandle) {
 fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
     if let WindowEvent::CloseRequested { api, .. } = event
         && window.label() == "main"
-        && window.try_state::<App>().is_some_and(|s| s.db.settings().is_ok_and(|v| v.close_to_tray))
+        && window.try_state::<App>().is_some_and(|s| {
+            s.db.settings().inspect_err(|e| log::debug!("close: could not read settings, exiting: {e}")).is_ok_and(|v| v.close_to_tray)
+        })
     {
         api.prevent_close();
-        let _ = window.hide();
+        if let Err(e) = window.hide() {
+            log::warn!("could not hide the main window to the tray: {e}");
+        }
     }
 }
 
@@ -408,6 +452,8 @@ fn main() {
         fatal(&tr!("RoALT can't create its data folder {path}: {why}", path = data_dir.display(), why = e));
     }
     let log_dir = data_dir.join("logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let _ = LOG_DIR.set(log_dir.clone());
 
     tauri::Builder::default()
         // Must be first: a second launch shows the running window instead.
@@ -416,7 +462,10 @@ fn main() {
             tauri_plugin_log::Builder::new()
                 .clear_targets()
                 .target(Target::new(TargetKind::Folder { path: log_dir, file_name: Some("roalt".into()) }))
+                // The Debug tab (`log://log` events); its history comes from `commands::debug_tail`.
+                .target(Target::new(TargetKind::Webview))
                 .level(log::LevelFilter::Info)
+                .level_for("roalt", log::LevelFilter::Debug)
                 // roalt.log plus the 4 before it, 5 MB each.
                 .max_file_size(5 << 20)
                 .rotation_strategy(RotationStrategy::KeepSome(5))
@@ -438,6 +487,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(move |app| {
+            panic_hook();
             if let Err(message) = init(app, &data_dir, moved_from.as_deref()) {
                 fatal(&message);
             }
@@ -515,6 +565,8 @@ fn main() {
             commands::data_dir_move,
             commands::logs_open,
             commands::logs_clean,
+            commands::debug_tail,
+            commands::debug_log,
             commands::background_set,
             commands::background_clear,
             commands::background_get,
@@ -539,11 +591,13 @@ fn main() {
         .unwrap_or_else(|e| fatal(&tr!("RoALT failed to start: {why}", why = e)))
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                log::info!("shutting down");
                 commands::clear_copied_cookie(app);
                 // The next start follows the running clients again (`Tracker::readopt`).
                 if let Some(s) = app.try_state::<App>() {
                     s.tracker.persist(&s.db, true);
                     s.limiter.release_all();
+                    launcher::client_settings::restore(&s.db);
                 }
             }
         });

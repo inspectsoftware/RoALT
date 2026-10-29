@@ -357,8 +357,8 @@ impl Run {
             Some(why) => Some(why),
             None => self.wait(SETTLE_WAIT, || self.progress().is_none_or(|p| settled(&p))).await,
         };
-        if stop.is_some() {
-            log::info!("bulk batch {} stopped early", self.batch_id);
+        if let Some(why) = &stop {
+            log::warn!("bulk batch {} stopped early: {why}", self.batch_id);
         }
         self.update(|p| {
             if let Some(why) = stop {
@@ -405,6 +405,7 @@ impl Run {
             match s.db.account(a.id) {
                 Ok(x) if x.user_id == a.user_id => {
                     if let Some(why) = cant_launch(x.status) {
+                        log::debug!("bulk batch {}: account {} can't launch: {why}", self.batch_id, a.id);
                         self.set_stage(i, BulkStage::Failed { message: why });
                         if x.status == AccountStatus::Challenged {
                             return stop_reason(&AppError::Challenge, &a.name);
@@ -412,7 +413,10 @@ impl Run {
                         continue;
                     }
                 }
-                _ => {
+                r => {
+                    if let Some(e) = r.as_ref().err().filter(|e| !matches!(e, AppError::NotFound)) {
+                        log::warn!("bulk batch {}: account {} could not be read: {e}", self.batch_id, a.id);
+                    }
                     self.set_stage(i, BulkStage::Failed { message: tr!("Removed during the batch") });
                     continue;
                 }
@@ -448,6 +452,7 @@ impl Run {
                     prev = Some(inst.id);
                 }
                 Err(e) => {
+                    log::warn!("bulk batch {}: account {} failed: {e}", self.batch_id, a.id);
                     self.set_stage(i, BulkStage::Failed { message: e.message() });
                     if let Some(why) = stop_reason(&e, &a.name) {
                         return Some(why);
@@ -506,7 +511,13 @@ impl Run {
             return Ok(Some(found));
         }
         let s = self.app.state::<App>();
-        let Ok(cookie) = super::account_cookie(&s, a.id) else { return Ok(None) };
+        let cookie = match super::account_cookie(&s, a.id) {
+            Ok(cookie) => cookie,
+            Err(e) => {
+                log::warn!("bulk batch {}: cookie of account {} could not be read: {e}", self.batch_id, a.id);
+                return Ok(None);
+            }
+        };
         let rows = s.api.presence(a.id, &cookie, &[a.user_id]).await.unwrap_or_default();
         Ok(rows.iter().find(|p| p.user_id == a.user_id).and_then(|p| presence_server(p, place_id)))
     }
@@ -564,6 +575,7 @@ impl Run {
 
     /// Keeps the first note.
     fn note(&self, note: String) {
+        log::info!("bulk batch {}: {note}", self.batch_id);
         self.update(|p| {
             p.note.get_or_insert(note);
         });

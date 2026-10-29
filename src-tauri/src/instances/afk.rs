@@ -95,7 +95,13 @@ pub fn spawn(app: AppHandle) {
 /// One round; how long to wait before the next.
 fn tick(app: &AppHandle) -> Duration {
     let s = app.state::<App>();
-    let Ok(v) = s.db.settings() else { return TICK };
+    let v = match s.db.settings() {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!("anti-AFK: could not read settings: {e}");
+            return TICK;
+        }
+    };
     if !v.anti_afk.enabled {
         return TICK;
     }
@@ -107,7 +113,10 @@ fn tick(app: &AppHandle) -> Duration {
     };
     if v.anti_afk.mode == AfkMode::Background {
         for c in clients.iter().filter(|c| ids.contains(&c.id)) {
-            let Some((hwnd, _)) = process::main_window(c.pid) else { continue };
+            let Some((hwnd, _)) = process::main_window(c.pid) else {
+                log::debug!("anti-AFK: instance {} has no main window", c.id);
+                continue;
+            };
             if post_press(hwnd) {
                 s.tracker.mark_afk(&c.id, now_ms());
             } else {
@@ -127,7 +136,10 @@ fn tick(app: &AppHandle) -> Duration {
             break;
         }
         // A minimized client is left alone (restoring it would move it on screen).
-        let Some((hwnd, false)) = process::main_window(c.pid) else { continue };
+        let Some((hwnd, false)) = process::main_window(c.pid) else {
+            log::debug!("anti-AFK: instance {} has no window or is minimized", c.id);
+            continue;
+        };
         let r = press(hwnd);
         ours = last_input();
         match r {
@@ -157,7 +169,10 @@ fn last_input() -> Option<u32> {
 
 /// How long since the last keyboard or mouse input anywhere in the session.
 fn idle_ms() -> u32 {
-    let Some(t) = last_input() else { return 0 };
+    let Some(t) = last_input() else {
+        log::warn!("anti-AFK: GetLastInputInfo failed: {}", std::io::Error::last_os_error());
+        return 0;
+    };
     // SAFETY: no arguments; the tick count wraps the same way dwTime does.
     unsafe { GetTickCount() }.wrapping_sub(t)
 }
@@ -253,7 +268,9 @@ pub(super) fn to_front(hwnd: HWND) -> bool {
         Anonymous: INPUT_0 { mi: MOUSEINPUT { dx: 0, dy: 0, dwFlags: MOUSEEVENTF_MOVE, ..Default::default() } },
     };
     // SAFETY: one fully initialised mouse INPUT and its size, as SendInput requires.
-    unsafe { SendInput(&[nudge], size_of::<INPUT>() as i32) };
+    if unsafe { SendInput(&[nudge], size_of::<INPUT>() as i32) } == 0 {
+        log::debug!("anti-AFK: mouse nudge not sent: {}", std::io::Error::last_os_error());
+    }
     // SAFETY: as the first SetForegroundWindow.
     let _ = unsafe { SetForegroundWindow(hwnd) };
     front()
@@ -266,7 +283,9 @@ fn key(vk: VIRTUAL_KEY, scan: u16, flags: KEYBD_EVENT_FLAGS) {
         Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: vk, wScan: scan, dwFlags: flags, time: 0, dwExtraInfo: 0 } },
     };
     // SAFETY: one fully initialised keyboard INPUT and its size, as SendInput requires.
-    unsafe { SendInput(&[input], size_of::<INPUT>() as i32) };
+    if unsafe { SendInput(&[input], size_of::<INPUT>() as i32) } == 0 {
+        log::warn!("anti-AFK: SendInput sent no key: {}", std::io::Error::last_os_error());
+    }
 }
 
 #[cfg(test)]

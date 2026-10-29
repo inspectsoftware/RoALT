@@ -75,7 +75,7 @@ let settings: Settings = {
   adaptive: { enabled: false, background: { cpuCap: 25, eco: true, trimEveryMin: null, affinity: null } }, bandwidthKbps: 0,
   antiAfk: { enabled: false, intervalMin: 15, mode: "focus" },
   discord: { crash: true, hang: true, memRestart: true, disconnect: true, restart: true, breaker: true, batchDone: true, launch: false, statusEveryMin: 0 },
-  autoUpdate: false, selfUpdate: true, discordPresence: true, minimizeOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0,
+  autoUpdate: false, selfUpdate: true, discordPresence: true, minimizeOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0, lowGraphics: true,
   remote: { enabled: false, port: 47800 }, allowPublicNetworks: false, language: "",
 };
 let remotePin = "48213907";
@@ -218,6 +218,25 @@ function kick(i: Instance) {
     track(a.id, 14000 + Math.floor(Math.random() * 9000), i.target, i.placeId, i.viaBootstrapper, i.rejoins + 1, i.fpsCap);
   }, settings.launchDelayMs);
 }
+// Debug tab: roalt.log as tauri-plugin-log writes it, and a new line every few seconds.
+const LEVEL_NAMES = ["", "TRACE", "DEBUG", "INFO", "WARN", "ERROR"];
+const fakeLog: string[] = [];
+function logLine(level: number, target: string, message: string, live = true) {
+  const d = new Date();
+  const line = `[${d.toISOString().slice(0, 10)}][${d.toTimeString().slice(0, 8)}][${target}][${LEVEL_NAMES[level]}] ${message}`;
+  fakeLog.push(line);
+  if (live) emit("log://log", { level, message: line });
+}
+[
+  [3, "roalt", "multi-instance not active at start: another client holds the singleton"],
+  [4, "roalt::roblox_api", "users.roblox.com/v1/users/authenticated: HTTP 401, code Some((0, 0)): This cookie is not valid or has expired. Sign in again."],
+  [3, "roalt::commands", "account 3 marked Invalid: This cookie is not valid or has expired. Sign in again."],
+  [2, "roalt::instances::tracker", "instance 7f3a: client log not readable: The process cannot access the file"],
+  [5, "roalt", "panic in thread tokio-runtime-worker at src/instances/tracker.rs:612:9: index out of bounds"],
+  [4, "roblox", "account 2 instance 7f3a: [FLog::Error] Texture failed to load (x3)"],
+].forEach(([l, t, m]) => logLine(l as number, t as string, m as string, false));
+setInterval(() => logLine(1 + Math.ceil(Math.random() * 4), "roalt::mock", "periodic mock line"), 4000);
+
 setInterval(() => {
   if (!settings.antiAfk.enabled) return;
   const due = instances.filter((i) => i.state === "inGame" && i.antiAfk);
@@ -993,6 +1012,13 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "data_dir_open":
     case "logs_open":
       return null;
+    case "debug_tail":
+      return fakeLog.slice(-(args as { lines: number }).lines);
+    case "debug_log": {
+      const { level, message } = args as { level: string; message: string };
+      logLine(({ error: 5, warn: 4, info: 3 } as Record<string, number>)[level] ?? 2, "ui", message);
+      return null;
+    }
     case "background_set": {
       // A generated picture stands in for the picked file.
       const c = document.createElement("canvas");

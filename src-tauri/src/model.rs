@@ -49,7 +49,11 @@ impl AccountStatus {
             "valid" => Self::Valid,
             "invalid" => Self::Invalid,
             "challenged" => Self::Challenged,
-            _ => Self::Unknown,
+            "unknown" => Self::Unknown,
+            other => {
+                log::debug!("unrecognised account status {other:?}");
+                Self::Unknown
+            }
         }
     }
 }
@@ -229,9 +233,11 @@ pub struct Settings {
     pub panic_hotkey: String,
     /// Delete old or huge Roblox client logs at start and every hour (`logwatch::clean`).
     pub clean_logs: bool,
-    /// Target FPS written to Roblox's `ClientAppSettings.json` before each launch
-    /// (`launcher::fps`), unless the account has its own; 0: leave Roblox alone, else 5..=360.
+    /// FPS cap given to each client a launch starts (Roblox's own Maximum Frame Rate,
+    /// `launcher::client_settings`), unless the account has its own; 0: leave Roblox alone, else 5..=360.
     pub fps_cap: u32,
+    /// Start clients at Roblox's lowest graphics quality (`launcher::client_settings`).
+    pub low_graphics: bool,
     /// The LAN web dashboard (`remote`); its PIN is in the vault, not here.
     pub remote: RemoteAccess,
     /// Launch and serve the web dashboard on a Public network too (`network`); off: refused.
@@ -414,6 +420,7 @@ impl Default for Settings {
             panic_hotkey: String::new(),
             clean_logs: false,
             fps_cap: 0,
+            low_graphics: true,
             remote: RemoteAccess::default(),
             allow_public_networks: false,
             language: String::new(),
@@ -486,6 +493,8 @@ pub struct SettingsPatch {
     #[ts(optional)]
     pub fps_cap: Option<u32>,
     #[ts(optional)]
+    pub low_graphics: Option<bool>,
+    #[ts(optional)]
     pub remote: Option<RemoteAccess>,
     #[ts(optional)]
     pub allow_public_networks: Option<bool>,
@@ -533,7 +542,10 @@ impl PresenceKind {
             1 => Self::Online,
             2 => Self::InGame,
             3 => Self::Studio,
-            _ => Self::Unknown,
+            other => {
+                log::debug!("unrecognised presence code {other}");
+                Self::Unknown
+            }
         }
     }
 }
@@ -1110,7 +1122,11 @@ impl CrashKind {
             "disconnect" => Self::Disconnect,
             "hang" => Self::Hang,
             "mem" => Self::Mem,
-            _ => Self::Crash,
+            "crash" => Self::Crash,
+            other => {
+                log::debug!("unrecognised crash kind {other:?}");
+                Self::Crash
+            }
         }
     }
 }

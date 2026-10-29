@@ -290,6 +290,12 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
         >
           <NumberField unit={t("settings.unit.fpsOff")} short="FPS" min={0} max={360} value={settings.fpsCap} onCommit={(fpsCap) => set.mutate({ fpsCap })} />
         </Row>
+        <Row
+          title={t("settings.lowGraphics")}
+          hint={t("settings.lowGraphicsHint")}
+        >
+          <Switch label={t("settings.lowGraphics")} checked={settings.lowGraphics} onChange={(lowGraphics) => set.mutate({ lowGraphics })} />
+        </Row>
         <ClientRow client={client} />
         <Row
           title={t("settings.autoUpdate")}

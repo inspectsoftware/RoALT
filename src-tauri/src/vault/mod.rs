@@ -107,7 +107,12 @@ impl Vault {
     }
 
     fn guard(&self) -> MutexGuard<'_, Inner> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+        self.inner.lock().unwrap_or_else(|e| {
+            log::warn!("vault lock was poisoned by an earlier panic; recovering");
+            // Cleared so this is logged once, not on every call.
+            self.inner.clear_poison();
+            e.into_inner()
+        })
     }
 
     /// A copy of the data key, or `Locked`.
@@ -195,7 +200,10 @@ impl Vault {
 
     pub fn decrypt_secret(&self, aad: &[u8], blob: &[u8]) -> Result<Secret> {
         let bytes = self.decrypt(aad, blob)?;
-        let s = std::str::from_utf8(&bytes).map_err(|_| AppError::Crypto)?;
+        let s = std::str::from_utf8(&bytes).map_err(|e| {
+            log::warn!("decrypted secret is not UTF-8 (valid up to byte {})", e.valid_up_to());
+            AppError::Crypto
+        })?;
         Ok(Secret::new(s))
     }
 
@@ -226,7 +234,10 @@ fn unwrap_dpapi(rec: &VaultRecord) -> Result<Key> {
 
 /// `WrongPassword` when `password` does not open the sealed data key.
 fn unwrap_master(rec: &VaultRecord, password: &str) -> Result<Key> {
-    let kdf = rec.kdf.as_ref().ok_or_else(|| AppError::Internal(tr!("No master password is set.")))?;
+    let kdf = rec.kdf.as_ref().ok_or_else(|| {
+        log::error!("vault record is in master mode but has no KDF parameters");
+        AppError::Internal(tr!("No master password is set."))
+    })?;
     let sealed = dpapi::unprotect(&rec.wrapped_key)?;
     let kek = master::derive_key(password, kdf)?;
     to_key(&master::open(&kek, KEY_AAD, &sealed).map_err(|_| AppError::WrongPassword)?)
@@ -234,6 +245,7 @@ fn unwrap_master(rec: &VaultRecord, password: &str) -> Result<Key> {
 
 fn to_key(bytes: &[u8]) -> Result<Key> {
     if bytes.len() != 32 {
+        log::error!("vault data key has the wrong length ({} bytes)", bytes.len());
         return Err(AppError::Crypto);
     }
     let mut key = Zeroizing::new([0u8; 32]);

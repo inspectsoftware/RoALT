@@ -209,7 +209,10 @@ impl Multi {
             }
         }
         self.take(name).map_err(|e| match (e, failed) {
-            (_, Some(f)) => f,
+            (e, Some(f)) => {
+                log::debug!("multi-instance take-over: {name} still taken: {e}");
+                f
+            }
             (AppError::Invalid(_), None) => AppError::Invalid(still_running()),
             (e, None) => e,
         })
@@ -375,8 +378,9 @@ fn close_in(pid: u32, table: &[(u32, usize)], suffix: &str) -> Result<usize> {
         // SAFETY: closes `source` inside `proc` (DUPLICATE_CLOSE_SOURCE, no copy is made); no
         // memory of the process is touched.
         let r = unsafe { DuplicateHandle(*proc, source, HANDLE::default(), std::ptr::null_mut(), 0, false, DUPLICATE_CLOSE_SOURCE) };
-        if r.is_ok() {
-            closed += 1;
+        match r {
+            Ok(()) => closed += 1,
+            Err(e) => log::warn!("multi-instance take-over: could not close a handle in process {pid}: {e}"),
         }
     }
     Ok(closed)
@@ -426,7 +430,10 @@ fn lock_files(paths: &[PathBuf]) -> Vec<File> {
 }
 
 fn shared_files() -> Vec<PathBuf> {
-    let Some(base) = std::env::var_os("LOCALAPPDATA") else { return Vec::new() };
+    let Some(base) = std::env::var_os("LOCALAPPDATA") else {
+        log::warn!("LOCALAPPDATA not set: shared Roblox login files not locked");
+        return Vec::new();
+    };
     let dir = PathBuf::from(base).join("Roblox").join("LocalStorage");
     vec![dir.join("RobloxCookies.dat"), dir.join("appStorage.json")]
 }

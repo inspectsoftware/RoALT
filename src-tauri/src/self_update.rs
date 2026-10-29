@@ -138,7 +138,10 @@ fn allowed(url: &Url, hosts: &[&str]) -> bool {
 /// The update in a releases/latest answer for a build at `current`: None when there is nothing
 /// newer; Err when there is, but without its installer and signature on github.com.
 pub fn pick(body: &[u8], current: &str) -> Result<Option<Release>> {
-    let l: Latest = serde_json::from_slice(body).map_err(|_| failed(tr!("GitHub's answer couldn't be read.")))?;
+    let l: Latest = serde_json::from_slice(body).map_err(|e| {
+        log::debug!("update: GitHub answer unreadable: {e}");
+        failed(tr!("GitHub's answer couldn't be read."))
+    })?;
     let Some(version) = newer(current, &l.tag_name).filter(|_| !l.draft && !l.prerelease) else {
         return Ok(None);
     };
@@ -147,7 +150,13 @@ pub fn pick(body: &[u8], current: &str) -> Result<Option<Release>> {
             .iter()
             .find(|a| a.name == name)
             .map(|a| a.browser_download_url.clone())
-            .filter(|u| Url::parse(u).is_ok_and(|u| allowed(&u, &ASSET_HOSTS[..1])))
+            .filter(|u| {
+                let ok = Url::parse(u).is_ok_and(|u| allowed(&u, &ASSET_HOSTS[..1]));
+                if !ok {
+                    log::debug!("update: asset {name} has a URL that isn't allowed");
+                }
+                ok
+            })
     };
     match (url(format!("RoALT-Setup-{version}.exe")), url(format!("RoALT-Setup-{version}.exe.sig"))) {
         (Some(exe), Some(sig)) => Ok(Some(Release { version, exe, sig })),
@@ -209,18 +218,22 @@ fn verify(public: &[u8; 64], data: &[u8], sig: &[u8]) -> bool {
     // SAFETY: every buffer is a live slice passed with its own length; the algorithm and key
     // handles are only used while their `Owned` wrappers (closed on drop, key first) live.
     unsafe {
-        if BCryptHash(BCRYPT_SHA256_ALG_HANDLE, None, data, &mut hash).is_err() {
+        let st = BCryptHash(BCRYPT_SHA256_ALG_HANDLE, None, data, &mut hash);
+        if st.is_err() {
+            log::warn!("update signature: BCryptHash failed: {:#010x}", st.0);
             return false;
         }
         let mut alg = BCRYPT_ALG_HANDLE::default();
-        if BCryptOpenAlgorithmProvider(&mut alg, BCRYPT_ECDSA_P256_ALGORITHM, PCWSTR::null(), BCRYPT_OPEN_ALGORITHM_PROVIDER_FLAGS(0))
-            .is_err()
-        {
+        let st = BCryptOpenAlgorithmProvider(&mut alg, BCRYPT_ECDSA_P256_ALGORITHM, PCWSTR::null(), BCRYPT_OPEN_ALGORITHM_PROVIDER_FLAGS(0));
+        if st.is_err() {
+            log::warn!("update signature: BCryptOpenAlgorithmProvider failed: {:#010x}", st.0);
             return false;
         }
         let alg = Owned::new(alg);
         let mut key = BCRYPT_KEY_HANDLE::default();
-        if BCryptImportKeyPair(*alg, None, BCRYPT_ECCPUBLIC_BLOB, &mut key, &blob, 0).is_err() {
+        let st = BCryptImportKeyPair(*alg, None, BCRYPT_ECCPUBLIC_BLOB, &mut key, &blob, 0);
+        if st.is_err() {
+            log::warn!("update signature: BCryptImportKeyPair failed: {:#010x}", st.0);
             return false;
         }
         let key = Owned::new(key);
@@ -255,6 +268,8 @@ fn failed(why: String) -> AppError {
 
 /// No path or query (asset URLs carry signed tokens): what went wrong, with the host.
 fn network(e: reqwest::Error) -> AppError {
+    let e = e.without_url();
+    log::warn!("update: GitHub request failed: {e}");
     let what = if e.is_timeout() {
         tr!("timed out")
     } else if e.is_connect() {
@@ -280,16 +295,23 @@ fn http() -> Result<reqwest::Client> {
         }))
         .connect_timeout(Duration::from_secs(10))
         .build()
-        .map_err(|_| failed(tr!("RoALT's HTTP client couldn't start.")))
+        .map_err(|e| {
+            log::warn!("update: http client unavailable: {}", e.without_url());
+            failed(tr!("RoALT's HTTP client couldn't start."))
+        })
 }
 
 /// GETs `url` within `timeout`; refused over `max` bytes (by `Content-Length`, or while reading).
 async fn get(http: &reqwest::Client, url: &str, accept: &'static str, max: u64, timeout: Duration) -> Result<Vec<u8>> {
     let mut resp = http.get(url).header(ACCEPT, accept).timeout(timeout).send().await.map_err(network)?;
     if !resp.status().is_success() {
+        log::warn!("update: GitHub answered HTTP {}", resp.status().as_u16());
         return Err(failed(tr!("GitHub answered HTTP {status}.", status = resp.status().as_u16())));
     }
-    let too_big = || failed(tr!("GitHub sent more than {kb} KB.", kb = max / 1_000));
+    let too_big = || {
+        log::warn!("update: GitHub sent more than {max} bytes");
+        failed(tr!("GitHub sent more than {kb} KB.", kb = max / 1_000))
+    };
     if resp.content_length().is_some_and(|t| t > max) {
         return Err(too_big());
     }
@@ -347,7 +369,13 @@ pub fn spawn(app: AppHandle) {
         // First thing at start: no delay before the first check.
         tauri::async_runtime::spawn_blocking(sweep);
         loop {
-            if app.state::<App>().db.settings().is_ok_and(|v| v.self_update) {
+            let on = app
+                .state::<App>()
+                .db
+                .settings()
+                .inspect_err(|e| log::warn!("update check skipped, settings unreadable: {e}"))
+                .is_ok_and(|v| v.self_update);
+            if on {
                 match check(&app).await {
                     Ok(u) if u.available.is_some() => {
                         let _ = app.emit(UPDATE_EVENT, &u);
@@ -362,7 +390,13 @@ pub fn spawn(app: AppHandle) {
 }
 
 fn sweep() {
-    let Ok(dirs) = std::fs::read_dir(std::env::temp_dir()) else { return };
+    let dirs = match std::fs::read_dir(std::env::temp_dir()) {
+        Ok(d) => d,
+        Err(e) => {
+            log::debug!("update: temp dir unreadable: {e}");
+            return;
+        }
+    };
     for d in dirs.flatten().filter(|d| d.file_name().to_string_lossy().starts_with(TEMP_PREFIX)) {
         if let Err(e) = std::fs::remove_dir_all(d.path()) {
             log::info!("could not delete {}: {e}", d.path().display());

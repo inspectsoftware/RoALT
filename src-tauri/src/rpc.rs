@@ -48,7 +48,10 @@ fn read_frame(pipe: &mut File) -> std::io::Result<(u32, Value)> {
     }
     let mut body = vec![0; len];
     pipe.read_exact(&mut body)?;
-    let v = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let v = serde_json::from_slice(&body).unwrap_or_else(|e| {
+        log::debug!("discord presence: unreadable frame: {e}");
+        Value::Null
+    });
     if op == CLOSE {
         return Err(std::io::Error::other(format!("closed: {v}")));
     }
@@ -59,8 +62,13 @@ fn read_frame(pipe: &mut File) -> std::io::Result<(u32, Value)> {
 fn connect() -> Option<File> {
     (0..10).find_map(|n| {
         let mut pipe = OpenOptions::new().read(true).write(true).open(format!(r"\\.\pipe\discord-ipc-{n}")).ok()?;
-        pipe.write_all(&frame(HANDSHAKE, &json!({ "v": 1, "client_id": CLIENT_ID }))).ok()?;
-        read_frame(&mut pipe).ok()?;
+        let shook = pipe
+            .write_all(&frame(HANDSHAKE, &json!({ "v": 1, "client_id": CLIENT_ID })))
+            .and_then(|()| read_frame(&mut pipe));
+        if let Err(e) = shook {
+            log::debug!("discord presence: handshake on pipe {n} failed: {e}");
+            return None;
+        }
         Some(pipe)
     })
 }
@@ -136,9 +144,17 @@ pub fn spawn(app: AppHandle) {
         let mut shown: Option<(String, String)> = None;
         let mut since = now_ms();
         let mut nonce = 0u64;
+        let mut settings_failed = false;
         loop {
             let s = app.state::<App>();
-            let on = s.db.settings().map(|v| v.discord_presence).unwrap_or(false);
+            let settings = s.db.settings();
+            match (&settings, settings_failed) {
+                (Err(e), false) => log::debug!("discord presence: settings unreadable, presence off: {e}"),
+                (Ok(_), true) => log::debug!("discord presence: settings readable again"),
+                _ => {}
+            }
+            settings_failed = settings.is_err();
+            let on = settings.map(|v| v.discord_presence).unwrap_or(false);
             let want = on.then(|| status(&s.tracker.list(), |p| cached_game_name(&s, p)));
             if want.as_ref().map(|w| &w.0) != shown.as_ref().map(|w| &w.0) {
                 since = now_ms();

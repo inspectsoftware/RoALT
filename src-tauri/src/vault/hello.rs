@@ -27,10 +27,14 @@ pub async fn hello_available() -> bool {
     tauri::async_runtime::spawn_blocking(|| {
         UserConsentVerifier::CheckAvailabilityAsync()
             .and_then(|op| op.join())
+            .inspect_err(|e| log::warn!("windows hello availability check failed: {e}"))
             .is_ok_and(|a| a == UserConsentVerifierAvailability::Available)
     })
     .await
-    .unwrap_or(false)
+    .unwrap_or_else(|e| {
+        log::warn!("windows hello availability check failed: {e}");
+        false
+    })
 }
 
 fn verify(hwnd: HWND, message: &HSTRING) -> Result<()> {
@@ -47,7 +51,10 @@ fn verify(hwnd: HWND, message: &HSTRING) -> Result<()> {
         Outcome::Canceled => Err(AppError::Cancelled),
         Outcome::DeviceBusy => Err(AppError::Invalid(tr!("Windows Hello is busy. Try again."))),
         Outcome::RetriesExhausted => Err(AppError::Invalid(tr!("Too many failed attempts. Try again later."))),
-        _ => Err(AppError::Invalid(tr!("Windows Hello couldn't verify you."))),
+        other => {
+            log::warn!("windows hello couldn't verify: {other:?}");
+            Err(AppError::Invalid(tr!("Windows Hello couldn't verify you.")))
+        }
     }
 }
 

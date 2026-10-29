@@ -16,6 +16,8 @@
   --color-accent-text: var(--accent-text);
   --color-blue: var(--blue);
   --color-orange: var(--orange);
+  --color-err: var(--err);
+  --color-warn: var(--warn);
   --color-grey: var(--grey);
   --font-sans: "Geist Variable", system-ui, "Segoe UI", sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, Consolas, monospace;
@@ -38,6 +40,9 @@
     --blue: #7ab0ff;
     --orange: #ffa05c;
     --grey: #5e6672;
+    /* Debug tab log levels. */
+    --err: #ff6b6b;
+    --warn: #ffd166;
     --grid: rgb(255 255 255 / 0.035);
     /* Checked controls and focus rings: lime on dark, ink on light (lime fails 3:1 there). */
     --on: var(--accent);
@@ -62,6 +67,8 @@
     --blue: #1a57c2;
     --orange: #a44805;
     --grey: #8e949c;
+    --err: #b42318;
+    --warn: #8a5a00;
     --grid: rgb(0 0 0 / 0.045);
     --on: var(--text);
     --on-ink: var(--bg);

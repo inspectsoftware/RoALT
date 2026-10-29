@@ -6,6 +6,7 @@ import { AccountsView } from "./features/accounts/AccountsView";
 import { AddAccountDialog } from "./features/accounts/AddAccountDialog";
 import { DashboardView } from "./features/dashboard/DashboardView";
 import { DiscordView } from "./features/discord/DiscordView";
+import { DebugView } from "./features/debug/DebugView";
 import { GroupsNav } from "./features/accounts/GroupsNav";
 import { FavouritesNav } from "./features/launch/Favourites";
 import { lastLaunchAccount, LaunchView } from "./features/launch/LaunchView";
@@ -149,7 +150,7 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
   const accounts = useAccounts();
   const groups = useGroups();
   const running = useInstances().data?.filter(isRunning).length ?? 0;
-  const [view, setView] = useState<"dashboard" | "accounts" | "launch" | "servers" | "monitor" | "discord" | "settings">("dashboard");
+  const [view, setView] = useState<"dashboard" | "accounts" | "launch" | "servers" | "monitor" | "discord" | "debug" | "settings">("dashboard");
   const [group, setGroup] = useState<number | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   // The Launch view's accounts; the last one launched until something else is picked.
@@ -196,6 +197,7 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
         Digit5: () => setView("settings"),
         Digit6: () => setView("monitor"),
         Digit7: () => setView("discord"),
+        Digit8: () => setView("debug"),
       };
       const go = views[e.code];
       if (go) {
@@ -283,6 +285,10 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
             <Icon name="bell" />
             <span className="flex-1 min-w-0 truncate">Discord</span>
           </button>
+          <button className="nav-item" aria-current={view === "debug" ? "page" : undefined} onClick={() => setView("debug")}>
+            <Icon name="sliders" />
+            <span className="flex-1 min-w-0 truncate">{t("app.nav.debug")}</span>
+          </button>
           <button className="nav-item" aria-current={view === "settings" ? "page" : undefined} onClick={() => setView("settings")}>
             <Icon name="settings" />
             <span className="flex-1 min-w-0 truncate">{t("app.nav.settings")}</span>
@@ -366,6 +372,8 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
         <MonitorView accounts={accounts.data} />
       ) : view === "discord" ? (
         <DiscordView settings={settings} />
+      ) : view === "debug" ? (
+        <DebugView />
       ) : (
         <SettingsView vault={vault} settings={settings} />
       )}

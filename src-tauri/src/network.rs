@@ -2,8 +2,7 @@
 //! picks it when joining: a café or hotel Wi-Fi is Public). While a connected network with
 //! internet access is Public and `Settings.allow_public_networks` is off:
 //! - launches are refused (`blocked`, checked by `commands::launch_tracked`, so single launches,
-//!   batches, auto-rejoin, the tray and the web dashboard alike) and a running batch stops;
-//! - the web dashboard doesn't start, and stops when it runs;
+//!   batches, auto-rejoin and the tray alike) and a running batch stops;
 //! - a master-password vault locks (on joining such a network, not again while on it).
 //!
 //! Read through the Network List Manager every `TICK`. Only networks with internet access
@@ -92,14 +91,14 @@ fn networks() -> windows::core::Result<Vec<Seen>> {
     }
 }
 
-/// Why launching, or the web dashboard, isn't allowed now; None when it is.
+/// Why launching isn't allowed now; None when it is.
 pub fn blocked(s: &App) -> Option<String> {
     if !s.network.get().public || s.db.settings().is_ok_and(|v| v.allow_public_networks) {
         return None;
     }
     Some(tr!(
-        "You're on a public network. RoALT doesn't launch or serve the web dashboard there; join a private \
-         network, or allow public networks in Settings, Security."
+        "You're on a public network. RoALT doesn't launch there; join a private network, or allow public \
+         networks in Settings, Security."
     ))
 }
 
@@ -134,18 +133,10 @@ fn enforce(app: &AppHandle, why: &str) {
     if let Some(batch) = s.bulk.current().filter(|b| !b.done) {
         let _ = s.bulk.cancel(&batch.batch_id);
     }
-    let dashboard = s.remote.stop();
     let lock = s.vault.mode() == VaultMode::Master && !s.vault.is_locked();
     if lock {
         crate::commands::lock_vault(app);
-    }
-    if dashboard || lock {
-        let text = match (dashboard, lock) {
-            (true, true) => tr!("{why} Meanwhile the web dashboard stopped and the vault locked.", why = why),
-            (true, false) => tr!("{why} Meanwhile the web dashboard stopped.", why = why),
-            _ => tr!("{why} Meanwhile the vault locked.", why = why),
-        };
-        notice(app, true, text);
+        notice(app, true, tr!("{why} Meanwhile the vault locked.", why = why));
     }
     log::info!("public network: launches blocked{}", if lock { ", vault locked" } else { "" });
 }

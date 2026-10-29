@@ -33,7 +33,6 @@ import type { MultiInstanceStatus } from "./bindings/MultiInstanceStatus";
 import type { Notice } from "./bindings/Notice";
 import type { ParsedInput } from "./bindings/ParsedInput";
 import type { PrivateServerPage } from "./bindings/PrivateServerPage";
-import type { RemoteStatus } from "./bindings/RemoteStatus";
 import type { NetworkStatus } from "./bindings/NetworkStatus";
 import type { RobloxClient } from "./bindings/RobloxClient";
 import type { ServerOrder } from "./bindings/ServerOrder";
@@ -47,7 +46,7 @@ import type { VaultStatus } from "./bindings/VaultStatus";
 export type {
   AccountInfo, AccountPresence, Headshot,
   Favourite, FavouriteInput, JoinCandidate, LaunchInfo, LaunchTarget, ParsedInput, UserRef,
-  BandwidthStatus, ClientMetrics, Crash, DiscordStatus, Instance, MultiInstanceStatus, BulkProgress, BulkRequest, ServerOrder, ServerPage, GameInfo, PrivateServerPage, DataDir, LogsCleaned, Notice, RemoteStatus, RobloxClient,
+  BandwidthStatus, ClientMetrics, Crash, DiscordStatus, Instance, MultiInstanceStatus, BulkProgress, BulkRequest, ServerOrder, ServerPage, GameInfo, PrivateServerPage, DataDir, LogsCleaned, Notice, RobloxClient,
   AccountPatch, AccountSummary, AppUpdate, ConflictPolicy, ErrorPayload, Group, GroupInput,
   ImportReport, InstallProgress, Settings, SettingsPatch, VaultMode, VaultStatus,
 };
@@ -225,14 +224,6 @@ export const api = {
   /** The deadline of the shutdown RoALT scheduled, or null. */
   shutdownStatus: () => invoke<number | null>("shutdown_status"),
 
-  /** Whether the LAN web dashboard runs, and its address(es); never the PIN. */
-  remoteStatus: () => invoke<RemoteStatus>("remote_status"),
-  /** The web dashboard's PIN (made on first use). */
-  remotePin: () => invoke<string>("remote_pin"),
-  /** A new PIN; signed-in devices have to enter it again. */
-  remotePinRegenerate: () => invoke<string>("remote_pin_regenerate"),
-  /** A new certificate for the web dashboard (it restarts if it runs); the status with its fingerprint. */
-  remoteNewCertificate: () => invoke<RemoteStatus>("remote_new_certificate"),
   /** Whether a Public network is connected; app://network sends changes. */
   networkStatus: () => invoke<NetworkStatus>("network_status"),
 

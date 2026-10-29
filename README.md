@@ -156,13 +156,9 @@ micro window, limit it or close it. Tile all clients in a grid in one click.
 </td>
 <td valign="top">
 
-### 📱 LAN web dashboard
-Opt-in. Open RoALT from your phone on the same network: see running clients, close them, Kill all or
-launch accounts, signed in with an 8-digit PIN, over HTTPS.
-
 ### 🛡️ Public networks
-On a network Windows calls **Public** (café, hotel, school Wi-Fi), RoALT doesn't launch or run the web dashboard, and a
-master-password vault locks. You can allow public networks in Settings, Security, after a warning.
+On a network Windows calls **Public** (café, hotel, school Wi-Fi), RoALT doesn't launch, and a master-password
+vault locks. You can allow public networks in Settings, Security, after a warning.
 
 </td>
 </tr>
@@ -188,7 +184,6 @@ master-password vault locks. You can allow public networks in Settings, Security
 | 📶 **Bandwidth** | One upload cap for all Roblox clients through a Windows QoS policy. Applied only when you click Apply (admin prompt); cleared when Windows restarts. |
 | 💤 **Anti-AFK** | Off by default. While you are away from the PC, every few minutes each client is briefly brought to the front and gets one Space press, so Roblox doesn't kick it after 20 idle minutes. Stops the moment you touch the mouse. Or **in the background**: a Tab press is posted to the window without bringing it to the front, even when minimized (Roblox may not count it in every game; auto-rejoin stays the fallback). Per-client opt-out. |
 | 🔔 **Discord** | Crash, disconnect, restart and batch alerts, plus an opt-in alert when a client gets into a game. Mute alerts per account. **Rich presence** (on by default, a switch in Settings): your profile shows "Playing RoALT", idling or with the game and how many alts run. |
-| 📱 **Web dashboard** | Opt-in, off by default. A small page on your PC's LAN address: running clients with Close and Force, Kill all, and launch ticked accounts into a pasted link. 8-digit PIN, 30-day sign-in, rate-limited. |
 | 🔄 **RoALT updates** | Looks for a new RoALT on GitHub Releases at start and every 6 hours (can be turned off; *Check now* in Settings). A banner offers it; *Update now* downloads it, checks its release signature, installs it silently and restarts RoALT. Never installs on its own. |
 | 🧰 **Comfort** | Tray menu with favourites, close to tray, relaunch an ended client in one click, movable data folder, keyboard shortcuts. Dark, light or system theme, any accent colour, and your own background image. |
 
@@ -294,7 +289,7 @@ In **Settings → Launching**, turn on **Auto-rejoin** (and, if you like, **Auto
 
 #### ✅ What RoALT does
 
-- Talks **only** to `*.roblox.com` and `*.rbxcdn.com`, plus GitHub to look for RoALT updates (can be turned off), your Discord webhook, and your LAN if you turn on the web dashboard.
+- Talks **only** to `*.roblox.com` and `*.rbxcdn.com`, plus GitHub to look for RoALT updates (can be turned off), and your Discord webhook.
 - Encrypts every cookie with **AES-256-GCM** under a key protected by **Windows DPAPI**, plus your master password if you set one.
 - Encrypts the **whole database** too (SQLCipher, AES-256), with its own DPAPI-protected key: a copied `roalt.db` can't be read on another PC or Windows account.
 - Signs you in through **Roblox's own page**, in a throw-away browser profile.
@@ -346,11 +341,6 @@ In **Settings → Launching**, turn on **Auto-rejoin** (and, if you like, **Auto
   mode, posts a Tab press to its window.
 - **Window tools** (thumbnails, minimize, micro, tile) use ordinary Windows window calls (`PrintWindow`, `ShowWindow`,
   `SetWindowPos`).
-- **Web dashboard (opt-in)** listens on your LAN only while turned on, the vault is unlocked and the network isn't
-  Public. It serves **HTTPS only**, with a certificate RoALT makes itself: the browser warns once, so check that the
-  certificate's SHA-256 fingerprint matches the one in Settings. The PIN and the certificate's key are kept encrypted,
-  sessions use a Secure HttpOnly cookie, every POST needs a custom header, wrong PINs are rate-limited, and requests by
-  host name are refused (open it by IP). It returns names, states and usage only, never a cookie or webhook.
 - **Bandwidth limit (opt-in)** adds a Windows QoS policy named `RoALT-Roblox` through an admin prompt, only when you click
   Apply. Windows drops it on restart. It is the only change RoALT makes to Windows.
 
@@ -457,8 +447,6 @@ flowchart LR
     CMD --> LAUNCH["launcher<br/>target · uri · bulk · update"]
     CMD --> INST["instances<br/>tracker · limits · rejoin · metrics"]
     CMD --> DISC["discord<br/>webhook alerts"]
-    PHONE(["Phone on LAN"]) -- "HTTPS + PIN" --> REMOTE["remote<br/>web dashboard"]
-    REMOTE --> CMD
     VAULT --> DB[("SQLite<br/>roalt.db")]
     LAUNCH --> API
     LAUNCH --> RBX["RobloxPlayerBeta.exe"]
@@ -474,7 +462,6 @@ flowchart LR
 | [`launcher/`](src-tauri/src/launcher) | `target.rs` parses any pasted link locally; `uri.rs` builds the `roblox-player:` URI exactly like the website; `bulk.rs` runs batches and same-server; `fps.rs` the FPS cap; `update.rs` + `authenticode.rs` install Roblox updates after `WinVerifyTrust`. |
 | [`instances/`](src-tauri/src/instances) | `tracker.rs` ties each client to its account by PID, start time and log file; `logwatch.rs` reads job IDs and disconnects; `rejoin.rs` and the crash breaker; `limits.rs` CPU caps, affinity, efficiency mode, trims; `metrics.rs`; `multi.rs` the singleton lock and take-over; `window.rs` thumbnails, micro and tile; `qos.rs`; `afk.rs`. |
 | [`discord.rs`](src-tauri/src/discord.rs) | Webhook alerts: host-checked URL, events coalesced every 2 s, `retry_after` honoured. |
-| [`remote.rs`](src-tauri/src/remote.rs) | Opt-in LAN web dashboard (axum, HTTPS with a self-signed certificate): PIN login, session cookie, CSRF header, rate limit, Host check, one embedded page (`remote.html`). |
 | [`webview.rs`](src-tauri/src/webview.rs) | Sign-in and session windows on temporary WebView2 profiles, deleted after use. |
 | [`storage/`](src-tauri/src/storage) | SQLite through `rusqlite` with numbered migrations. Running clients live in memory only. |
 
@@ -563,7 +550,7 @@ npm run tauri dev        # run the app with hot reload
 │  │  ├─ commands.rs       IPC layer
 │  │  ├─ model.rs          shared types (exported to TS)
 │  │  ├─ vault/  roblox_api/  launcher/  instances/  storage/
-│  │  ├─ discord.rs  remote.rs  webview.rs  tray.rs  error.rs
+│  │  ├─ discord.rs  webview.rs  tray.rs  error.rs
 │  ├─ tests/fixtures/      recorded Roblox responses (no real cookies)
 │  └─ tauri.conf.json
 ├─ installer/RoALT.iss     Inno Setup script

@@ -76,9 +76,8 @@ let settings: Settings = {
   antiAfk: { enabled: false, intervalMin: 15, mode: "focus" },
   discord: { crash: true, hang: true, memRestart: true, disconnect: true, restart: true, breaker: true, batchDone: true, launch: false, statusEveryMin: 0 },
   autoUpdate: false, selfUpdate: true, discordPresence: true, minimizeOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0,
-  remote: { enabled: false, port: 47800 }, allowPublicNetworks: false, language: "",
+  allowPublicNetworks: false, language: "",
 };
-let remotePin = "48213907";
 
 // Outdated, so Settings offers the update and the Launch view warns before a batch.
 let robloxClient: RobloxClient = {
@@ -1027,20 +1026,8 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       return null;
     case "shutdown_status":
       return shutdownAt;
-    case "remote_status":
-      return {
-        running: settings.remote.enabled, urls: [`https://192.168.1.20:${settings.remote.port}`],
-        fingerprint: "3F:A1:09:7C:5E:22:B8:4D:91:0E:6A:C3:57:F2:18:9B:44:D0:7E:A5:2C:61:BF:83:0A:E9:1D:76:C4:58:2B:F0",
-      };
-    case "remote_new_certificate":
-      return { running: settings.remote.enabled, urls: [`https://192.168.1.20:${settings.remote.port}`], fingerprint: "9C:04:E7:31:AB:5F:12:D8:60:3E:C9:77:0B:F4:28:96:DA:41:7F:05:E3:BC:62:19:8A:D7:4C:20:F1:6B:93:5E" };
     case "network_status":
       return { public: false };
-    case "remote_pin":
-      return remotePin;
-    case "remote_pin_regenerate":
-      remotePin = String(Math.floor(Math.random() * 1e8)).padStart(8, "0");
-      return remotePin;
     case "data_dir_move":
       await sleep(1200);
       if (batch && !batch.done) return fail("invalid", MOVE_BUSY);
@@ -1054,7 +1041,6 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       if (/["'&|<>^]/.test(args.patch.launchArgs ?? "")) return fail("invalid", "Launch arguments can't contain that character.");
       if (args.patch.memRestartMb && args.patch.memRestartMb < 512) return fail("invalid", "The memory limit must be 0 (off) or 512 to 65 536 MB.");
       if (args.patch.fpsCap && args.patch.fpsCap < 5) return fail("invalid", "The FPS cap must be 0 (off) or 5 to 360.");
-      if (args.patch.remote && args.patch.remote.port < 1024) return fail("invalid", "Use a port from 1024 to 65535 for the web dashboard.");
 
       if (args.patch.antiAfk && (args.patch.antiAfk.intervalMin < 1 || args.patch.antiAfk.intervalMin > 19))
         return fail("invalid", "Anti-AFK must press a key every 1 to 19 minutes.");

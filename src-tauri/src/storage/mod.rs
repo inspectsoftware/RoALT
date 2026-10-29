@@ -917,6 +917,10 @@ mod tests {
         assert_eq!(db.settings().unwrap(), s);
         db.conn().execute("UPDATE settings SET value = 'nope' WHERE key = 'settings'", []).unwrap();
         assert_eq!(db.settings().unwrap(), Settings::default());
+        // Settings saved before the web dashboard was removed still load.
+        let old = r#"{"autoLockMinutes":3,"remote":{"enabled":true}}"#;
+        db.conn().execute("UPDATE settings SET value = ?1 WHERE key = 'settings'", [old]).unwrap();
+        assert_eq!(db.settings().unwrap().auto_lock_minutes, 3);
 
         // Values kept beside the settings leave them alone.
         assert_eq!(db.setting_value("discord_webhook").unwrap(), None);

@@ -454,7 +454,6 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
           />
         </Row>
         <PublicNetworkRow settings={settings} />
-        <RemoteRows settings={settings} />
 
         <Heading id="data">{t("settings.section.data")}</Heading>
         <Row title={t("settings.dataFolder")} hint={dataDir ? <PathHint path={dataDir.path} /> : ""}>
@@ -799,8 +798,8 @@ function ShutdownRow() {
   );
 }
 
-/** Public networks: refused by default (launching, the web dashboard; a master vault locks on
- * joining one); allowing them is confirmed. */
+/** Public networks: launching is refused by default (a master vault locks on joining one);
+ * allowing them is confirmed. */
 function PublicNetworkRow({ settings }: { settings: Settings }) {
   const set = useSetSettings();
   const network = useNetwork().data;
@@ -835,85 +834,6 @@ function PublicNetworkRow({ settings }: { settings: Settings }) {
           t("settings.publicConfirmText")
         }
         confirmLabel={t("settings.publicConfirm")}
-      />
-    </>
-  );
-}
-
-/** The LAN web dashboard: on/off (confirmed), its address, port and PIN (hidden until Reveal). */
-function RemoteRows({ settings }: { settings: Settings }) {
-  const qc = useQueryClient();
-  const set = useSetSettings();
-  const status = useQuery({ queryKey: qk.remote, queryFn: api.remoteStatus, staleTime: 0 }).data;
-  const [pin, setPin] = useState<string | null>(null);
-  const [confirmOn, setConfirmOn] = useState(false);
-  const remote = settings.remote;
-  const save = (r: Settings["remote"]) => set.mutate({ remote: r }, { onSettled: () => qc.invalidateQueries({ queryKey: qk.remote }) });
-  const reveal = () => (pin ? setPin(null) : api.remotePin().then(setPin, toastError));
-  const regenerate = () =>
-    api.remotePinRegenerate().then((p) => {
-      setPin(p);
-      toast(t("settings.newPin"));
-    }, toastError);
-  const newCertificate = () =>
-    api.remoteNewCertificate().then((st) => {
-      qc.setQueryData(qk.remote, st);
-      toast(t("settings.newCertificateToast"));
-    }, toastError);
-  return (
-    <>
-      <Row
-        title={t("settings.remote")}
-        hint={
-          t("settings.remoteHint")
-        }
-      >
-        <Switch label={t("settings.remote")} checked={remote.enabled} onChange={(enabled) => (enabled ? setConfirmOn(true) : save({ ...remote, enabled }))} />
-      </Row>
-      {remote.enabled && (
-        <>
-          <Row title={t("settings.address")} hint={status?.running ? t("settings.addressHint") : t("settings.addressNotRunning")}>
-            <div className="flex flex-col items-end gap-1">
-              {status?.urls.length ? (
-                status.urls.map((u) => <span key={u} className="mono selectable">{u}</span>)
-              ) : (
-                <span className="text-dim">{t("settings.noNetwork")}</span>
-              )}
-            </div>
-          </Row>
-          <Row title={t("settings.port")} hint={t("settings.portHint")}>
-            <NumberField unit={t("settings.unit.port")} short="" min={1024} max={65535} value={remote.port} onCommit={(port) => save({ ...remote, port })} />
-          </Row>
-          <Row title={t("settings.pin")} hint={t("settings.pinHint")}>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="mono selectable" aria-live="polite">{pin ?? "••••••••"}</span>
-              <button className="btn btn-sm" onClick={reveal}>{pin ? t("settings.hide") : t("settings.reveal")}</button>
-              <button className="btn btn-sm" onClick={regenerate}>{t("settings.regenerate")}</button>
-            </div>
-          </Row>
-          <Row
-            title={t("settings.certificate")}
-            hint={t("settings.certificateHint")}
-          >
-            <div className="flex flex-col items-end gap-2 min-w-0">
-              <span className="mono text-xs selectable break-all text-right max-w-[22rem]">{status?.fingerprint ?? t("settings.certificatePending")}</span>
-              <button className="btn btn-sm" onClick={newCertificate}>{t("settings.newCertificate")}</button>
-            </div>
-          </Row>
-        </>
-      )}
-      <ConfirmDialog
-        open={confirmOn}
-        onClose={() => setConfirmOn(false)}
-        onConfirm={() => {
-          setConfirmOn(false);
-          save({ ...remote, enabled: true });
-        }}
-        title={t("settings.remoteConfirmTitle")}
-        text={
-          t("settings.remoteConfirmText")
-        }
-        confirmLabel={t("settings.remoteConfirm")}
       />
     </>
   );

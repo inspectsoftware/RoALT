@@ -9,7 +9,6 @@ mod instances;
 mod launcher;
 mod model;
 mod network;
-mod remote;
 mod roblox_api;
 mod rpc;
 mod self_update;
@@ -50,8 +49,6 @@ pub struct App {
     pub discord: discord::Discord,
     pub update: launcher::update::Updater,
     pub self_update: self_update::SelfUpdater,
-    /// The LAN web dashboard (`remote`).
-    pub remote: remote::Remote,
     /// Whether a Public network is connected (`network`).
     pub network: network::Network,
     /// When the shutdown RoALT scheduled is due (Unix ms; `commands::shutdown_schedule`).
@@ -364,7 +361,6 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
         discord: discord::Discord::new(),
         update: launcher::update::Updater::new(),
         self_update: self_update::SelfUpdater::new(),
-        remote: remote::Remote::new(),
         network: network::Network::new(),
         shutdown: Mutex::new(shutdown),
     });
@@ -374,15 +370,6 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(Duration::from_secs(5)).await;
             commands::notice(&handle, true, tr!("{why} The panic hotkey is off; change it in Settings, Automation.", why = e.message()));
-        });
-    }
-    // Master mode starts locked: then it starts on unlock (`commands::vault_unlock`).
-    if let Err(e) = remote::resume(app.handle()) {
-        log::warn!("web dashboard not started: {e}");
-        let handle = app.handle().clone();
-        tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            commands::notice(&handle, true, tr!("The web dashboard didn't start: {why}", why = e.message()));
         });
     }
     if let Err(e) = tray::setup(app.handle()) {
@@ -581,11 +568,7 @@ fn main() {
             commands::backup_import,
             commands::settings_get,
             commands::settings_set,
-            commands::remote_status,
             commands::network_status,
-            commands::remote_pin,
-            commands::remote_pin_regenerate,
-            commands::remote_new_certificate,
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| fatal(&tr!("RoALT failed to start: {why}", why = e)))

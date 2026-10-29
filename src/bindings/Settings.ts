@@ -4,7 +4,6 @@ import type { AntiAfk } from "./AntiAfk";
 import type { Density } from "./Density";
 import type { DiscordEvents } from "./DiscordEvents";
 import type { MemThrottle } from "./MemThrottle";
-import type { RemoteAccess } from "./RemoteAccess";
 import type { Theme } from "./Theme";
 
 /**
@@ -134,11 +133,7 @@ fpsCap: number,
  */
 lowGraphics: boolean, 
 /**
- * The LAN web dashboard (`remote`); its PIN is in the vault, not here.
- */
-remote: RemoteAccess, 
-/**
- * Launch and serve the web dashboard on a Public network too (`network`); off: refused.
+ * Launch on a Public network too (`network`); off: refused.
  */
 allowPublicNetworks: boolean, 
 /**

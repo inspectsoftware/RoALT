@@ -238,29 +238,10 @@ pub struct Settings {
     pub fps_cap: u32,
     /// Start clients at Roblox's lowest graphics quality (`launcher::client_settings`).
     pub low_graphics: bool,
-    /// The LAN web dashboard (`remote`); its PIN is in the vault, not here.
-    pub remote: RemoteAccess,
-    /// Launch and serve the web dashboard on a Public network too (`network`); off: refused.
+    /// Launch on a Public network too (`network`); off: refused.
     pub allow_public_networks: bool,
     /// UI and message language (`i18n::LANGS`), or "" to follow Windows' display language.
     pub language: String,
-}
-
-/// The LAN web dashboard: served on every network address at `port` while `enabled` and the
-/// vault is unlocked.
-#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", default)]
-#[ts(export)]
-pub struct RemoteAccess {
-    pub enabled: bool,
-    /// 1024..=65 535.
-    pub port: u16,
-}
-
-impl Default for RemoteAccess {
-    fn default() -> Self {
-        Self { enabled: false, port: 47_800 }
-    }
 }
 
 /// The network RoALT runs on (`network`). Never its name: streamers show RoALT on screen.
@@ -270,17 +251,6 @@ impl Default for RemoteAccess {
 pub struct NetworkStatus {
     /// A connected Public network with internet access.
     pub public: bool,
-}
-
-#[derive(Serialize, TS, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
-#[ts(export)]
-pub struct RemoteStatus {
-    pub running: bool,
-    /// Where other devices open it: this PC's LAN address(es), https://.
-    pub urls: Vec<String>,
-    /// Its certificate's SHA-256 fingerprint (colon hex); None until the first start.
-    pub fingerprint: Option<String>,
 }
 
 /// The memory throttle: a client whose private memory is over `mb` at a 10 s sample gets at
@@ -421,7 +391,6 @@ impl Default for Settings {
             clean_logs: false,
             fps_cap: 0,
             low_graphics: true,
-            remote: RemoteAccess::default(),
             allow_public_networks: false,
             language: String::new(),
         }
@@ -494,8 +463,6 @@ pub struct SettingsPatch {
     pub fps_cap: Option<u32>,
     #[ts(optional)]
     pub low_graphics: Option<bool>,
-    #[ts(optional)]
-    pub remote: Option<RemoteAccess>,
     #[ts(optional)]
     pub allow_public_networks: Option<bool>,
     #[ts(optional)]

@@ -39,9 +39,6 @@ pub async fn vault_unlock(app: AppHandle, s: State<'_, App>, password: String) -
     let rec = s.db.vault_record()?.ok_or(AppError::Internal("vault record missing".into()))?;
     s.vault.unlock(&rec, &password)?;
     crate::tray::refresh(&app);
-    if let Err(e) = crate::remote::resume(&app) {
-        notice(&app, true, tr!("The web dashboard didn't start: {why}", why = e.message()));
-    }
     Ok(())
 }
 
@@ -1816,8 +1813,6 @@ pub fn lock_vault(app: &AppHandle) {
         }
     }
     let s = app.state::<App>();
-    // It runs only while the vault is open; `vault_unlock` starts it again.
-    s.remote.stop();
     s.vault.lock();
     let _ = app.emit("vault://locked", ());
     crate::tray::refresh(app);
@@ -2091,7 +2086,7 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
         }
     }
     // Last: it takes effect at once, so only once everything else is valid; put back if the
-    // web dashboard or the save then fails, so Windows and the settings agree.
+    // save then fails, so Windows and the settings agree.
     let had = v.panic_hotkey.clone();
     if let Some(k) = patch.panic_hotkey {
         let k = k.trim();
@@ -2101,22 +2096,6 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
     let rest = (|| {
         if let Some(a) = patch.allow_public_networks {
             v.allow_public_networks = a;
-            // Turned off on a public network: the dashboard stops at once (not yet saved, so
-            // `network::blocked` would still see it allowed).
-            if !a && s.network.get().public && s.remote.stop() {
-                notice(&app, false, tr!("The web dashboard stopped: this is a public network."));
-            }
-        }
-        if let Some(r) = patch.remote {
-            if r.port < 1024 {
-                return Err(AppError::Invalid(tr!("Use a port from 1024 to 65535 for the web dashboard.")));
-            }
-            if r.enabled {
-                crate::remote::start(&app, r.port)?;
-            } else {
-                s.remote.stop();
-            }
-            v.remote = r;
         }
         s.db.save_settings(&v)
     })();
@@ -2137,37 +2116,12 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
     Ok(v)
 }
 
-// ---------- web dashboard ----------
+// ---------- network ----------
 
 /// Whether a Public network is connected (`network`); app://network sends changes.
 #[tauri::command]
 pub fn network_status(s: State<'_, App>) -> NetworkStatus {
     s.network.get()
-}
-
-/// Whether the web dashboard runs and its LAN address(es); never the PIN.
-#[tauri::command]
-pub fn remote_status(s: State<'_, App>) -> Result<RemoteStatus> {
-    crate::remote::status(&s)
-}
-
-/// The web dashboard's PIN (made on first use). `Locked` while the vault is.
-#[tauri::command]
-pub fn remote_pin(s: State<'_, App>) -> Result<String> {
-    crate::remote::pin(&s)
-}
-
-/// A new PIN; every device signed in to the web dashboard has to enter it again.
-#[tauri::command]
-pub fn remote_pin_regenerate(s: State<'_, App>) -> Result<String> {
-    crate::remote::regenerate(&s)
-}
-
-/// A new certificate for the web dashboard (it restarts if it runs); its fingerprint then.
-#[tauri::command]
-pub fn remote_new_certificate(app: AppHandle, s: State<'_, App>) -> Result<RemoteStatus> {
-    crate::remote::new_certificate(&app)?;
-    crate::remote::status(&s)
 }
 
 #[cfg(test)]

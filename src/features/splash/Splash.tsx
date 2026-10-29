@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { api } from "../../api";
 import "./splash.css";
 
-/** When the animation reaches the grow (79% of 3.8 s). */
-const GROW_MS = 3000;
+/** When the window grows: the animation settles at 3 s (79% of 3.8 s), then holds 2 s. */
+const GROW_MS = 3000 + 2000;
 /** Set once the splash has run: a webview reload doesn't play it again. */
 const KEY = "roalt.splash";
 
@@ -34,7 +34,7 @@ export function Splash() {
 
   useEffect(() => {
     if (state !== "play") return;
-    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    // Plays even with Windows' animation effects off (theme.css leaves the splash out).
     const grow = () => {
       try {
         sessionStorage.setItem(KEY, "1");
@@ -42,9 +42,9 @@ export function Splash() {
         // No storage: a reload plays it again.
       }
       // Fades once the window has grown, even if growing failed.
-      api.splashDone().finally(() => setState(reduced ? "gone" : "out"));
+      api.splashDone().finally(() => setState("out"));
     };
-    const t = setTimeout(grow, reduced ? 0 : GROW_MS);
+    const t = setTimeout(grow, GROW_MS);
     return () => clearTimeout(t);
   }, [state]);
 

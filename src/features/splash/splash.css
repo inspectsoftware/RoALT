@@ -1,5 +1,6 @@
 /* The start-up splash (Splash.tsx), from the approved design canvas: one 3.8 s timeline, every
-   layer keyed to the same percentages. The window grows at 79% (`splash_done`). */
+   layer keyed to the same percentages. It settles at 79% and holds; the window grows 2 s later
+   (`splash_done`), then the splash fades. */
 .splash {
   position: fixed;
   inset: 0;
@@ -21,7 +22,6 @@
   animation-duration: 3.8s;
   animation-fill-mode: both;
 }
-.splash .mark { animation-name: splash-mark; }
 .splash .logo { position: relative; width: 120px; height: 120px; }
 .splash .logo svg { position: absolute; inset: 0; }
 .splash .cube {
@@ -60,18 +60,18 @@
   animation-name: splash-scan;
 }
 
-@keyframes splash-mark {
-  0%, 79% { opacity: 1; transform: scale(1); }
-  85%, 100% { opacity: 0; transform: scale(1.06); }
-}
 @keyframes splash-tile {
   0%, 45% { transform: translate(-16.7px, -16.7px); }
   45.5%, 47% { transform: translate(-13px, -20px); }
   47.5%, 49% { transform: translate(-22px, -15px); }
   49.5%, 51% { transform: translate(-15px, -17px); }
   51.5%, 53% { transform: translate(-19px, -18px); }
-  53.5%, 61% { transform: translate(-16.7px, -16.7px); animation-timing-function: cubic-bezier(0.3, 1.4, 0.4, 1); }
-  74%, 100% { transform: translate(0, 0); }
+  53.5%, 64.4% { transform: translate(-16.7px, -16.7px); }
+  /* The teleport: paired stops snap instead of sliding. */
+  64.5%, 65.4% { transform: translate(-19px, -14px); }
+  65.5%, 66.4% { transform: translate(2px, -2px); }
+  66.5%, 67.4% { transform: translate(-1px, 1px); }
+  67.5%, 100% { transform: translate(0, 0); }
 }
 @keyframes splash-core {
   0%, 45% { opacity: 1; }
@@ -82,7 +82,10 @@
   51% { opacity: 0.4; }
   52% { opacity: 1; }
   53% { opacity: 0.15; }
-  54%, 100% { opacity: 1; }
+  54%, 64.4% { opacity: 1; }
+  64.5%, 65.4% { opacity: 0.15; }
+  65.5%, 66.4% { opacity: 0.6; }
+  66.5%, 100% { opacity: 1; }
 }
 @keyframes splash-red {
   0%, 24% { opacity: 0; transform: translate(0, 0); }
@@ -96,7 +99,10 @@
   49% { transform: translate(-14px, 0); }
   51% { transform: translate(4px, 3px); }
   53% { opacity: 0.9; transform: translate(-9px, -2px); }
-  54%, 100% { opacity: 0; transform: translate(0, 0); }
+  54%, 64.4% { opacity: 0; transform: translate(0, 0); }
+  64.5%, 65.4% { opacity: 0.9; transform: translate(-6px, 1px); }
+  65.5%, 66.4% { opacity: 0.7; transform: translate(4px, 0); }
+  66.5%, 100% { opacity: 0; transform: translate(0, 0); }
 }
 @keyframes splash-cyan {
   0%, 24% { opacity: 0; transform: translate(0, 0); }
@@ -110,7 +116,10 @@
   49% { transform: translate(13px, 1px); }
   51% { transform: translate(-5px, -2px); }
   53% { opacity: 0.9; transform: translate(10px, 2px); }
-  54%, 100% { opacity: 0; transform: translate(0, 0); }
+  54%, 64.4% { opacity: 0; transform: translate(0, 0); }
+  64.5%, 65.4% { opacity: 0.9; transform: translate(6px, -1px); }
+  65.5%, 66.4% { opacity: 0.7; transform: translate(-4px, 1px); }
+  66.5%, 100% { opacity: 0; transform: translate(0, 0); }
 }
 @keyframes splash-slice-a {
   0%, 45% { opacity: 0; transform: translateX(0); }
@@ -118,7 +127,9 @@
   47.5%, 49% { opacity: 1; transform: translateX(-10px); }
   49.5%, 51% { opacity: 0; }
   51.5%, 53% { opacity: 1; transform: translateX(24px); }
-  53.5%, 100% { opacity: 0; transform: translateX(0); }
+  53.5%, 65.4% { opacity: 0; transform: translateX(0); }
+  65.5%, 66.4% { opacity: 1; transform: translateX(-14px); }
+  66.5%, 100% { opacity: 0; transform: translateX(0); }
 }
 @keyframes splash-slice-b {
   0%, 46% { opacity: 0; transform: translateX(0); }
@@ -146,5 +157,9 @@
   49% { opacity: 0.6; }
   51% { opacity: 0.1; }
   53% { opacity: 0.45; }
-  54%, 100% { opacity: 0; }
+  54%, 64.4% { opacity: 0; }
+  64.5% { opacity: 0.5; }
+  65.5% { opacity: 0.2; }
+  66.5% { opacity: 0.4; }
+  67.5%, 100% { opacity: 0; }
 }

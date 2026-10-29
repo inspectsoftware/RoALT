@@ -753,8 +753,9 @@
   animation: drain 20s linear forwards;
 }
 
+/* Not the start-up splash: it plays whatever Windows' animation effects are set to. */
 @media (prefers-reduced-motion: reduce) {
-  *,
+  *:not(.splash, .splash *),
   ::before,
   ::after,
   ::backdrop {

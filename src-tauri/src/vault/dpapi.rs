@@ -12,7 +12,12 @@ use crate::error::{AppError, Result};
 pub const ENTROPY: &[u8] = b"RoALT/vault/v1";
 
 pub fn protect(data: &[u8]) -> Result<Vec<u8>> {
-    let (input, entropy) = (blob(data)?, blob(ENTROPY)?);
+    protect_with(data, ENTROPY)
+}
+
+/// `protect` with another entropy, so a blob made for one purpose can't stand in for another.
+pub fn protect_with(data: &[u8], entropy: &[u8]) -> Result<Vec<u8>> {
+    let (input, entropy) = (blob(data)?, blob(entropy)?);
     let mut out = CRYPT_INTEGER_BLOB::default();
     // SAFETY: the input blobs point at live slices DPAPI only reads; DPAPI fills `out`.
     unsafe {

@@ -1,12 +1,12 @@
 //! Anti-AFK. Roblox disconnects a player after 20 minutes without input (reason 267). Every
 //! `Settings.anti_afk.interval_min` minutes, each client in a game that hasn't opted out
-//! (`Instance.anti_afk`) gets one Space press, the way `Settings.anti_afk.mode` says:
+//! (`Instance.anti_afk`) gets one key press, the way `Settings.anti_afk.mode` says:
 //! - Focus: the client is brought to the front for a moment, gets the press through `SendInput`
-//!   (by scan code, as a keyboard sends it), and the window that was in front gets the focus
+//!   of Space (by scan code, as a keyboard sends it), and the window that was in front gets the focus
 //!   back. One client at a time, about 100 ms each. Only while nobody has touched the keyboard or
 //!   mouse for 5 s (`GetLastInputInfo`); otherwise it tries again 30 s later. Minimized clients
 //!   are skipped.
-//! - Background: WM_ACTIVATE, then WM_KEYDOWN/WM_KEYUP for Space are posted to the client's
+//! - Background: WM_ACTIVATE, then WM_KEYDOWN/WM_KEYUP for Tab are posted to the client's
 //!   window; the focus never moves, so it runs while the user is at the PC and in minimized
 //!   clients too. Roblox may not count posted input as activity in every game.
 //!
@@ -42,7 +42,9 @@ const RETRY: Duration = Duration::from_secs(30);
 const BETWEEN: Duration = Duration::from_millis(100);
 /// Space's set-1 scan code.
 const SPACE: u16 = 0x39;
-const VK_SPACE: usize = 0x20;
+/// Tab, for background mode: posted Space counts as activity less reliably than Tab.
+const TAB: u16 = 0x0F;
+const VK_TAB: usize = 0x09;
 
 /// A client anti-AFK may press keys in (`Tracker::afk_clients`).
 #[derive(Clone, Debug, PartialEq)]
@@ -199,22 +201,22 @@ fn press(hwnd: HWND) -> Pressed {
     }
 }
 
-/// Space posted to `hwnd` without touching the focus: WM_ACTIVATE(WA_ACTIVE) first, since a
+/// Tab posted to `hwnd` without touching the focus: WM_ACTIVATE(WA_ACTIVE) first, since a
 /// client that thinks it is in the background may drop keys, and WA_INACTIVE after unless it
 /// really is in front. False if Windows wouldn't queue the messages (window gone or hung).
 fn post_press(hwnd: HWND) -> bool {
     // lParam: repeat count 1, scan code in bits 16-23; key up also sets the previous-state and
     // transition bits (30, 31).
-    let down = LPARAM(1 | ((SPACE as isize) << 16));
+    let down = LPARAM(1 | ((TAB as isize) << 16));
     let up = LPARAM(down.0 | (1 << 30) | (1 << 31));
     // SAFETY: PostMessageW only queues a message to a top-level window handle; one that is gone
     // just fails. None of these messages carries a pointer.
     let post = |msg, w: usize, l: LPARAM| unsafe { PostMessageW(Some(hwnd), msg, WPARAM(w), l) }.is_ok();
     // SAFETY: reads which window is in front.
     let front = unsafe { GetForegroundWindow() } == hwnd;
-    let ok = (front || post(WM_ACTIVATE, WA_ACTIVE as usize, LPARAM(0))) && post(WM_KEYDOWN, VK_SPACE, down);
+    let ok = (front || post(WM_ACTIVATE, WA_ACTIVE as usize, LPARAM(0))) && post(WM_KEYDOWN, VK_TAB, down);
     sleep(Duration::from_millis(40));
-    let ok = ok && post(WM_KEYUP, VK_SPACE, up);
+    let ok = ok && post(WM_KEYUP, VK_TAB, up);
     if !front {
         post(WM_ACTIVATE, WA_INACTIVE as usize, LPARAM(0));
     }

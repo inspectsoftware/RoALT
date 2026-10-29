@@ -27,4 +27,8 @@ viaBootstrapper: boolean,
 /**
  * Something the user should know (expired share link, launch data left out).
  */
-warning: string | null, };
+warning: string | null, 
+/**
+ * This launch's own FPS cap, used instead of the account's and the default; None: those.
+ */
+fpsCap: number | null, };

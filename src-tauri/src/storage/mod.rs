@@ -1,7 +1,10 @@
-//! SQLite storage. One connection behind a mutex; every query is short.
+//! SQLite storage. One connection behind a mutex; every query is short. A database file is
+//! encrypted whole (`cipher`).
 // ponytail: queries run on the calling (tokio) thread; move to spawn_blocking if any grows slow.
 
-use std::path::Path;
+mod cipher;
+
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -33,6 +36,13 @@ pub struct AccountMeta {
 
 pub struct Db {
     conn: Mutex<Connection>,
+    /// The database file (its key is `cipher::read_key(file)`); None in memory.
+    file: Option<PathBuf>,
+}
+
+/// The key file beside a database: `roalt.db` → `roalt.db.key`.
+pub fn key_path(db: &Path) -> PathBuf {
+    cipher::beside(db, ".key")
 }
 
 /// A `favourites` row; `target` is the encrypted `LaunchTarget` JSON (link codes are bearer secrets).
@@ -73,21 +83,32 @@ const ACCOUNT_SELECT: &str = "SELECT a.id, a.user_id, a.username, a.display_name
 const GROUP_SELECT: &str = "SELECT id, name, color, sort_order FROM groups";
 
 impl Db {
-    /// Opens (creating if needed) and migrates. WAL, foreign keys on.
+    /// Opens (creating if needed) and migrates. Encrypted (`cipher`: a new database gets a new
+    /// key, a plain one from before is encrypted first), WAL, foreign keys on.
     pub fn open(path: &Path) -> Result<Db> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
+        cipher::resume(path)?;
+        let key = if key_path(path).exists() {
+            cipher::read_key(path)?
+        } else if path.exists() {
+            cipher::migrate(path)?
+        } else {
+            cipher::new_key(&key_path(path))?
+        };
         let conn = Connection::open(path)?;
+        cipher::unlock(&conn, &key)?;
+        drop(key);
         conn.execute_batch("PRAGMA journal_mode = WAL;")?;
-        Db::init(conn)
+        Db::init(conn, Some(path.to_owned()))
     }
 
     pub fn open_in_memory() -> Result<Db> {
-        Db::init(Connection::open_in_memory()?)
+        Db::init(Connection::open_in_memory()?, None)
     }
 
-    fn init(mut conn: Connection) -> Result<Db> {
+    fn init(mut conn: Connection, file: Option<PathBuf>) -> Result<Db> {
         conn.busy_timeout(Duration::from_secs(5))?;
         // secure_delete: freed pages (removed cookies, old key wraps) are zeroed, not left behind.
         conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON;")?;
@@ -100,16 +121,29 @@ impl Db {
         ])
             .to_latest(&mut conn)
             .map_err(|e| AppError::Storage(e.to_string()))?;
-        Ok(Db { conn: Mutex::new(conn) })
+        Ok(Db { conn: Mutex::new(conn), file })
     }
 
-    /// A consistent copy of the open database, written to `path` with `VACUUM INTO` (compacted:
-    /// no freed pages come along), then `then` with the database still locked, so nothing is
-    /// written to it after the copy meanwhile. Fails when `path` exists and isn't empty.
+    /// A consistent copy of the open database, written to `path` (compacted: no freed pages
+    /// come along) and encrypted with the same key, which goes beside it (`key_path`); then
+    /// `then` with the database still locked, so nothing is written to it after the copy
+    /// meanwhile. Fails when `path` exists.
     pub fn copy_to<T>(&self, path: &Path, then: impl FnOnce() -> Result<T>) -> Result<T> {
-        let path = path.to_str().ok_or_else(|| AppError::Invalid("That folder's name can't be used.".into()))?;
+        if path.exists() {
+            return Err(AppError::Invalid("That folder already has a RoALT database.".into()));
+        }
         let conn = self.conn();
-        conn.execute("VACUUM INTO ?1", [path])?;
+        match &self.file {
+            Some(file) => {
+                let key = cipher::read_key(file)?;
+                cipher::export(&conn, path, &key)?;
+                cipher::write_key(&key_path(path), &key)?;
+            }
+            None => {
+                let path = path.to_str().ok_or_else(|| AppError::Invalid("That folder's name can't be used.".into()))?;
+                conn.execute("VACUUM INTO ?1", [path])?;
+            }
+        }
         let out = then();
         drop(conn);
         out

@@ -166,7 +166,7 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
     setStep(n > 1 ? "Starting the batch…" : "Getting a ticket…");
     try {
       if (n > 1) {
-        await api.bulkLaunch({ accountIds: chosen.map((a) => a.id), target, delayMs, sameServer: "off", favouriteId: null });
+        await api.bulkLaunch({ accountIds: chosen.map((a) => a.id), target, delayMs, sameServer: "off", favouriteId: null, fpsCap: null });
         onBatch();
       } else launched(chosen[0], await api.launch(chosen[0].id, target));
     } catch (e) {

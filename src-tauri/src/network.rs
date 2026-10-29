@@ -1,0 +1,179 @@
+//! Public-network guard. Windows files every network as Public, Private or Domain (the user
+//! picks it when joining: a café or hotel Wi-Fi is Public). While a connected network with
+//! internet access is Public and `Settings.allow_public_networks` is off:
+//! - launches are refused (`blocked`, checked by `commands::launch_tracked`, so single launches,
+//!   batches, auto-rejoin, the tray and the web dashboard alike) and a running batch stops;
+//! - the web dashboard doesn't start, and stops when it runs;
+//! - a master-password vault locks (on joining such a network, not again while on it).
+//!
+//! Read through the Network List Manager every `TICK`. Only networks with internet access
+//! count: Hyper-V, WSL and VPN adapters are often filed Public but reach nothing.
+
+use std::sync::Mutex;
+use std::thread::sleep;
+use std::time::Duration;
+
+use tauri::{AppHandle, Emitter, Manager};
+use windows::Win32::Networking::NetworkListManager::{
+    INetworkListManager, NLM_CONNECTIVITY, NLM_CONNECTIVITY_IPV4_INTERNET, NLM_CONNECTIVITY_IPV6_INTERNET,
+    NLM_ENUM_NETWORK_CONNECTED, NLM_NETWORK_CATEGORY, NLM_NETWORK_CATEGORY_PUBLIC, NetworkListManager,
+};
+use windows::Win32::System::Com::{CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx};
+
+use crate::App;
+use crate::commands::notice;
+use crate::model::{NetworkStatus, VaultMode};
+
+const TICK: Duration = Duration::from_secs(10);
+
+/// The network status as last read (`App.network`).
+pub struct Network(Mutex<NetworkStatus>);
+
+impl Network {
+    pub fn new() -> Self {
+        Self(Mutex::new(scan()))
+    }
+
+    pub fn get(&self) -> NetworkStatus {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn set(&self, n: NetworkStatus) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = n;
+    }
+}
+
+/// One connected network as Windows files it.
+struct Seen {
+    name: String,
+    category: NLM_NETWORK_CATEGORY,
+    connectivity: NLM_CONNECTIVITY,
+}
+
+/// The first connected network that is Public and reaches the internet (pure).
+fn public_of(nets: &[Seen]) -> Option<&str> {
+    let internet = NLM_CONNECTIVITY_IPV4_INTERNET.0 | NLM_CONNECTIVITY_IPV6_INTERNET.0;
+    nets.iter().find(|n| n.category == NLM_NETWORK_CATEGORY_PUBLIC && n.connectivity.0 & internet != 0).map(|n| n.name.as_str())
+}
+
+/// Reads the connected networks; not public when Windows can't say (logged).
+pub fn scan() -> NetworkStatus {
+    match networks() {
+        Ok(nets) => NetworkStatus { public: public_of(&nets).map(str::to_owned) },
+        Err(e) => {
+            log::warn!("couldn't read the network category: {e}");
+            NetworkStatus { public: None }
+        }
+    }
+}
+
+fn networks() -> windows::core::Result<Vec<Seen>> {
+    // SAFETY: COM on this thread (S_FALSE: already initialised, also fine); the manager and
+    // the networks are COM objects released on drop.
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let nlm: INetworkListManager = CoCreateInstance(&NetworkListManager, None, CLSCTX_ALL)?;
+        let list = nlm.GetNetworks(NLM_ENUM_NETWORK_CONNECTED)?;
+        let mut out = Vec::new();
+        loop {
+            let mut one = [None];
+            let mut got = 0;
+            list.Next(&mut one, Some(&mut got))?;
+            let Some(net) = one[0].take().filter(|_| got == 1) else { break };
+            out.push(Seen {
+                name: net.GetName().map(|b| b.to_string()).unwrap_or_default(),
+                category: net.GetCategory()?,
+                connectivity: net.GetConnectivity()?,
+            });
+        }
+        Ok(out)
+    }
+}
+
+/// Why launching, or the web dashboard, isn't allowed now; None when it is.
+pub fn blocked(s: &App) -> Option<String> {
+    let name = s.network.get().public?;
+    if s.db.settings().is_ok_and(|v| v.allow_public_networks) {
+        return None;
+    }
+    Some(format!(
+        "You're on a public network ({name}). RoALT doesn't launch or serve the web dashboard there; join a private \
+         network, or allow public networks in Settings, Security."
+    ))
+}
+
+/// Runs for the app's lifetime on its own thread (COM calls block briefly).
+pub fn spawn(app: AppHandle) {
+    let started = std::thread::Builder::new().name("network".into()).spawn(move || {
+        let mut was = blocked(&app.state::<App>()).is_some();
+        loop {
+            sleep(TICK);
+            let s = app.state::<App>();
+            let now = scan();
+            if now != s.network.get() {
+                log::info!("network: {}", now.public.as_deref().map_or("not public".into(), |n| format!("public ({n})")));
+                s.network.set(now.clone());
+                let _ = app.emit("app://network", now);
+            }
+            let why = blocked(&s);
+            if let (false, Some(why)) = (was, &why) {
+                enforce(&app, why);
+            }
+            was = why.is_some();
+        }
+    });
+    if let Err(e) = started {
+        log::warn!("public-network guard not running: {e}");
+    }
+}
+
+/// Joined a public network: what runs stops (see the module docs).
+fn enforce(app: &AppHandle, why: &str) {
+    let s = app.state::<App>();
+    if let Some(batch) = s.bulk.current().filter(|b| !b.done) {
+        let _ = s.bulk.cancel(&batch.batch_id);
+    }
+    let dashboard = s.remote.stop();
+    let lock = s.vault.mode() == VaultMode::Master && !s.vault.is_locked();
+    if lock {
+        crate::commands::lock_vault(app);
+    }
+    if dashboard || lock {
+        let mut done = Vec::new();
+        if dashboard {
+            done.push("the web dashboard stopped");
+        }
+        if lock {
+            done.push("the vault locked");
+        }
+        notice(app, true, format!("{why} Meanwhile {}.", done.join(" and ")));
+    }
+    log::info!("public network: launches blocked{}", if lock { ", vault locked" } else { "" });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::Networking::NetworkListManager::{
+        NLM_CONNECTIVITY_DISCONNECTED, NLM_CONNECTIVITY_IPV4_LOCALNETWORK, NLM_NETWORK_CATEGORY_PRIVATE,
+    };
+
+    fn net(name: &str, category: NLM_NETWORK_CATEGORY, connectivity: NLM_CONNECTIVITY) -> Seen {
+        Seen { name: name.into(), category, connectivity }
+    }
+
+    #[test]
+    fn only_public_networks_with_internet_count() {
+        let home = net("Home", NLM_NETWORK_CATEGORY_PRIVATE, NLM_CONNECTIVITY_IPV4_INTERNET);
+        let hyperv = net("Unidentified network", NLM_NETWORK_CATEGORY_PUBLIC, NLM_CONNECTIVITY_IPV4_LOCALNETWORK);
+        let cafe = net("Cafe", NLM_NETWORK_CATEGORY_PUBLIC, NLM_CONNECTIVITY_IPV6_INTERNET);
+        let gone = net("Old", NLM_NETWORK_CATEGORY_PUBLIC, NLM_CONNECTIVITY_DISCONNECTED);
+        assert_eq!(public_of(&[]), None);
+        assert_eq!(public_of(&[home, hyperv, gone]), None);
+        let home = net("Home", NLM_NETWORK_CATEGORY_PRIVATE, NLM_CONNECTIVITY_IPV4_INTERNET);
+        assert_eq!(public_of(&[home, cafe]), Some("Cafe"));
+        // Both IPv4 and IPv6 internet bits.
+        let both = net("Hotel", NLM_NETWORK_CATEGORY_PUBLIC, NLM_CONNECTIVITY(NLM_CONNECTIVITY_IPV4_INTERNET.0 | NLM_CONNECTIVITY_IPV6_INTERNET.0));
+        assert_eq!(public_of(&[both]), Some("Hotel"));
+    }
+}

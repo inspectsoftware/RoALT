@@ -234,6 +234,8 @@ pub struct Settings {
     pub fps_cap: u32,
     /// The LAN web dashboard (`remote`); its PIN is in the vault, not here.
     pub remote: RemoteAccess,
+    /// Launch and serve the web dashboard on a Public network too (`network`); off: refused.
+    pub allow_public_networks: bool,
 }
 
 /// The LAN web dashboard: served on every network address at `port` while `enabled` and the
@@ -254,13 +256,24 @@ impl Default for RemoteAccess {
 }
 
 /// The web dashboard as the UI shows it (`remote_status`); never its PIN.
+/// The network RoALT runs on (`network`).
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct NetworkStatus {
+    /// The name of a connected Public network with internet access; None: not on one.
+    pub public: Option<String>,
+}
+
 #[derive(Serialize, TS, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct RemoteStatus {
     pub running: bool,
-    /// Where other devices open it: this PC's LAN address(es).
+    /// Where other devices open it: this PC's LAN address(es), https://.
     pub urls: Vec<String>,
+    /// Its certificate's SHA-256 fingerprint (colon hex); None until the first start.
+    pub fingerprint: Option<String>,
 }
 
 /// The memory throttle: a client whose private memory is over `mb` at a 10 s sample gets at
@@ -283,7 +296,7 @@ impl Default for MemThrottle {
 }
 
 /// Anti-AFK: every `interval_min` (1..=19) minutes each client in a game that hasn't opted out
-/// gets a Space key press (`instances::afk`), the way `mode` says.
+/// gets a key press (`instances::afk`), the way `mode` says.
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", default)]
 #[ts(export)]
@@ -299,7 +312,7 @@ impl Default for AntiAfk {
     }
 }
 
-/// How anti-AFK presses Space.
+/// How anti-AFK presses a key.
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 #[ts(export)]
@@ -308,7 +321,7 @@ pub enum AfkMode {
     /// while the user is away, never in minimized clients.
     #[default]
     Focus,
-    /// Posts the key to the client's window without changing the focus, also while the user is
+    /// Posts Tab to the client's window without changing the focus, also while the user is
     /// at the PC and in minimized clients. Roblox may ignore posted input in some games.
     Background,
 }
@@ -375,7 +388,7 @@ impl Default for Settings {
             auto_lock_minutes: 15,
             clipboard_clear_seconds: 30,
             cache_minutes: 10,
-            multi_instance: false,
+            multi_instance: true,
             protect_shared_login: true,
             launch_delay_ms: 6_000,
             auto_rejoin: false,
@@ -401,6 +414,7 @@ impl Default for Settings {
             clean_logs: false,
             fps_cap: 0,
             remote: RemoteAccess::default(),
+            allow_public_networks: false,
         }
     }
 }
@@ -471,6 +485,8 @@ pub struct SettingsPatch {
     pub fps_cap: Option<u32>,
     #[ts(optional)]
     pub remote: Option<RemoteAccess>,
+    #[ts(optional)]
+    pub allow_public_networks: Option<bool>,
 }
 
 /// What a Roblox log clean-up deleted (`logs_clean`).
@@ -706,6 +722,8 @@ pub struct LaunchInfo {
     pub via_bootstrapper: bool,
     /// Something the user should know (expired share link, launch data left out).
     pub warning: Option<String>,
+    /// This launch's own FPS cap, used instead of the account's and the default; None: those.
+    pub fps_cap: Option<u32>,
     /// Start time of `pid` (Unix s, 0: already gone), so a reused PID is never taken for it.
     #[serde(skip)]
     #[ts(skip)]
@@ -757,6 +775,8 @@ pub struct Instance {
     /// Its window was made small by RoALT (`instance_micro`, `instances_tile`); "Normal size"
     /// puts it back.
     pub micro: bool,
+    /// The FPS cap its launch asked for (`LaunchInfo::fps_cap`); a rejoin uses it again.
+    pub fps_cap: Option<u32>,
 }
 
 /// What Windows holds one client to (instances::limits). Lasts as long as the client.
@@ -850,6 +870,10 @@ pub struct BulkRequest {
     pub same_server: SameServer,
     /// Marked as used once the first client starts.
     pub favourite_id: Option<i64>,
+    /// FPS cap for each of these launches, instead of each account's and the default; None:
+    /// those.
+    #[serde(default)]
+    pub fps_cap: Option<u32>,
 }
 
 /// One account's progress. After `Starting` it mirrors its client (`Instance`).

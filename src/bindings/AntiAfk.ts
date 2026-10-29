@@ -3,6 +3,6 @@ import type { AfkMode } from "./AfkMode";
 
 /**
  * Anti-AFK: every `interval_min` (1..=19) minutes each client in a game that hasn't opted out
- * gets a Space key press (`instances::afk`), the way `mode` says.
+ * gets a key press (`instances::afk`), the way `mode` says.
  */
 export type AntiAfk = { enabled: boolean, intervalMin: number, mode: AfkMode, };

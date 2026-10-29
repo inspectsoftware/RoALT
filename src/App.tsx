@@ -15,7 +15,9 @@ import { draftFor, EMPTY_DRAFT, type Draft } from "./features/launch/target";
 import { MonitorView } from "./features/monitor/MonitorView";
 import { ServersView } from "./features/servers/ServersView";
 import { SettingsView, SETTINGS_SECTIONS } from "./features/settings/SettingsView";
+import { Splash } from "./features/splash/Splash";
 import { UpdateBanner } from "./features/settings/UpdateBanner";
+import { PublicNetworkBanner } from "./features/settings/PublicNetworkBanner";
 import { UnlockScreen, type LockReason } from "./features/vault/UnlockScreen";
 import { Icon } from "./ui/Icon";
 import { Divider, usePanelWidth } from "./ui/Resizer";
@@ -30,6 +32,7 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <Root />
       <Toaster />
+      <Splash />
     </QueryClientProvider>
   );
 }
@@ -70,6 +73,7 @@ function Root() {
       }),
       events.onBulkProgress((p) => qc.setQueryData(qk.bulk, p)),
       events.onRobloxClient((c) => qc.setQueryData(qk.client, c)),
+      events.onNetwork((n) => qc.setQueryData(qk.network, n)),
       events.onAppUpdate((u) => qc.setQueryData(qk.appUpdate, u)),
       // Errors stay until dismissed: the window may have been hidden in the tray.
       events.onNotice((n) => toast(n.message, n.error ? "error" : "ok", n.error)),
@@ -117,6 +121,7 @@ function Root() {
         onRefresh={unlocked ? refresh : undefined}
       />
       {unlocked && s && !failed && <UpdateBanner />}
+      {s && !failed && <PublicNetworkBanner settings={s} />}
       {failed ? (
         <div className="flex-1 grid place-items-center p-8">
           <div className="flex flex-col items-start gap-3 max-w-sm">

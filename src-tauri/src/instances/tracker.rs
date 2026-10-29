@@ -147,6 +147,7 @@ impl Tracker {
             afk_at: None,
             throttled: false,
             micro: false,
+            fps_cap: info.fps_cap,
         };
         self.entries().push(Entry {
             inst: inst.clone(),
@@ -874,7 +875,7 @@ mod tests {
     }
 
     fn info(pid: u32, started_at: i64, via_bootstrapper: bool) -> LaunchInfo {
-        LaunchInfo { account_id: 1, pid, browser_tracker_id: BTID, place_id: Some(1818), started_at, via_bootstrapper, warning: None, pid_start: None }
+        LaunchInfo { account_id: 1, pid, browser_tracker_id: BTID, place_id: Some(1818), started_at, via_bootstrapper, warning: None, fps_cap: None, pid_start: None }
     }
 
     fn target() -> LaunchTarget {

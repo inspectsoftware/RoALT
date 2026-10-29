@@ -2,27 +2,47 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Keyboar
 import { useQuery } from "@tanstack/react-query";
 import { api, type AccountSummary, type ClientMetrics, type Instance, type Limits, type WindowShow } from "../../api";
 import { qk, queryClient, useInstances, useMetrics, useSettings } from "../../data";
+import { Segmented } from "../../ui/controls";
 import { Icon, type IconName } from "../../ui/Icon";
 import { toast, toastError } from "../../ui/Toast";
 import { accountName, Avatar, plural } from "../accounts/shared";
 import { isRunning, KillAllButton, STATES, uptime, useNow } from "../launch/Running";
 import { mb, pct } from "../monitor/MonitorView";
 
-/** A picture is asked for this often per card, one at a time. */
-const THUMB_MS = 2000;
 const CAPS = [0, 50, 25, 10, 5];
+/** Live preview frame rates; the choice is remembered on this PC. */
+const PREVIEW_FPS = [15, 30, 60] as const;
+type PreviewFps = (typeof PREVIEW_FPS)[number];
+const FPS_KEY = "roalt.previewFps";
+/** How often a hidden RoALT window looks again whether it is shown. */
+const HIDDEN_MS = 500;
 
-/** Draws the client's window on `canvas` every 2 s while the RoALT window is visible and
- * focused; true / false once it is known whether there is a picture (false: minimized or no
- * window yet), null before. */
-function useThumbnail(id: string, canvas: React.RefObject<HTMLCanvasElement | null>) {
+function storedFps(): PreviewFps {
+  try {
+    const n = Number(localStorage.getItem(FPS_KEY));
+    return PREVIEW_FPS.find((f) => f === n) ?? 15;
+  } catch {
+    return 15;
+  }
+}
+
+/** Draws the client's window on `canvas` `fps` times a second while the RoALT window is
+ * visible, one picture in flight at a time (a slow capture lowers the rate, never queues);
+ * true / false once it is known whether there is a picture (false: minimized or no window
+ * yet), null before. */
+// ponytail: a fresh PrintWindow and an uncompressed RGBA frame each time (~0.7 MB at 480 px);
+// cache the GDI objects per window or switch to Windows.Graphics.Capture if many clients at 60 FPS lag.
+function useThumbnail(id: string, canvas: React.RefObject<HTMLCanvasElement | null>, fps: PreviewFps) {
   const [shown, setShown] = useState<boolean | null>(null);
   useEffect(() => {
     let stop = false;
     let timer: number | undefined;
+    const every = 1000 / fps;
     const tick = async () => {
+      const started = performance.now();
       const el = canvas.current;
-      if (el && document.visibilityState === "visible" && document.hasFocus()) {
+      const visible = document.visibilityState === "visible";
+      if (el && visible) {
         try {
           const buf = await api.instanceThumbnail(id, Math.min(480, Math.max(160, Math.round(el.clientWidth * devicePixelRatio))));
           if (stop) return;
@@ -30,8 +50,9 @@ function useThumbnail(id: string, canvas: React.RefObject<HTMLCanvasElement | nu
           else {
             const head = new DataView(buf);
             const [w, h] = [head.getUint32(0, true), head.getUint32(4, true)];
-            el.width = w;
-            el.height = h;
+            // Resizing clears the canvas and costs a reallocation: only when the size changes.
+            if (el.width !== w) el.width = w;
+            if (el.height !== h) el.height = h;
             el.getContext("2d")?.putImageData(new ImageData(new Uint8ClampedArray(buf, 8, w * h * 4), w, h), 0, 0);
             setShown(true);
           }
@@ -39,14 +60,14 @@ function useThumbnail(id: string, canvas: React.RefObject<HTMLCanvasElement | nu
           // Ended or not started: the card goes with the next instances list.
         }
       }
-      if (!stop) timer = window.setTimeout(tick, THUMB_MS);
+      if (!stop) timer = window.setTimeout(tick, visible ? Math.max(0, every - (performance.now() - started)) : HIDDEN_MS);
     };
     void tick();
     return () => {
       stop = true;
       clearTimeout(timer);
     };
-  }, [id, canvas]);
+  }, [id, canvas, fps]);
   return shown;
 }
 
@@ -59,16 +80,17 @@ function GameName({ placeId }: { placeId: number | null }) {
 }
 
 /** One running client: its live picture, who, where, how long and what it uses. */
-function ClientCard({ inst: i, account: a, metrics: m, now, afkOn, onMenu }: {
+function ClientCard({ inst: i, account: a, metrics: m, now, afkOn, fps, onMenu }: {
   inst: Instance;
   account: AccountSummary | undefined;
   metrics: ClientMetrics | undefined;
   now: number;
   afkOn: boolean;
+  fps: PreviewFps;
   onMenu: (at: MenuAt) => void;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
-  const shown = useThumbnail(i.id, canvas);
+  const shown = useThumbnail(i.id, canvas, fps);
   const name = a ? accountName(a) : `Account ${i.accountId}`;
   const [label, color] = STATES[i.state];
   const focus = () => api.instanceShow(i.id, "focus").catch(toastError);
@@ -78,7 +100,8 @@ function ClientCard({ inst: i, account: a, metrics: m, now, afkOn, onMenu }: {
     ...(i.limits.eco ? [["Efficiency"] as [string]] : []),
     ...(afkOn && i.antiAfk ? [["Anti-AFK", i.afkAt !== null ? `Last key press ${uptime(i.afkAt, now)} ago` : "No key press yet"] as [string, string]] : []),
     ...(i.micro ? [["Micro"] as [string]] : []),
-    ...(a?.fpsCap ? [[`${a.fpsCap} FPS`, "This account's FPS cap, set when its client starts"] as [string, string]] : []),
+    ...(i.fpsCap ? [[`${i.fpsCap} FPS`, "This launch's FPS cap, set when its client started"] as [string, string]]
+      : a?.fpsCap ? [[`${a.fpsCap} FPS`, "This account's FPS cap, set when its client starts"] as [string, string]] : []),
 
   ];
   return (
@@ -274,6 +297,15 @@ export function DashboardView({ accounts, onLaunch }: { accounts: AccountSummary
   const [menu, setMenu] = useState<MenuAt | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
   const [busy, setBusy] = useState(false);
+  const [fps, setFpsState] = useState(storedFps);
+  const setFps = (f: PreviewFps) => {
+    setFpsState(f);
+    try {
+      localStorage.setItem(FPS_KEY, String(f));
+    } catch {
+      // No storage: this view keeps the choice until it closes.
+    }
+  };
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const byInst = new Map(metrics.map((m) => [m.instanceId, m]));
   const inGame = running.filter((i) => i.state === "inGame").length;
@@ -324,6 +356,9 @@ export function DashboardView({ accounts, onLaunch }: { accounts: AccountSummary
             <Icon name="refresh" size={12} />
             Refresh
           </button>
+          <span title="How often each live preview is redrawn. Higher rates use more CPU, more so with many clients.">
+            <Segmented label="Preview frame rate" mono value={fps} options={PREVIEW_FPS.map((f) => ({ value: f, label: `${f} FPS` }))} onChange={setFps} />
+          </span>
           <span className="mono ml-auto text-xs text-dim" style={{ fontVariantNumeric: "tabular-nums" }}>
             {running.length} running · {inGame} in game · CPU {pct(cpu)} · {mb(mem)}
           </span>
@@ -340,12 +375,12 @@ export function DashboardView({ accounts, onLaunch }: { accounts: AccountSummary
         ) : (
           <div className="grid gap-3 mt-5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))" }}>
             {running.map((i) => (
-              <ClientCard key={i.id} inst={i} account={byId.get(i.accountId)} metrics={byInst.get(i.id)} now={now} afkOn={afkOn} onMenu={setMenu} />
+              <ClientCard key={i.id} inst={i} account={byId.get(i.accountId)} metrics={byInst.get(i.id)} now={now} afkOn={afkOn} fps={fps} onMenu={setMenu} />
             ))}
           </div>
         )}
         <p className="text-xs text-dim mt-6 max-w-[720px]">
-          Pictures update every 2 seconds while RoALT is in front; a minimized client draws nothing. Micro window asks Roblox for a
+          Previews play live at the frame rate picked above while RoALT is on screen; a minimized client draws nothing. Micro window asks Roblox for a
           320 × 240 window; Roblox may keep it bigger. Anti-AFK skips minimized clients.
         </p>
       </div>

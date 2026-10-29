@@ -133,12 +133,12 @@ fn args_for(s: &App, account_id: i64) -> Result<Vec<String>> {
 /// One launch: resolve → `client-assertion` (failure ignored) → `authentication-ticket` →
 /// URI with a fresh `browsertrackerid` → start the client (`client::find` + `client::start`,
 /// with the account's or the default launch arguments after the URI). Just before the client
-/// starts, the account's or the default FPS cap goes into Roblox's flag file (`fps`, put back
+/// starts, `fps_cap`, else the account's or the default FPS cap, goes into Roblox's flag file (`fps`, put back
 /// once the client has loaded its flags, `fps::wait_until_read`; launches wait for each other
 /// meanwhile), unless a
 /// bootstrapper manages the client (logged).
 /// `AppError::Locked` when the vault is locked; cookie errors as the API client maps them.
-pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget) -> Result<LaunchInfo> {
+pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget, fps_cap: Option<u32>) -> Result<LaunchInfo> {
     let cookie = account_cookie(s, account_id)?;
     // Before any network call: no ticket is fetched when Roblox isn't installed or the
     // arguments are refused.
@@ -149,7 +149,7 @@ pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget) -> Result<L
     let ticket = s.api.authentication_ticket(account_id, &cookie, assertion.as_ref()).await?;
     let (browser_tracker_id, started_at) = (uri::new_browser_tracker_id(), crate::commands::now_ms());
     let place = uri::PlaceLaunch { join: &join, browser_tracker_id, join_attempt_id: Uuid::new_v4() };
-    let fps = match s.db.account(account_id)?.fps_cap {
+    let fps = match fps_cap.or(s.db.account(account_id)?.fps_cap) {
         Some(own) => own,
         None => s.db.settings()?.fps_cap,
     };
@@ -182,6 +182,7 @@ pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget) -> Result<L
         started_at,
         via_bootstrapper: exe.bootstrapper,
         warning: warning.map(str::to_owned),
+        fps_cap,
         pid_start: Some(pid_start),
     })
 }

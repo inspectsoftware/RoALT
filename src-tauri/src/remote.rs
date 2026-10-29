@@ -1,6 +1,10 @@
-//! The LAN web dashboard (opt-in, `Settings.remote`): a small HTTP server on every network
+//! The LAN web dashboard (opt-in, `Settings.remote`): a small HTTPS server on every network
 //! address, for a phone or another PC to see the clients and launch or close them.
 //!
+//! - HTTPS only (TLS 1.2+, rustls), with a self-signed certificate made by RoALT (ECDSA P-256,
+//!   for this PC's LAN address and localhost; a new one each year, when the address changes or
+//!   on "New certificate"). Its private key is kept in the vault (`CERT_AAD`); its SHA-256
+//!   fingerprint shows in Settings, to check against the browser's warning on first visit.
 //! - A random 8-digit PIN, kept in the vault (AES-GCM, `PIN_AAD`) and never logged. The login
 //!   page trades it for a session cookie (HttpOnly, SameSite=Strict) holding a random token
 //!   made at each start; regenerating the PIN makes a new one too, signing every device out.
@@ -31,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, Manager};
 use tokio::sync::oneshot;
+use zeroize::Zeroizing;
 
 use crate::App;
 use crate::commands::now_ms;
@@ -56,6 +61,23 @@ const PAGE: &str = include_str!("remote.html");
 const CSP: &str = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; \
                    img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
 const LOCKED: &str = "Unlock the vault first: the web dashboard only runs while it is open.";
+/// AAD for the certificate's private key.
+const CERT_AAD: &[u8] = b"roalt.remote.cert";
+/// The settings-table row holding the certificate (`StoredCert` JSON).
+const CERT_ROW: &str = "remote_cert";
+const YEAR_MS: i64 = 365 * 86_400_000;
+
+/// The dashboard's certificate as stored: the certificate itself is public (hex DER), its key
+/// vault-encrypted (hex).
+#[derive(Serialize, Deserialize)]
+struct StoredCert {
+    cert: String,
+    key: String,
+    /// The LAN address it was made for.
+    ip: Option<Ipv4Addr>,
+    /// Unix ms after which a new one is made.
+    renew_at: i64,
+}
 
 /// The server while it runs; dropping it (its `stop`) shuts the server down.
 struct Running {
@@ -210,14 +232,83 @@ fn new_token() -> Secret {
     Secret::new(hex(&random_bytes::<32>()))
 }
 
+/// A new self-signed certificate for `ip` (when known), 127.0.0.1 and localhost: its DER and
+/// its private key's DER (PKCS#8).
+fn make_cert(ip: Option<Ipv4Addr>) -> Result<(Vec<u8>, Zeroizing<Vec<u8>>)> {
+    use rcgen::{CertificateParams, DnType, KeyPair, SanType, date_time_ymd};
+    let bad = |e: rcgen::Error| AppError::Internal(format!("couldn't make the dashboard's certificate: {e}"));
+    let mut p = CertificateParams::new(vec!["localhost".to_owned()]).map_err(bad)?;
+    p.subject_alt_names.push(SanType::IpAddress(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+    if let Some(ip) = ip {
+        p.subject_alt_names.push(SanType::IpAddress(IpAddr::V4(ip)));
+    }
+    p.distinguished_name.push(DnType::CommonName, "RoALT web dashboard");
+    // Whole years around now; RoALT itself renews it after a year (`StoredCert::renew_at`).
+    let year = i32::try_from(1970 + now_ms() / 31_556_952_000).unwrap_or(2026);
+    p.not_before = date_time_ymd(year - 1, 1, 1);
+    p.not_after = date_time_ymd(year + 2, 1, 1);
+    let key = KeyPair::generate().map_err(bad)?;
+    let cert = p.self_signed(&key).map_err(bad)?;
+    Ok((cert.der().to_vec(), Zeroizing::new(key.serialize_der())))
+}
+
+fn stored_cert(s: &App) -> Result<Option<StoredCert>> {
+    Ok(s.db.setting_value(CERT_ROW)?.and_then(|j| serde_json::from_str(&j).ok()))
+}
+
+/// The certificate and its key for serving now: the stored one while it is for this LAN
+/// address and not due for renewal, else a new one (stored). `Locked` while the vault is.
+fn cert(s: &App) -> Result<(Vec<u8>, Zeroizing<Vec<u8>>)> {
+    let ip = lan_ip();
+    if let Some(c) = stored_cert(s)?.filter(|c| c.ip == ip && now_ms() < c.renew_at) {
+        let opened = unhex(&c.cert).zip(unhex(&c.key)).ok_or(AppError::Crypto).and_then(|(cert, key)| {
+            Ok((cert, s.vault.decrypt(CERT_AAD, &key)?))
+        });
+        match opened {
+            Err(AppError::Crypto) => {}
+            r => return r,
+        }
+    }
+    let (cert, key) = make_cert(ip)?;
+    let stored = StoredCert { cert: hex(&cert), key: hex(&s.vault.encrypt(CERT_AAD, &key)?), ip, renew_at: now_ms() + YEAR_MS };
+    let json = serde_json::to_string(&stored).map_err(|e| AppError::Internal(e.to_string()))?;
+    s.db.set_setting_value(CERT_ROW, Some(&json))?;
+    log::info!("web dashboard: new certificate {}", fingerprint(&cert));
+    Ok((cert, key))
+}
+
+/// SHA-256 of a certificate, as browsers show it: upper-case hex pairs joined by colons (pure).
+fn fingerprint(cert_der: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(cert_der).iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(":")
+}
+
+/// Forgets the certificate and makes a new one; a running server restarts with it (browsers
+/// warn again, with the new fingerprint).
+pub fn new_certificate(app: &AppHandle) -> Result<()> {
+    let s = app.state::<App>();
+    if s.vault.is_locked() {
+        return Err(AppError::Locked);
+    }
+    s.db.set_setting_value(CERT_ROW, None)?;
+    match s.remote.port() {
+        Some(port) => {
+            s.remote.stop();
+            start(app, port)
+        }
+        None => cert(&s).map(drop),
+    }
+}
+
 /// Whether it runs, and where other devices reach it.
 pub fn status(s: &App) -> Result<RemoteStatus> {
     let port = match s.remote.port() {
         Some(p) => p,
         None => s.db.settings()?.remote.port,
     };
-    let urls = lan_ip().map(|ip| format!("http://{ip}:{port}")).into_iter().collect();
-    Ok(RemoteStatus { running: s.remote.port().is_some(), urls })
+    let urls = lan_ip().map(|ip| format!("https://{ip}:{port}")).into_iter().collect();
+    let fingerprint = stored_cert(s)?.and_then(|c| unhex(&c.cert)).map(|der| fingerprint(&der));
+    Ok(RemoteStatus { running: s.remote.port().is_some(), urls, fingerprint })
 }
 
 /// This PC's address on the network it reaches others through (connecting a UDP socket sends
@@ -239,10 +330,14 @@ pub fn start(app: &AppHandle, port: u16) -> Result<()> {
     if s.vault.is_locked() {
         return Err(AppError::Invalid(LOCKED.into()));
     }
+    if let Some(why) = crate::network::blocked(&s) {
+        return Err(AppError::Invalid(why));
+    }
     if s.remote.port() == Some(port) {
         return Ok(());
     }
     let pin = stored_pin(&s)?;
+    let (cert_der, key_der) = cert(&s)?;
     let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).map_err(|e| match e.kind() {
         ErrorKind::AddrInUse => AppError::Invalid(format!("Port {port} is in use by another app. Pick another port.")),
         ErrorKind::PermissionDenied => AppError::Invalid(format!("Windows won't let RoALT use port {port}. Pick another port.")),
@@ -252,14 +347,22 @@ pub fn start(app: &AppHandle, port: u16) -> Result<()> {
     let (stop, stopped) = oneshot::channel::<()>();
     *s.remote.guard() = Some(Running { port, pin, token: new_token(), _stop: stop });
     let router = routes(app.clone());
+    // One crypto provider for the whole process.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     tauri::async_runtime::spawn(async move {
         let served = async {
-            let listener = tokio::net::TcpListener::from_std(listener)?;
-            axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
-                // Ends when `Running` (its sender) is dropped: stopped or replaced.
-                .with_graceful_shutdown(async {
-                    let _ = stopped.await;
-                })
+            let tls = axum_server::tls_rustls::RustlsConfig::from_der(vec![cert_der], key_der.to_vec()).await?;
+            drop(key_der);
+            let handle = axum_server::Handle::new();
+            let stopper = handle.clone();
+            // Ends when `Running` (its sender) is dropped: stopped or replaced.
+            tokio::spawn(async move {
+                let _ = stopped.await;
+                stopper.graceful_shutdown(Some(Duration::from_secs(1)));
+            });
+            axum_server::from_tcp_rustls(listener, tls)
+                .handle(handle)
+                .serve(router.into_make_service_with_connect_info::<SocketAddr>())
                 .await
         };
         if let Err(e) = served.await {
@@ -301,6 +404,7 @@ async fn harden(mut r: Response) -> Response {
         (header::REFERRER_POLICY, "no-referrer"),
         (header::X_FRAME_OPTIONS, "DENY"),
         (header::CONTENT_SECURITY_POLICY, CSP),
+        (header::STRICT_TRANSPORT_SECURITY, "max-age=31536000"),
     ] {
         h.insert(k, HeaderValue::from_static(v));
     }
@@ -385,7 +489,7 @@ async fn login(State(app): State<AppHandle>, ConnectInfo(peer): ConnectInfo<Sock
     }
     drop(fails);
     log::info!("web dashboard: {ip} signed in");
-    let cookie = format!("{COOKIE}={}; HttpOnly; SameSite=Strict; Path=/; Max-Age={}", token.expose(), COOKIE_DAYS * 86_400);
+    let cookie = format!("{COOKIE}={}; Secure; HttpOnly; SameSite=Strict; Path=/; Max-Age={}", token.expose(), COOKIE_DAYS * 86_400);
     ([(header::SET_COOKIE, cookie)], Json(json!({}))).into_response()
 }
 
@@ -489,6 +593,7 @@ async fn launch(State(app): State<AppHandle>, ConnectInfo(peer): ConnectInfo<Soc
             delay_ms: s.db.settings()?.launch_delay_ms,
             same_server: SameServer::Off,
             favourite_id: None,
+            fps_cap: None,
         };
         let id = crate::launcher::bulk::start(app.clone(), req)?;
         log::info!("web dashboard: {} launched {n} account(s)", peer.ip());

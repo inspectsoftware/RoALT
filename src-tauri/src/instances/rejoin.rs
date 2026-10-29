@@ -35,7 +35,7 @@ static RECENT: Mutex<Vec<(i64, VecDeque<Instant>)>> = Mutex::new(Vec::new());
 /// or the account has another client starting, joining or in game; give up (note "Gave up
 /// after N ...", error notice) when the breaker trips; else close the old client if it still
 /// runs (graceful for `close_grace_s`, then forced; marked as closed by RoALT), then
-/// `commands::launch_tracked(account, target, no favourite)` and
+/// `commands::launch_tracked(account, target, no favourite, the old client's FPS cap)` and
 /// `tracker.set_rejoins(new id, r.rejoins)`. A failed launch is an `app://notice` (error) and
 /// is not retried here (its client never started, so it can't end unexpectedly).
 pub fn handle(app: &AppHandle, rejoins: Vec<Rejoin>) {
@@ -133,7 +133,9 @@ async fn rejoin(app: &AppHandle, r: Rejoin, user_id: Option<i64>) {
     if s.bulk.kills() != kills {
         return;
     }
-    match commands::launch_tracked(app, &s, r.account_id, r.target, None, None).await {
+    // The launch's own FPS cap carries over.
+    let fps_cap = s.tracker.get(&r.from).and_then(|i| i.fps_cap);
+    match commands::launch_tracked(app, &s, r.account_id, r.target, None, None, fps_cap).await {
         Ok((_, inst)) => {
             s.tracker.set_rejoins(&inst.id, r.rejoins);
             commands::instances_changed(app);

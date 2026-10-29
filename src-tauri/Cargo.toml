@@ -24,8 +24,12 @@ serde_json = "1"
 thiserror = "2"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
 axum = { version = "0.8", default-features = false, features = ["tokio", "http1", "json"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rcgen = "0.14"
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+sha2 = "0.10"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "charset", "json"] }
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+rusqlite = { version = "0.40.2", features = ["bundled-sqlcipher-vendored-openssl"] }
 rusqlite_migration = "2.6"
 aes-gcm = { version = "0.11", features = ["zeroize"] }
 argon2 = { version = "0.6", features = ["zeroize"] }
@@ -39,12 +43,14 @@ ts-rs = "12"
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
+  "Win32_Networking_NetworkListManager",
   "Win32_Storage_Xps",
   "Win32_Security",
   "Win32_Security_Cryptography",
   "Win32_Security_Cryptography_Catalog",
   "Win32_Security_Cryptography_Sip",
   "Win32_Security_WinTrust",
+  "Win32_System_Com",
   "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_JobObjects",
   "Win32_System_ProcessStatus",

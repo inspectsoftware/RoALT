@@ -639,7 +639,7 @@ pub async fn user_lookup(s: State<'_, App>, name: String) -> Result<UserRef> {
 }
 
 /// Launches one account and starts following its client. `favourite_id` marks that
-/// favourite as used.
+/// favourite as used; `fps_cap` is this launch's own (`launch_fps`).
 #[tauri::command]
 pub async fn launch(
     app: AppHandle,
@@ -647,10 +647,12 @@ pub async fn launch(
     account_id: i64,
     target: LaunchTarget,
     favourite_id: Option<i64>,
+    fps_cap: Option<u32>,
 ) -> Result<LaunchInfo> {
+    let fps_cap = launch_fps(fps_cap)?;
     // Launches go strictly one at a time (DESIGN §6).
     let _single = s.bulk.begin_single_launch()?;
-    Ok(launch_tracked(&app, &s, account_id, target, favourite_id, None).await?.0)
+    Ok(launch_tracked(&app, &s, account_id, target, favourite_id, None, fps_cap).await?.0)
 }
 
 /// Why launches are refused while `roblox_install` runs.
@@ -671,6 +673,7 @@ pub(crate) async fn launch_tracked(
     target: LaunchTarget,
     favourite_id: Option<i64>,
     delay_ms: Option<u32>,
+    fps_cap: Option<u32>,
 ) -> Result<(LaunchInfo, Instance)> {
     let kills = s.bulk.kills();
     let killed = || AppError::Invalid("Launch cancelled by Kill all.".into());
@@ -681,6 +684,9 @@ pub(crate) async fn launch_tracked(
         let name = name.as_deref().unwrap_or("This account");
         return Err(AppError::Invalid(format!("{name} is already running. Close its client first.")));
     };
+    if let Some(why) = crate::network::blocked(s) {
+        return Err(AppError::Invalid(why));
+    }
     let _busy = s.bulk.begin_launch();
     // After `_busy`: an install starting now sees this launch, one already running is seen here.
     if s.update.installing() {
@@ -698,7 +704,7 @@ pub(crate) async fn launch_tracked(
     retake_multi(s, &v);
     // Holds the shared files until the client is tracked (the poll releases them when idle).
     let launching = s.multi.launching(v.multi_instance && v.protect_shared_login);
-    let info = match crate::launcher::launch(s, account_id, &target).await {
+    let info = match crate::launcher::launch(s, account_id, &target, fps_cap).await {
         Ok(info) => info,
         Err(e) => {
             s.bulk.release(slot);
@@ -1167,6 +1173,16 @@ pub(crate) async fn close_running(s: &App, force: bool) -> Result<()> {
 /// Logical processors (for auto-spread; affinity masks cover at most 64).
 pub fn cores() -> u32 {
     std::thread::available_parallelism().map_or(1, |n| n.get() as u32)
+}
+
+/// A launch's own FPS cap: None or 0 for none (the account's or the default applies), else
+/// `launcher::fps::RANGE`.
+pub(crate) fn launch_fps(f: Option<u32>) -> Result<Option<u32>> {
+    let f = f.filter(|&f| f != 0);
+    if let Some(f) = f {
+        check_fps(f)?;
+    }
+    Ok(f)
 }
 
 /// An FPS cap the user can set: 0 (none, or the default for an account) or `launcher::fps::RANGE`.
@@ -1924,6 +1940,14 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
         v.panic_hotkey = k.to_owned();
     }
     let rest = (|| {
+        if let Some(a) = patch.allow_public_networks {
+            v.allow_public_networks = a;
+            // Turned off on a public network: the dashboard stops at once (not yet saved, so
+            // `network::blocked` would still see it allowed).
+            if !a && s.network.get().public.is_some() && s.remote.stop() {
+                notice(&app, false, "The web dashboard stopped: this is a public network.");
+            }
+        }
         if let Some(r) = patch.remote {
             if r.port < 1024 {
                 return Err(AppError::Invalid("Use a port from 1024 to 65535 for the web dashboard.".into()));
@@ -1949,6 +1973,12 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
 
 // ---------- web dashboard ----------
 
+/// Whether a Public network is connected (`network`); app://network sends changes.
+#[tauri::command]
+pub fn network_status(s: State<'_, App>) -> NetworkStatus {
+    s.network.get()
+}
+
 /// Whether the web dashboard runs and its LAN address(es); never the PIN.
 #[tauri::command]
 pub fn remote_status(s: State<'_, App>) -> Result<RemoteStatus> {
@@ -1965,6 +1995,13 @@ pub fn remote_pin(s: State<'_, App>) -> Result<String> {
 #[tauri::command]
 pub fn remote_pin_regenerate(s: State<'_, App>) -> Result<String> {
     crate::remote::regenerate(&s)
+}
+
+/// A new certificate for the web dashboard (it restarts if it runs); its fingerprint then.
+#[tauri::command]
+pub fn remote_new_certificate(app: AppHandle, s: State<'_, App>) -> Result<RemoteStatus> {
+    crate::remote::new_certificate(&app)?;
+    crate::remote::status(&s)
 }
 
 #[cfg(test)]

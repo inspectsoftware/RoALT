@@ -563,6 +563,7 @@ mod tests {
             afk_at: None,
             throttled: false,
             micro: false,
+            fps_cap: None,
         }
     }
 

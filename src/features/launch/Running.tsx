@@ -201,7 +201,7 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
   const relaunch = (i: Instance, a: AccountSummary) => {
     setRelaunching(i.id);
     api
-      .launch(a.id, i.target)
+      .launch(a.id, i.target, undefined, i.fpsCap)
       .then((info) => launched(a, info), launchFailed)
       .finally(() => setRelaunching(null));
   };
@@ -267,7 +267,11 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
                       <span className="flex items-center gap-2 min-w-0 font-sans">
                         {a && <Avatar account={a} size={20} />}
                         <span className="truncate">{name}</span>
-                        {a?.fpsCap && <span className="mono flex-none text-dim" title="This account's FPS cap, set when its client starts">{a.fpsCap} FPS</span>}
+                        {(i.fpsCap ?? a?.fpsCap) && (
+                          <span className="mono flex-none text-dim" title={i.fpsCap ? "This launch's FPS cap, set when its client started" : "This account's FPS cap, set when its client starts"}>
+                            {i.fpsCap ?? a?.fpsCap} FPS
+                          </span>
+                        )}
 
                         {i.rejoins > 0 && (
                           <span className="mono flex-none text-dim" title={`Rejoined ${plural(i.rejoins, "time")}`}>

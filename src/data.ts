@@ -29,6 +29,7 @@ export const qk = {
   shutdown: ["shutdown"],
   background: ["background"],
   remote: ["remote"],
+  network: ["network"],
 } as const;
 
 export const queryClient = new QueryClient({
@@ -65,6 +66,15 @@ export const useMultiStatus = () =>
     refetchInterval: (q) => (q.state.data?.enabled && !q.state.data.active ? 5000 : false),
     refetchIntervalInBackground: false,
   });
+
+/** Whether a Public network is connected; app://network replaces it. */
+export const useNetwork = () => useQuery({ queryKey: qk.network, queryFn: api.networkStatus });
+
+/** Why launching is refused on this network (`network::blocked`), or null. */
+export function publicBlock(network: { public: string | null } | undefined, settings: { allowPublicNetworks: boolean } | undefined) {
+  if (!network?.public || settings?.allowPublicNetworks !== false) return null;
+  return `You're on a public network (${network.public}). Join a private network, or allow public networks in Settings, Security.`;
+}
 
 /** The Roblox client and its versions; roblox://client replaces it. */
 export const useRobloxClient = () => useQuery({ queryKey: qk.client, queryFn: api.robloxClient });

@@ -232,7 +232,8 @@ impl Default for Bulk {
 /// - the vault is locked → `Locked`.
 ///
 /// `delay_ms` is clamped to 2 000..=60 000.
-pub fn start(app: AppHandle, req: BulkRequest) -> Result<String> {
+pub fn start(app: AppHandle, mut req: BulkRequest) -> Result<String> {
+    req.fps_cap = crate::commands::launch_fps(req.fps_cap)?;
     let s = app.state::<App>();
     let ids = &req.account_ids;
     if ids.is_empty() {
@@ -414,7 +415,7 @@ impl Run {
             self.set_stage(i, BulkStage::Ticket);
             let target = target_for(&req.target, server.as_ref());
             let favourite = if started { None } else { req.favourite_id };
-            match crate::commands::launch_tracked(&self.app, &s, a.id, target, favourite, Some(req.delay_ms)).await {
+            match crate::commands::launch_tracked(&self.app, &s, a.id, target, favourite, Some(req.delay_ms), req.fps_cap).await {
                 Ok((info, inst)) => {
                     started = true;
                     self.update(|p| {
@@ -740,6 +741,7 @@ mod tests {
             afk_at: None,
             throttled: false,
             micro: false,
+            fps_cap: None,
         }
     }
 
@@ -819,7 +821,7 @@ mod tests {
         let mut it = item(BulkStage::InGame, true);
         assert_eq!(mirror_item(&mut it, &instance(Disconnected, None), &a), None);
         assert_eq!(it.stage, BulkStage::Done);
-        let req = BulkRequest { account_ids: vec![1], target: LaunchTarget::FollowUser { user_id: 1 }, delay_ms: 0, same_server: SameServer::Off, favourite_id: None };
+        let req = BulkRequest { account_ids: vec![1], target: LaunchTarget::FollowUser { user_id: 1 }, delay_ms: 0, same_server: SameServer::Off, favourite_id: None, fps_cap: None };
         let mut p = new_progress("b".into(), &req, &[a]);
         p.items[0] = it;
         assert!(settled(&p));
@@ -864,7 +866,7 @@ mod tests {
         drop(rejoin);
         assert!(b.check_single_launch().is_ok() && !b.any_busy());
 
-        let req = BulkRequest { account_ids: vec![1], target: LaunchTarget::Place { place_id: 1, launch_data: None }, delay_ms: 0, same_server: SameServer::PickFirst, favourite_id: None };
+        let req = BulkRequest { account_ids: vec![1], target: LaunchTarget::Place { place_id: 1, launch_data: None }, delay_ms: 0, same_server: SameServer::PickFirst, favourite_id: None, fps_cap: None };
         let progress = new_progress("b".into(), &req, &accounts(&[1]));
         *b.batch() = Some(Batch { progress, cancel: Arc::new(AtomicBool::new(false)) });
         assert!(b.begin_rejoin().is_none() && b.any_busy());
@@ -930,6 +932,7 @@ mod tests {
             delay_ms: 6_000,
             same_server: SameServer::Off,
             favourite_id: None,
+            fps_cap: None,
         };
         let mut p = new_progress("b".into(), &req, &accounts(&req.account_ids));
         assert_eq!(p.items[4].user_id, 5_000);
@@ -961,6 +964,7 @@ mod tests {
             delay_ms: 500,
             same_server: SameServer::PickFirst,
             favourite_id: Some(3),
+            fps_cap: None,
         };
         let accounts = accounts(&req.account_ids);
         let mut p = new_progress("b".into(), &req, &accounts);

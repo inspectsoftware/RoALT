@@ -21,7 +21,7 @@ use zeroize::Zeroizing;
 use crate::error::{AppError, Result};
 use crate::model::VaultMode;
 
-pub use dpapi::unprotect_with;
+pub use dpapi::{protect_with, unprotect_with};
 pub use hello::{hello_available, windows_hello};
 
 /// A secret string (cookie, password). Zeroed on drop, never printed.

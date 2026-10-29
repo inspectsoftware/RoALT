@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { open as openFile, save as saveFile } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, asError, events, type BandwidthStatus, type ConflictPolicy, type ImportReport, type InstallProgress, type RobloxClient, type Settings, type VaultStatus } from "../../api";
-import { qk, useMultiStatus, useSetSettings } from "../../data";
+import { qk, useMultiStatus, useNetwork, useSetSettings } from "../../data";
 import { NumberField, Segmented, Switch, TextField } from "../../ui/controls";
 import { ConfirmDialog, Dialog } from "../../ui/Dialog";
 import { Icon } from "../../ui/Icon";
@@ -203,7 +203,7 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
         </Row>
         <Row
           title="Anti-AFK"
-          hint="So Roblox doesn't disconnect idle clients after 20 minutes, each client in a game gets a Space press. A client can opt out under its limits in Launch."
+          hint="So Roblox doesn't disconnect idle clients after 20 minutes, each client in a game gets a key press. A client can opt out under its limits in Launch."
         >
           <Switch label="Anti-AFK" checked={settings.antiAfk.enabled} onChange={(enabled) => set.mutate({ antiAfk: { ...settings.antiAfk, enabled } })} />
         </Row>
@@ -213,7 +213,7 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
             hint={
               settings.antiAfk.mode === "focus"
                 ? "Each client is brought to the front for a moment and the window you had in front comes back. Only after 5 s without keyboard or mouse input; minimized clients are skipped."
-                : "The key is sent to each client's window without moving the focus, so you can keep using the PC, and minimized clients get it too. Roblox may not count it as activity in every game; auto-rejoin after a disconnect stays the fallback."
+                : "A Tab press is sent to each client's window without moving the focus, so you can keep using the PC, and minimized clients get it too. Roblox may not count it as activity in every game; auto-rejoin after a disconnect stays the fallback."
             }
           >
             <Segmented
@@ -434,6 +434,7 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
             onCommit={(clipboardClearSeconds) => set.mutate({ clipboardClearSeconds })}
           />
         </Row>
+        <PublicNetworkRow settings={settings} />
         <RemoteRows settings={settings} />
 
         <Heading id="data">Data</Heading>
@@ -788,6 +789,51 @@ function ShutdownRow() {
   );
 }
 
+/** Public networks: refused by default (launching, the web dashboard; a master vault locks on
+ * joining one); allowing them is confirmed. */
+function PublicNetworkRow({ settings }: { settings: Settings }) {
+  const set = useSetSettings();
+  const network = useNetwork().data;
+  const [confirm, setConfirm] = useState(false);
+  const allowed = settings.allowPublicNetworks;
+  const now = network?.public ? `Now on the public network ${network.public}.` : "Not on a public network now.";
+  return (
+    <>
+      <Row
+        title="Allow public networks"
+        hint={
+          <>
+            On a network Windows calls Public (café, hotel, school Wi-Fi), RoALT doesn't launch or run the web dashboard, and a master-password
+            vault locks. {now}
+          </>
+        }
+      >
+        <Switch
+          label="Allow public networks"
+          checked={allowed}
+          onChange={(on) => (on ? setConfirm(true) : set.mutate({ allowPublicNetworks: false }))}
+        />
+      </Row>
+      <ConfirmDialog
+        open={confirm}
+        onClose={() => setConfirm(false)}
+        onConfirm={() => {
+          setConfirm(false);
+          set.mutate({ allowPublicNetworks: true });
+        }}
+        title="Allow public networks?"
+        text={
+          <>
+            Others on a public network can see which servers your clients connect to, and can try to reach this PC. With this on, RoALT launches
+            and runs the web dashboard there too. Only turn it on for a network you trust, and turn it off again after.
+          </>
+        }
+        confirmLabel="Allow anyway"
+      />
+    </>
+  );
+}
+
 /** The LAN web dashboard: on/off (confirmed), its address, port and PIN (hidden until Reveal). */
 function RemoteRows({ settings }: { settings: Settings }) {
   const qc = useQueryClient();
@@ -802,6 +848,11 @@ function RemoteRows({ settings }: { settings: Settings }) {
     api.remotePinRegenerate().then((p) => {
       setPin(p);
       toast("New PIN. Every signed-in device has to enter it again.");
+    }, toastError);
+  const newCertificate = () =>
+    api.remoteNewCertificate().then((st) => {
+      qc.setQueryData(qk.remote, st);
+      toast("New certificate. Browsers warn once more: check the new fingerprint.");
     }, toastError);
   return (
     <>
@@ -835,6 +886,15 @@ function RemoteRows({ settings }: { settings: Settings }) {
               <span className="mono selectable" aria-live="polite">{pin ?? "••••••••"}</span>
               <button className="btn btn-sm" onClick={reveal}>{pin ? "Hide" : "Reveal"}</button>
               <button className="btn btn-sm" onClick={regenerate}>Regenerate</button>
+            </div>
+          </Row>
+          <Row
+            title="Certificate"
+            hint="HTTPS with a certificate RoALT made itself, so the browser warns the first time. Continue only if the certificate it shows has this SHA-256 fingerprint."
+          >
+            <div className="flex flex-col items-end gap-2 min-w-0">
+              <span className="mono text-xs selectable break-all text-right max-w-[22rem]">{status?.fingerprint ?? "Made when the dashboard first starts."}</span>
+              <button className="btn btn-sm" onClick={newCertificate}>New certificate</button>
             </div>
           </Row>
         </>

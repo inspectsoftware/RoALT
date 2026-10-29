@@ -4,7 +4,7 @@ import {
   api, asError, type AccountSummary, type BulkProgress, type ErrorPayload, type JoinCandidate, type LaunchInfo, type LaunchTarget,
   type MultiInstanceStatus, type SameServer, type Settings,
 } from "../../api";
-import { qk, useBulk, useFavourites, useMultiStatus, usePresence, useRobloxClient, useSetSettings, useSettings } from "../../data";
+import { publicBlock, qk, useBulk, useFavourites, useMultiStatus, useNetwork, usePresence, useRobloxClient, useSetSettings, useSettings } from "../../data";
 import { NumberField, Segmented, Switch } from "../../ui/controls";
 import { Icon } from "../../ui/Icon";
 import { friendly, toast } from "../../ui/Toast";
@@ -27,6 +27,9 @@ const LAUNCH_ERRORS: Record<string, string> = {
 const invalid = (message: string): ErrorPayload => ({ kind: "invalid", message });
 /** One launch at a time, also across remounts of the view. */
 let busy = false;
+/** The FPS cap typed for the next launches (0: each account's own or the default), across remounts;
+ * read when launching, so a value committed by the Launch click's blur counts. */
+let lastFps = 0;
 
 export function lastLaunchAccount() {
   try {
@@ -86,6 +89,8 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
   const pasted = useRef(false);
   const [joinOpen, setJoinOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
+  const [fps, setFpsState] = useState(lastFps);
+  const setFps = (v: number) => setFpsState((lastFps = v));
 
   // In list order, which is also the bulk launch order.
   const chosen = accounts.filter((a) => a.status === "valid" && picked.includes(a.id));
@@ -119,7 +124,8 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
   const fav = draft.favId === null ? undefined : favourites.data?.find((f) => f.id === draft.favId);
   // A parse that hasn't caught up yet is launchable: resolveTarget parses again.
   const pending = !!text.trim() && draft.parsed?.text !== text;
-  const blocked = launchBlocked(bulk, multi, batch);
+  const network = useNetwork().data;
+  const blocked = publicBlock(network, settings) ?? launchBlocked(bulk, multi, batch);
   const canLaunch = !!account && (usableTarget || pending) && !step && !blocked;
 
   /** What the draft launches; parses again if the debounce hasn't caught up, looks a username up. */
@@ -163,10 +169,10 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
       if (ids.length > 1) {
         // From the cache: a stagger committed by this click's blur hasn't re-rendered yet.
         const delay = qc.getQueryData<Settings>(qk.settings)?.launchDelayMs ?? delayMs;
-        await api.bulkLaunch({ accountIds: ids, target, delayMs: delay, sameServer, favouriteId: draft.favId });
+        await api.bulkLaunch({ accountIds: ids, target, delayMs: delay, sameServer, favouriteId: draft.favId, fpsCap: lastFps || null });
       } else {
         timer = window.setTimeout(() => setStep("Starting Roblox…"), 800);
-        launched(a, await api.launch(a.id, target, draft.favId ?? undefined));
+        launched(a, await api.launch(a.id, target, draft.favId ?? undefined, lastFps));
       }
       if (draft.favId !== null) qc.invalidateQueries({ queryKey: qk.favourites });
     } catch (e) {
@@ -350,8 +356,15 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
 
       <div className="flex-none border-t border-line">
         <div className={step ? "live-bar" : "h-0.5"} />
-        {bulk && (
-          <div className="enter flex flex-wrap items-center gap-x-6 gap-y-2 px-6 pt-3.5">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-6 pt-3.5">
+          <span
+            className="flex"
+            title="This launch's frame rate cap, for every account in it, instead of each account's own and the default in Settings. 0 leaves those. Not with a bootstrapper such as Bloxstrap."
+          >
+            <NumberField label="FPS cap" unit="FPS, 0 for each account's own" short="FPS" min={0} max={360} value={fps} onCommit={setFps} />
+          </span>
+          {bulk && (
+            <>
             <NumberField
               label="Stagger"
               unit="seconds"
@@ -382,8 +395,9 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
               />
               <span aria-hidden="true">Auto-rejoin</span>
             </span>
-          </div>
-        )}
+            </>
+          )}
+        </div>
         <div className="flex flex-wrap items-center gap-3 px-6 py-3.5">
           <span className="flex items-center gap-2 min-w-0 text-dim" aria-live="polite">
             {step ? (

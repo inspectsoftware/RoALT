@@ -34,6 +34,7 @@ import type { Notice } from "./bindings/Notice";
 import type { ParsedInput } from "./bindings/ParsedInput";
 import type { PrivateServerPage } from "./bindings/PrivateServerPage";
 import type { RemoteStatus } from "./bindings/RemoteStatus";
+import type { NetworkStatus } from "./bindings/NetworkStatus";
 import type { RobloxClient } from "./bindings/RobloxClient";
 import type { ServerOrder } from "./bindings/ServerOrder";
 import type { ServerPage } from "./bindings/ServerPage";
@@ -85,6 +86,8 @@ export const api = {
   vaultSetMode: (mode: VaultMode, currentPassword?: string, newPassword?: string) =>
     invoke<void>("vault_set_mode", { mode, currentPassword, newPassword }),
   appActivity: () => invoke<void>("app_activity"),
+  /** The splash reached its grow: resolves once the window has grown into the app. */
+  splashDone: () => invoke<void>("splash_done"),
 
   accountsList: () => invoke<AccountSummary[]>("accounts_list"),
   accountAddCookie: (cookie: string) => invoke<AccountSummary>("account_add_cookie", { cookie }),
@@ -116,8 +119,9 @@ export const api = {
   /** A Roblox username (current or previous) to its user. */
   userLookup: (name: string) => invoke<UserRef>("user_lookup", { name }),
   /** Starts the Roblox client as this account. */
-  launch: (accountId: number, target: LaunchTarget, favouriteId?: number) =>
-    invoke<LaunchInfo>("launch", { accountId, target, favouriteId }),
+  /** `fpsCap`: this launch's own, instead of the account's and the default; 0 or none: those. */
+  launch: (accountId: number, target: LaunchTarget, favouriteId?: number, fpsCap?: number | null) =>
+    invoke<LaunchInfo>("launch", { accountId, target, favouriteId, fpsCap: fpsCap || null }),
   favouritesList: () => invoke<Favourite[]>("favourites_list"),
   favouriteSave: (input: FavouriteInput) => invoke<Favourite>("favourite_save", { input }),
   favouriteRemove: (id: number) => invoke<void>("favourite_remove", { id }),
@@ -227,6 +231,10 @@ export const api = {
   remotePin: () => invoke<string>("remote_pin"),
   /** A new PIN; signed-in devices have to enter it again. */
   remotePinRegenerate: () => invoke<string>("remote_pin_regenerate"),
+  /** A new certificate for the web dashboard (it restarts if it runs); the status with its fingerprint. */
+  remoteNewCertificate: () => invoke<RemoteStatus>("remote_new_certificate"),
+  /** Whether a Public network is connected; app://network sends changes. */
+  networkStatus: () => invoke<NetworkStatus>("network_status"),
 
   settingsGet: () => invoke<Settings>("settings_get"),
   settingsSet: (patch: SettingsPatch) => invoke<Settings>("settings_set", { patch }),
@@ -243,4 +251,6 @@ export const events = {
   /** A newer RoALT is out (checked 10 s after start and every 6 h). */
   onAppUpdate: (f: (u: AppUpdate) => void): Promise<UnlistenFn> => listen<AppUpdate>("app://update", (e) => f(e.payload)),
   onRobloxInstall: (f: (p: InstallProgress) => void): Promise<UnlistenFn> => listen<InstallProgress>("roblox://install", (e) => f(e.payload)),
+  /** Joined or left a Public network (checked every 10 s). */
+  onNetwork: (f: (n: NetworkStatus) => void): Promise<UnlistenFn> => listen<NetworkStatus>("app://network", (e) => f(e.payload)),
 };

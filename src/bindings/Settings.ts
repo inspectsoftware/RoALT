@@ -132,4 +132,8 @@ fpsCap: number,
 /**
  * The LAN web dashboard (`remote`); its PIN is in the vault, not here.
  */
-remote: RemoteAccess, };
+remote: RemoteAccess, 
+/**
+ * Launch and serve the web dashboard on a Public network too (`network`); off: refused.
+ */
+allowPublicNetworks: boolean, };

@@ -36,4 +36,8 @@ throttled: boolean,
  * Its window was made small by RoALT (`instance_micro`, `instances_tile`); "Normal size"
  * puts it back.
  */
-micro: boolean, };
+micro: boolean, 
+/**
+ * The FPS cap its launch asked for (`LaunchInfo::fps_cap`); a rejoin uses it again.
+ */
+fpsCap: number | null, };

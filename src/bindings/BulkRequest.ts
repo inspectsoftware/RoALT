@@ -14,4 +14,9 @@ delayMs: number, sameServer: SameServer,
 /**
  * Marked as used once the first client starts.
  */
-favouriteId: number | null, };
+favouriteId: number | null, 
+/**
+ * FPS cap for each of these launches, instead of each account's and the default; None:
+ * those.
+ */
+fpsCap: number | null, };

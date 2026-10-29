@@ -6,10 +6,12 @@ mod error;
 mod instances;
 mod launcher;
 mod model;
+mod network;
 mod remote;
 mod roblox_api;
 mod rpc;
 mod self_update;
+mod splash;
 mod storage;
 mod tray;
 mod vault;
@@ -27,7 +29,7 @@ use tauri_plugin_global_shortcut::ShortcutState;
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind};
 
 use crate::error::{AppError, Result};
-use crate::model::{Theme, VaultMode};
+use crate::model::VaultMode;
 use crate::vault::{Secret, cookie_aad};
 
 /// Everything the commands share.
@@ -48,6 +50,8 @@ pub struct App {
     pub self_update: self_update::SelfUpdater,
     /// The LAN web dashboard (`remote`).
     pub remote: remote::Remote,
+    /// Whether a Public network is connected (`network`).
+    pub network: network::Network,
     /// When the shutdown RoALT scheduled is due (Unix ms; `commands::shutdown_schedule`).
     pub shutdown: Mutex<Option<i64>>,
 }
@@ -68,8 +72,9 @@ impl App {
 }
 
 pub const DB_FILE: &str = "roalt.db";
-/// The database and its journal: all a data folder move ever deletes, from the old folder.
-pub const DB_FILES: [&str; 3] = [DB_FILE, "roalt.db-wal", "roalt.db-shm"];
+/// The database, its journal and its key (`storage::key_path`): all a data folder move ever
+/// deletes, from the old folder.
+pub const DB_FILES: [&str; 4] = [DB_FILE, "roalt.db-wal", "roalt.db-shm", "roalt.db.key"];
 const LOCATION: &str = "location.json";
 
 /// `%LOCALAPPDATA%\RoALT\location.json`: where the data folder was moved to (and from, until
@@ -203,18 +208,17 @@ fn remove_old_db(data_dir: &Path, old: &Path) -> bool {
     gone
 }
 
-fn main_window(app: &TauriApp, data_dir: &Path, theme: Theme) -> tauri::Result<()> {
-    // Each theme's --bg (theme.css); System paints dark until the UI applies it.
-    let bg = match theme {
-        Theme::Light => Color(242, 243, 240, 255),
-        Theme::Dark | Theme::System => Color(5, 5, 6, 255),
-    };
+fn main_window(app: &TauriApp, data_dir: &Path) -> tauri::Result<()> {
+    // The dark theme's --bg (theme.css) in either theme: the splash is dark, and this is what
+    // shows before the UI paints and while the window grows.
+    let bg = Color(5, 5, 6, 255);
 
     #[allow(unused_mut)]
     let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
         .title("RoALT")
-        .inner_size(1280.0, 800.0)
-        .min_inner_size(960.0, 600.0)
+        .inner_size(splash::DEFAULT.0, splash::DEFAULT.1)
+        // The minimum size is set once the splash has grown (`splash`); shown by it too.
+        .visible(false)
         .decorations(false)
         .background_color(bg)
         // The UI's own WebView2 profile; never used for roblox.com.
@@ -226,8 +230,8 @@ fn main_window(app: &TauriApp, data_dir: &Path, theme: Theme) -> tauri::Result<(
             "--remote-debugging-port={port} --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"
         ));
     }
-    builder.build()?;
-    Ok(())
+    let w = builder.build()?;
+    splash::start(app.handle(), &w)
 }
 
 /// Master-password mode: lock after the configured idle time.
@@ -292,7 +296,6 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
     let handle = app.handle().clone();
     let api = roblox_api::Client::new(Arc::new(move |id, cookie| handle.state::<App>().store_rotated(id, cookie)));
     let settings = db.settings().map_err(|e| e.to_string())?;
-    let theme = settings.theme;
     let shutdown = commands::pending_shutdown(&db);
     let multi = instances::multi::Multi::new();
     if settings.multi_instance
@@ -321,6 +324,7 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
         update: launcher::update::Updater::new(),
         self_update: self_update::SelfUpdater::new(),
         remote: remote::Remote::new(),
+        network: network::Network::new(),
         shutdown: Mutex::new(shutdown),
     });
     if let Err(e) = commands::set_panic_hotkey(app.handle(), "", &settings.panic_hotkey) {
@@ -345,7 +349,8 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
     }
     // Before anything else is started, so a newer RoALT is offered as soon as possible.
     self_update::spawn(app.handle().clone());
-    main_window(app, data_dir, theme).map_err(|e| {
+    app.manage(splash::Pending::default());
+    main_window(app, data_dir).map_err(|e| {
         format!(
             "RoALT can't open its window ({e}).\n\nIt needs the Microsoft Edge WebView2 Runtime: \
              https://go.microsoft.com/fwlink/p/?LinkId=2124703"
@@ -354,6 +359,7 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
     spawn_auto_lock(app.handle().clone());
     instances::Tracker::spawn(app.handle().clone());
     instances::afk::spawn(app.handle().clone());
+    network::spawn(app.handle().clone());
     discord::spawn(app.handle().clone());
     rpc::spawn(app.handle().clone());
     launcher::update::spawn(app.handle().clone());
@@ -418,7 +424,8 @@ fn main() {
                 })
                 .build(),
         )
-        .plugin(tauri_plugin_window_state::Builder::new().with_filter(|label| label == "main").build())
+        // "main" is restored by `splash::start`, which shows it small first.
+        .plugin(tauri_plugin_window_state::Builder::new().with_filter(|label| label == "main").skip_initial_state("main").build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -435,6 +442,7 @@ fn main() {
             commands::vault_lock,
             commands::vault_set_mode,
             commands::app_activity,
+            splash::splash_done,
             commands::accounts_list,
             commands::account_add_cookie,
             commands::accounts_import_cookies,
@@ -514,8 +522,10 @@ fn main() {
             commands::settings_get,
             commands::settings_set,
             commands::remote_status,
+            commands::network_status,
             commands::remote_pin,
             commands::remote_pin_regenerate,
+            commands::remote_new_certificate,
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| fatal(&format!("RoALT failed to start: {e}")))
@@ -616,7 +626,7 @@ mod tests {
 
         // Never from the folder in use, however it is spelled.
         assert!(remove_old_db(&new, &tmp.join(r"NEW\.\")));
-        assert_eq!(left(&new), 3);
+        assert_eq!(left(&new), DB_FILES.len());
 
         // Still open elsewhere (no delete sharing, like SQLite's): reported, so it is retried.
         use std::os::windows::fs::OpenOptionsExt;
@@ -627,7 +637,7 @@ mod tests {
 
         assert!(remove_old_db(&new, &old));
         assert_eq!(left(&old), 0);
-        assert_eq!(left(&new), 3);
+        assert_eq!(left(&new), DB_FILES.len());
         assert!(old.join("notes.txt").exists() && old.join(r"logs\roalt.log").exists() && old.join(r"webview\x").exists());
         // Already gone: nothing to do.
         assert!(remove_old_db(&new, &old));

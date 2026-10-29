@@ -69,14 +69,14 @@ let accounts: AccountSummary[] = seed.map(([alias, displayName, username, userId
 
 let settings: Settings = {
   theme: "dark", accent: "", backgroundDim: 80, density: "detailed", autoLockMinutes: 15, clipboardClearSeconds: 30, cacheMinutes: 10,
-  multiInstance: false, protectSharedLogin: true, launchDelayMs: 6000, autoRejoin: false, autoRestartOnCrash: false,
+  multiInstance: true, protectSharedLogin: true, launchDelayMs: 6000, autoRejoin: false, autoRestartOnCrash: false,
   breakerMax: 3, breakerWindowMin: 10, closeGraceS: 5, launchArgs: "", closeToTray: false,
   memRestartMb: 0, memThrottle: { mb: 0, cpuCap: 10 }, trimEveryMin: 0, autoSpread: false,
   adaptive: { enabled: false, background: { cpuCap: 25, eco: true, trimEveryMin: null, affinity: null } }, bandwidthKbps: 0,
   antiAfk: { enabled: false, intervalMin: 15, mode: "focus" },
   discord: { crash: true, hang: true, memRestart: true, disconnect: true, restart: true, breaker: true, batchDone: true, launch: false, statusEveryMin: 0 },
   autoUpdate: false, selfUpdate: true, discordPresence: true, minimizeOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0,
-  remote: { enabled: false, port: 47800 },
+  remote: { enabled: false, port: 47800 }, allowPublicNetworks: false,
 };
 let remotePin = "48213907";
 
@@ -179,13 +179,13 @@ function endInstance(id: string, note: string) {
   i.note = note;
   instancesChanged();
 }
-function track(accountId: number, pid: number, target: LaunchTarget, placeId: number | null, viaBootstrapper: boolean, rejoins = 0) {
+function track(accountId: number, pid: number, target: LaunchTarget, placeId: number | null, viaBootstrapper: boolean, rejoins = 0, fpsCap: number | null = null) {
   // Without the lock a new client replaces the running one, as Roblox does.
   if (!lockHeld) for (const old of instances) endInstance(old.id, "Replaced by another Roblox client");
   const i: Instance = {
     id: crypto.randomUUID(), accountId, pid, state: "starting", target, placeId, jobId: null,
     startedAt: Date.now(), endedAt: null, viaBootstrapper, note: null, rejoins, limits: { cpuCap: null, eco: false, trimEveryMin: null, affinity: null },
-    antiAfk: true, afkAt: null, throttled: false, micro: false,
+    antiAfk: true, afkAt: null, throttled: false, micro: false, fpsCap,
   };
   instances.push(i);
   if (!lockHeld) eventHolder = i.id;
@@ -215,7 +215,7 @@ function kick(i: Instance) {
     endInstance(i.id, "Closed");
     void emit("app://notice", { error: false, message: `${a.alias || a.displayName} was disconnected and is rejoining.` });
     retakeLock();
-    track(a.id, 14000 + Math.floor(Math.random() * 9000), i.target, i.placeId, i.viaBootstrapper, i.rejoins + 1);
+    track(a.id, 14000 + Math.floor(Math.random() * 9000), i.target, i.placeId, i.viaBootstrapper, i.rejoins + 1, i.fpsCap);
   }, settings.launchDelayMs);
 }
 setInterval(() => {
@@ -485,7 +485,7 @@ function privatePage(placeId: number, a: AccountSummary): PrivateServerPage {
   return { servers, nextCursor: null, joinRestricted: a.username === "studio_nova" };
 }
 
-async function runBatch(b: BulkProgress, favouriteId: number | null) {
+async function runBatch(b: BulkProgress, favouriteId: number | null, fpsCap: number | null) {
   const until = async (ok: () => boolean, ms: number) => {
     for (const end = Date.now() + ms; Date.now() < end && !ok(); ) await sleep(200);
   };
@@ -524,7 +524,7 @@ async function runBatch(b: BulkProgress, favouriteId: number | null) {
       continue;
     }
     retakeLock();
-    const i = track(a.id, 14000 + Math.floor(Math.random() * 9000), target, placeOfTarget(target), a.username === "studio_nova");
+    const i = track(a.id, 14000 + Math.floor(Math.random() * 9000), target, placeOfTarget(target), a.username === "studio_nova", 0, fpsCap);
     item.instanceId = i.id;
     item.stage = { kind: "starting" };
     bulkChanged();
@@ -573,7 +573,7 @@ function startBatch(r: BulkRequest) {
     jobId: null, items: ids.map((accountId) => ({ accountId, userId: find(accountId)?.userId ?? 0, stage: { kind: "queued" }, instanceId: null })), stopped: null, done: false, note: null,
   };
   bulkChanged();
-  void runBatch(batch, r.favouriteId);
+  void runBatch(batch, r.favouriteId, r.fpsCap || null);
   return Promise.resolve(batch.batchId);
 }
 
@@ -606,6 +606,8 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       return null;
     }
     case "app_activity":
+      return null;
+    case "splash_done":
       return null;
 
     case "accounts_list":
@@ -701,6 +703,7 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     }
     case "launch": {
       if (installing) return fail("invalid", INSTALLING);
+      if (args.fpsCap && args.fpsCap < 5) return fail("invalid", "The FPS cap must be 0 (off) or 5 to 360.");
       if (batch && !batch.done) return fail("invalid", "A batch is still running.");
       await sleep(1200);
       const a = find(args.accountId);
@@ -717,11 +720,12 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       if (f) f.lastUsedAt = Date.now();
       retakeLock();
       const pid = 14000 + Math.floor(Math.random() * 9000);
-      track(a.id, pid, args.target, placeOfTarget(args.target), a.username === "studio_nova");
+      track(a.id, pid, args.target, placeOfTarget(args.target), a.username === "studio_nova", 0, args.fpsCap || null);
       return {
         accountId: a.id, pid, browserTrackerId: Math.floor(Math.random() * 1e12),
         placeId: placeOfTarget(args.target), startedAt: Date.now(), viaBootstrapper: a.username === "studio_nova",
         warning: args.target.kind === "shareLink" && args.target.code.startsWith("0") ? "This share link has expired, so Roblox may refuse the join." : null,
+        fpsCap: args.fpsCap || null,
       };
     }
     case "favourites_list":
@@ -1024,7 +1028,14 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "shutdown_status":
       return shutdownAt;
     case "remote_status":
-      return { running: settings.remote.enabled, urls: [`http://192.168.1.20:${settings.remote.port}`] };
+      return {
+        running: settings.remote.enabled, urls: [`https://192.168.1.20:${settings.remote.port}`],
+        fingerprint: "3F:A1:09:7C:5E:22:B8:4D:91:0E:6A:C3:57:F2:18:9B:44:D0:7E:A5:2C:61:BF:83:0A:E9:1D:76:C4:58:2B:F0",
+      };
+    case "remote_new_certificate":
+      return { running: settings.remote.enabled, urls: [`https://192.168.1.20:${settings.remote.port}`], fingerprint: "9C:04:E7:31:AB:5F:12:D8:60:3E:C9:77:0B:F4:28:96:DA:41:7F:05:E3:BC:62:19:8A:D7:4C:20:F1:6B:93:5E" };
+    case "network_status":
+      return { public: null };
     case "remote_pin":
       return remotePin;
     case "remote_pin_regenerate":

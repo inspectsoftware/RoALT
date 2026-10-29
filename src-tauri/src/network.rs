@@ -58,7 +58,10 @@ fn public_of(nets: &[Seen]) -> Option<&str> {
 
 /// Reads the connected networks; not public when Windows can't say (logged).
 pub fn scan() -> NetworkStatus {
-    match networks() {
+    // On its own thread: COM as multithreaded on the main thread breaks the window's
+    // `OleInitialize` (RPC_E_CHANGED_MODE, the app doesn't start).
+    let read = std::thread::spawn(networks).join().unwrap_or_else(|_| Err(windows::core::Error::empty()));
+    match read {
         Ok(nets) => NetworkStatus { public: public_of(&nets).map(str::to_owned) },
         Err(e) => {
             log::warn!("couldn't read the network category: {e}");

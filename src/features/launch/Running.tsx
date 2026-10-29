@@ -2,28 +2,30 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, type AccountSummary, type Crash, type CrashKind, type Instance, type InstanceState, type Limits, type MultiInstanceStatus } from "../../api";
 import { qk, useBulk, useCrashes, useInstances, useMultiStatus, useSettings } from "../../data";
+import { fmtList, t, type Key } from "../../i18n";
 import { Segmented, Switch } from "../../ui/controls";
 import { ConfirmDialog } from "../../ui/Dialog";
 import { Divider, usePanelWidth } from "../../ui/Resizer";
 import { Icon } from "../../ui/Icon";
 import { toast, toastError } from "../../ui/Toast";
-import { accountName, Avatar, plural } from "../accounts/shared";
+import { accountName, Avatar } from "../accounts/shared";
 import { BatchSection } from "./Batch";
 import { launchBlocked, launched, launchFailed } from "./LaunchView";
 
+// Getters: labels are translated when read (at render), not once at load.
 export const STATES: Record<InstanceState, [label: string, color: string]> = {
-  starting: ["Starting", "var(--dim)"],
-  joining: ["Joining", "var(--blue)"],
-  inGame: ["In game", "var(--accent-text)"],
-  disconnected: ["Disconnected", "var(--orange)"],
-  exited: ["Ended", "var(--dim)"],
+  get starting(): [string, string] { return [t("launch.state.starting"), "var(--dim)"]; },
+  get joining(): [string, string] { return [t("launch.state.joining"), "var(--blue)"]; },
+  get inGame(): [string, string] { return [t("launch.state.inGame"), "var(--accent-text)"]; },
+  get disconnected(): [string, string] { return [t("launch.state.disconnected"), "var(--orange)"]; },
+  get exited(): [string, string] { return [t("launch.state.ended"), "var(--dim)"]; },
 };
 
 export const isRunning = (i: Instance) => i.state !== "exited";
 
 export function uptime(from: number, to: number) {
   const m = Math.max(0, Math.floor((to - from) / 60_000));
-  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`;
+  return m < 60 ? t("launch.minutes", { m }) : t("launch.hoursMinutes", { h: Math.floor(m / 60), m: m % 60 });
 }
 
 /** Re-renders every `ms` so uptimes move. */
@@ -40,6 +42,17 @@ const CAPS = [0, 50, 25, 10, 5];
 /** -1: the default from Settings; 0: never. */
 const TRIMS = [-1, 0, 5, 15, 30, 60];
 const limited = (l: Limits) => l.cpuCap !== null || l.eco || l.trimEveryMin !== null || l.affinity !== null;
+/** The limits button's tooltip: what is limited, or what it opens. */
+function limitsTitle(l: Limits) {
+  if (!limited(l)) return t("launch.limits.buttonHint");
+  const what = [
+    l.cpuCap ? t("launch.limits.cpuPct", { pct: l.cpuCap }) : null,
+    l.eco ? t("launch.limits.ecoItem") : null,
+    l.trimEveryMin !== null ? t("launch.limits.trimItem") : null,
+    l.affinity !== null ? t("launch.limits.coresItem") : null,
+  ].filter((x): x is string => x !== null);
+  return t("launch.limits.limited", { what: fmtList(what) });
+}
 /** Logical processors a mask can name (JS numbers hold 53 bits exactly). */
 const CORES = Math.min(53, navigator.hardwareConcurrency || 1);
 // Not bit operators: those cut numbers to 32 bits.
@@ -54,14 +67,14 @@ function LimitsRow({ inst }: { inst: Instance }) {
   const mask = inst.limits.affinity ?? allCores;
   const toggleCore = (c: number) => {
     const next = hasCore(mask, c) ? mask - 2 ** c : mask + 2 ** c;
-    if (next === 0) return toastError({ kind: "invalid", message: "Leave at least one CPU core." });
+    if (next === 0) return toastError({ kind: "invalid", message: t("launch.limits.oneCore") });
     void set({ affinity: next === allCores ? null : next });
   };
   const trimNow = () => {
     setTrimming(true);
     api
       .instanceTrim(inst.id)
-      .then(() => toast("Trimmed its memory. Windows pages it back in as the client needs it."), toastError)
+      .then(() => toast(t("launch.limits.trimmed")), toastError)
       .finally(() => setTrimming(false));
   };
   return (
@@ -69,39 +82,39 @@ function LimitsRow({ inst }: { inst: Instance }) {
       <td colSpan={5} className="px-5 py-3 font-sans">
         <div className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-[13px] text-text">CPU limit</span>
+            <span className="text-[13px] text-text">{t("launch.limits.cpu")}</span>
             <Segmented
               mono
-              label="CPU limit"
+              label={t("launch.limits.cpu")}
               value={inst.limits.cpuCap ?? 0}
-              options={CAPS.map((c) => ({ value: c, label: c ? `${c}%` : "Off" }))}
+              options={CAPS.map((c) => ({ value: c, label: c ? t("launch.limits.pct", { pct: c }) : t("common.off") }))}
               onChange={(c) => set({ cpuCap: c || null })}
             />
           </div>
           <div className="flex items-center justify-between gap-2">
-            <span className="text-[13px] text-text">Efficiency mode</span>
-            <Switch label="Efficiency mode" checked={inst.limits.eco} onChange={(eco) => set({ eco })} />
+            <span className="text-[13px] text-text">{t("launch.limits.eco")}</span>
+            <Switch label={t("launch.limits.eco")} checked={inst.limits.eco} onChange={(eco) => set({ eco })} />
           </div>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-[13px] text-text">Trim memory</span>
+            <span className="text-[13px] text-text">{t("launch.limits.trim")}</span>
             <span className="flex flex-wrap items-center gap-2">
               <Segmented
                 mono
-                label="Trim memory every"
+                label={t("launch.limits.trimEvery")}
                 value={inst.limits.trimEveryMin ?? -1}
-                options={TRIMS.map((m) => ({ value: m, label: m < 0 ? "Default" : m ? `${m}m` : "Off" }))}
+                options={TRIMS.map((m) => ({ value: m, label: m < 0 ? t("common.default") : m ? t("launch.minutes", { m }) : t("common.off") }))}
                 onChange={(m) => set({ trimEveryMin: m < 0 ? null : m })}
               />
               <button className="btn btn-sm" disabled={trimming} onClick={trimNow}>
-                {trimming ? "Trimming…" : "Trim now"}
+                {trimming ? t("launch.limits.trimming") : t("launch.limits.trimNow")}
               </button>
             </span>
           </div>
           <fieldset className="flex flex-col gap-1.5">
             <legend className="flex w-full items-center justify-between gap-2 text-[13px] text-text">
-              CPU cores
+              {t("launch.limits.cores")}
               {inst.limits.affinity !== null && (
-                <button type="button" className="btn btn-sm" onClick={() => set({ affinity: null })}>All cores</button>
+                <button type="button" className="btn btn-sm" onClick={() => set({ affinity: null })}>{t("launch.limits.allCores")}</button>
               )}
             </legend>
             <div className="flex flex-wrap gap-1 mt-1.5">
@@ -115,18 +128,15 @@ function LimitsRow({ inst }: { inst: Instance }) {
           </fieldset>
           <div className="flex items-center justify-between gap-2">
             <span className="flex flex-col">
-              <span className="text-[13px] text-text">Anti-AFK</span>
+              <span className="text-[13px] text-text">{t("launch.limits.antiAfk")}</span>
               <span className="mono text-xs text-dim">
-                {!afk?.enabled ? "Off in Settings" : inst.afkAt !== null ? `Last key press ${uptime(inst.afkAt, Date.now())} ago` : "No key press yet"}
+                {!afk?.enabled ? t("launch.limits.afkOff") : inst.afkAt !== null ? t("launch.limits.lastKey", { ago: uptime(inst.afkAt, Date.now()) }) : t("launch.limits.noKey")}
               </span>
             </span>
-            <Switch label="Anti-AFK for this client" checked={inst.antiAfk} onChange={(on) => api.instanceSetAntiAfk(inst.id, on).catch(toastError)} />
+            <Switch label={t("launch.limits.antiAfkClient")} checked={inst.antiAfk} onChange={(on) => api.instanceSetAntiAfk(inst.id, on).catch(toastError)} />
           </div>
           <p className="text-xs text-dim">
-            The limit is a share of all CPU cores; its frame rate drops with it. Roblox has no per-client FPS cap RoALT
-            can set without modifying the client. Efficiency mode lowers its priority, as Task Manager does. Trimming asks
-            Windows to page its memory out; it comes back as used. Limits set here win over the adaptive manager's.
-            Anti-AFK briefly brings this client to the front for a Space press while you're away; it skips a minimized client.
+            {t("launch.limits.help")}
           </p>
         </div>
       </td>
@@ -134,11 +144,11 @@ function LimitsRow({ inst }: { inst: Instance }) {
   );
 }
 
-const KINDS: Record<CrashKind, string> = {
-  crash: "Crashed",
-  disconnect: "Disconnected by Roblox",
-  hang: "Stopped responding",
-  mem: "Restarted: used too much memory",
+const KINDS: Record<CrashKind, Key> = {
+  crash: "launch.crash.crash",
+  disconnect: "launch.crash.disconnect",
+  hang: "launch.crash.hang",
+  mem: "launch.crash.mem",
 };
 
 /** What RoALT recorded about an ended client: how it ended, what its log said, its log. */
@@ -148,13 +158,13 @@ function CrashRow({ crash: c }: { crash: Crash }) {
       <td colSpan={5} className="px-5 py-3 font-sans">
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <span className="text-[13px] text-text">{KINDS[c.kind]}</span>
-            <span className="mono text-xs text-dim">after {uptime(0, c.uptimeMs)}{c.placeId !== null ? ` · place ${c.placeId}` : ""}</span>
+            <span className="text-[13px] text-text">{t(KINDS[c.kind])}</span>
+            <span className="mono text-xs text-dim">{c.placeId !== null ? t("launch.crash.afterPlace", { time: uptime(0, c.uptimeMs), place: c.placeId }) : t("launch.crash.after", { time: uptime(0, c.uptimeMs) })}</span>
           </div>
           {c.reason && <p className="mono text-xs text-dim break-words selectable">{c.reason}</p>}
           {c.hasLog && (
             <button className="btn btn-sm self-start" onClick={() => api.crashOpenLog(c.id).catch(toastError)}>
-              Open log
+              {t("launch.crash.openLog")}
               <Icon name="external" size={12} />
             </button>
           )}
@@ -206,7 +216,7 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
       .finally(() => setRelaunching(null));
   };
   // Starting next to running clients needs multi-instance, as a bulk launch does.
-  const relaunchBlocked = launchBlocked(running.length > 0, multi, batch) ?? (relaunching ? "Launching…" : null);
+  const relaunchBlocked = launchBlocked(running.length > 0, multi, batch) ?? (relaunching ? t("launch.launching") : null);
   const closeAll = () => {
     setBusyAll(true);
     api
@@ -220,63 +230,63 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
 
   return (
     <>
-    <Divider panel={width} side="right" label="Running clients width" />
-    <aside aria-label="Running clients" style={{ width: width.width }} className="@container flex-none min-w-0 flex flex-col bg-panel border-l border-line">
+    <Divider panel={width} side="right" label={t("launch.running.width")} />
+    <aside aria-label={t("launch.running.title")} style={{ width: width.width }} className="@container flex-none min-w-0 flex flex-col bg-panel border-l border-line">
       <BatchSection accounts={accounts} onPick={onPick} />
       <div className="flex flex-wrap items-center gap-2.5 px-5 pt-[18px] pb-2.5">
-        <span className="label whitespace-nowrap">Running clients</span>
+        <span className="label whitespace-nowrap">{t("launch.running.title")}</span>
         <span className="mono text-xs text-dim">{running.length}</span>
         <span className="ml-auto flex gap-2">
           {running.length < list.length && (
             <button className="btn btn-sm" onClick={() => api.instancesClearEnded().catch(toastError)}>
-              Clear ended
+              {t("launch.running.clearEnded")}
             </button>
           )}
           <button className="btn btn-sm" disabled={running.length === 0} onClick={() => setConfirmAll(true)}>
-            Close all
+            {t("launch.running.closeAll")}
           </button>
         </span>
       </div>
       {rows.length === 0 ? (
-        <p className="px-5 py-2 text-dim">Clients you launch show here until they close.</p>
+        <p className="px-5 py-2 text-dim">{t("launch.running.empty")}</p>
       ) : (
         <div className="scroll flex-1 min-h-0">
           <table className="mono w-full border-collapse text-xs">
             <thead>
               <tr className="h-7 text-dim text-left">
-                <th className="pl-5 font-normal border-b border-line">Account</th>
-                <th className="font-normal border-b border-line">State</th>
-                <th className="font-normal border-b border-line hidden @sm:table-cell">Job</th>
-                <th className="font-normal border-b border-line">Up</th>
+                <th className="pl-5 font-normal border-b border-line">{t("launch.running.account")}</th>
+                <th className="font-normal border-b border-line">{t("launch.running.state")}</th>
+                <th className="font-normal border-b border-line hidden @sm:table-cell">{t("launch.running.job")}</th>
+                <th className="font-normal border-b border-line">{t("launch.running.up")}</th>
                 <th className="w-20 border-b border-line">
-                  <span className="sr-only">Actions</span>
+                  <span className="sr-only">{t("launch.running.actions")}</span>
                 </th>
               </tr>
             </thead>
             <tbody>
               {rows.map((i) => {
                 const a = byId.get(i.accountId);
-                const name = a ? accountName(a) : `Account ${i.accountId}`;
+                const name = a ? accountName(a) : t("launch.accountN", { id: i.accountId });
                 const [label, color] = STATES[i.state];
                 const live = isRunning(i);
                 const crash = live ? undefined : crashes.get(i.id);
                 return (
                   <Fragment key={i.id}>
-                  <tr className={`enter h-10 border-b border-line ${live ? "" : "text-dim"}`} title={`PID ${i.pid}${i.afkAt !== null ? ` · anti-AFK key press ${uptime(i.afkAt, now)} ago` : ""}`}>
+                  <tr className={`enter h-10 border-b border-line ${live ? "" : "text-dim"}`} title={i.afkAt !== null ? t("launch.running.pidAfk", { pid: i.pid, ago: uptime(i.afkAt, now) }) : t("launch.running.pid", { pid: i.pid })}>
                     <td className="pl-5 pr-2 max-w-0 w-[40%]">
                       <span className="flex items-center gap-2 min-w-0 font-sans">
                         {a && <Avatar account={a} size={20} />}
                         <span className="truncate">{name}</span>
                         {(i.fpsCap ?? a?.fpsCap) && (
-                          <span className="mono flex-none text-dim" title={i.fpsCap ? "This launch's FPS cap, set when its client started" : "This account's FPS cap, set when its client starts"}>
-                            {i.fpsCap ?? a?.fpsCap} FPS
+                          <span className="mono flex-none text-dim" title={i.fpsCap ? t("launch.running.fpsLaunch") : t("launch.running.fpsAccount")}>
+                            {t("launch.running.fps", { fps: (i.fpsCap ?? a?.fpsCap)! })}
                           </span>
                         )}
 
                         {i.rejoins > 0 && (
-                          <span className="mono flex-none text-dim" title={`Rejoined ${plural(i.rejoins, "time")}`}>
+                          <span className="mono flex-none text-dim" title={t("launch.running.rejoined", { count: i.rejoins })}>
                             <span aria-hidden="true">↻{i.rejoins}</span>
-                            <span className="sr-only">, rejoined {plural(i.rejoins, "time")}</span>
+                            <span className="sr-only">, {t("launch.running.rejoinedSr", { count: i.rejoins })}</span>
                           </span>
                         )}
                       </span>
@@ -285,7 +295,7 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
                       <span className="flex items-baseline gap-1.5">
                         <span aria-hidden="true" className={`w-1.5 h-1.5 flex-none ${i.state === "starting" || i.state === "joining" ? "pulse" : ""}`} style={{ background: color }} />
                         <span>
-                          {live ? (closing.has(closeKey(i)) ? "Closing…" : label) : i.note ?? label}
+                          {live ? (closing.has(closeKey(i)) ? t("launch.running.closing") : label) : i.note ?? label}
                           {live && i.note && <span className="text-orange"> · {i.note}</span>}
                         </span>
                       </span>
@@ -297,17 +307,17 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
                         <span className="flex">
                         <button
                           className={`wc w-9 h-8 ${i.throttled ? "text-orange" : limited(i.limits) ? "text-accent-text" : ""}`}
-                          aria-label={`Limits for ${name}'s client`}
+                          aria-label={t("launch.running.limitsFor", { name })}
                           aria-expanded={tuning === i.id}
-                          title={(i.throttled ? "Throttled: over the memory limit. " : "") + (limited(i.limits) ? `Limited${i.limits.cpuCap ? ` to ${i.limits.cpuCap}% CPU` : ""}${i.limits.eco ? ", efficiency mode" : ""}${i.limits.trimEveryMin !== null ? ", trim" : ""}${i.limits.affinity !== null ? ", cores" : ""}` : "CPU limit, efficiency mode, trimming and cores")}
+                          title={[i.throttled ? t("launch.running.throttled") : null, limitsTitle(i.limits)].filter(Boolean).join(" ")}
                           onClick={() => setTuning((t) => (t === i.id ? null : i.id))}
                         >
                           <Icon name="sliders" size={12} />
                         </button>
                         <button
                           className="wc w-9 h-8"
-                          aria-label={`Close ${name}'s client`}
-                          title="Close this client"
+                          aria-label={t("launch.running.closeName", { name })}
+                          title={t("launch.running.closeThis")}
                           disabled={closing.has(closeKey(i))}
                           onClick={() => close(i)}
                         >
@@ -320,9 +330,9 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
                         {crash && (
                           <button
                             className="wc w-9 h-8"
-                            aria-label={`How ${name}'s client ended`}
+                            aria-label={t("launch.running.howEndedName", { name })}
                             aria-expanded={details === i.id}
-                            title="How it ended"
+                            title={t("launch.running.howEnded")}
                             onClick={() => setDetails((d) => (d === i.id ? null : i.id))}
                           >
                             <Icon name="chevron" size={12} className={details === i.id ? "rotate-180" : ""} />
@@ -331,8 +341,8 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
                         {a?.status === "valid" && !running.some((r) => r.accountId === a.id && r.state !== "disconnected") && (
                         <button
                           className="wc w-9 h-8"
-                          aria-label={`Relaunch ${name}`}
-                          title={relaunchBlocked ?? "Launch this account into the same game again"}
+                          aria-label={t("launch.running.relaunch", { name })}
+                          title={relaunchBlocked ?? t("launch.running.relaunchHint")}
                           disabled={relaunchBlocked !== null}
                           onClick={() => relaunch(i, a)}
                         >
@@ -357,9 +367,9 @@ export function RunningPanel({ accounts, onPick }: { accounts: AccountSummary[];
         onClose={() => !busyAll && setConfirmAll(false)}
         onConfirm={closeAll}
         busy={busyAll}
-        title="Close all clients?"
-        text={<>{plural(running.length, "Roblox client")} RoALT started will close. Unsaved progress in those games is lost.</>}
-        confirmLabel="Close all"
+        title={t("launch.running.closeAllTitle")}
+        text={t("launch.running.closeAllText", { count: running.length })}
+        confirmLabel={t("launch.running.closeAll")}
       />
     </aside>
     </>
@@ -383,7 +393,7 @@ export function KillAllButton() {
       .panicKill()
       .then((st) => {
         qc.setQueryData(qk.multi, st);
-        toast("Killed every Roblox client.");
+        toast(t("launch.kill.done"));
       }, toastError)
       .finally(() => setBusy(false));
   };
@@ -402,7 +412,7 @@ export function KillAllButton() {
       type="button"
       className="btn btn-sm btn-danger relative overflow-hidden w-full"
       disabled={busy}
-      title="Hold for a second: ends every Roblox client at once, without saving"
+      title={t("launch.kill.hint")}
       onPointerDown={start}
       onPointerUp={stop}
       onPointerLeave={stop}
@@ -423,7 +433,7 @@ export function KillAllButton() {
           transition: held ? `width ${HOLD_MS}ms linear` : "none",
         }}
       />
-      <span className="relative min-w-0 truncate">{busy ? "Killing…" : held ? "Keep holding…" : "Hold to kill all"}</span>
+      <span className="relative min-w-0 truncate">{busy ? t("launch.kill.killing") : held ? t("launch.kill.holding") : t("launch.kill.hold")}</span>
     </button>
   );
 }
@@ -464,15 +474,9 @@ export function useMultiToggle(onStatus?: (s: MultiInstanceStatus) => void) {
         setAsking(false);
         void set(true);
       }}
-      title="Turn on multi-instance?"
-      text={
-        <>
-          Roblox says it doesn't officially support running several clients at once. RoALT only holds the name Roblox's
-          client checks when it starts and never touches the client itself, which Roblox says its enforcement against
-          modified clients doesn't cover. Roblox has broken multi-instance before and may again.
-        </>
-      }
-      confirmLabel="Turn on"
+      title={t("launch.multi.turnOnTitle")}
+      text={t("launch.multi.turnOnText")}
+      confirmLabel={t("launch.multi.turnOn")}
       safe
     />
   );
@@ -501,8 +505,8 @@ export function MultiInstanceSwitch() {
   return (
     <>
       <div className="flex items-center justify-between gap-2">
-        <span className="font-sans text-[13px] text-text">Multi-instance</span>
-        <Switch label="Multi-instance" checked={status.enabled} onChange={toggle} />
+        <span className="font-sans text-[13px] text-text">{t("launch.multi.label")}</span>
+        <Switch label={t("launch.multi.label")} checked={status.enabled} onChange={toggle} />
       </div>
       {blocked && (
         <div className="enter flex flex-col items-start gap-2 font-sans text-xs">
@@ -510,10 +514,10 @@ export function MultiInstanceSwitch() {
           {status.blockedBy.length > 0 && (
             <div className="flex flex-wrap gap-2">
               <button className="btn btn-sm" onClick={() => setConfirm("close")}>
-                Close Roblox…
+                {t("launch.multi.closeRobloxEllipsis")}
               </button>
               <button className="btn btn-sm" onClick={() => setConfirm("takeOver")}>
-                Take over…
+                {t("launch.multi.takeOverEllipsis")}
               </button>
             </div>
           )}
@@ -524,26 +528,18 @@ export function MultiInstanceSwitch() {
         onClose={() => !busy && setConfirm(null)}
         onConfirm={run}
         busy={busy}
-        title="Close Roblox?"
-        text={<>Every running Roblox client closes ({status.blockedBy.length} process{status.blockedBy.length === 1 ? "" : "es"}), including ones RoALT didn't start. Unsaved progress in those games is lost.</>}
-        confirmLabel="Close Roblox"
+        title={t("launch.multi.closeTitle")}
+        text={t("launch.multi.closeText", { count: status.blockedBy.length })}
+        confirmLabel={t("launch.multi.closeRoblox")}
       />
       <ConfirmDialog
         open={confirm === "takeOver"}
         onClose={() => !busy && setConfirm(null)}
         onConfirm={run}
         busy={busy}
-        title="Take over from the running Roblox?"
-        text={
-          <>
-            RoALT closes Roblox's own "already running" marker inside the running client
-            {status.blockedBy.length === 1 ? "" : "s"} ({status.blockedBy.length} process{status.blockedBy.length === 1 ? "" : "es"}) with
-            a standard Windows call, so new clients can start next to it without closing it. Nothing in the client's memory is changed,
-            but this reaches into a running Roblox: if a client misbehaves afterwards, close Roblox instead. Roblox's anti-cheat may see
-            the access.
-          </>
-        }
-        confirmLabel="Take over"
+        title={t("launch.multi.takeOverTitle")}
+        text={t("launch.multi.takeOverText", { count: status.blockedBy.length })}
+        confirmLabel={t("launch.multi.takeOver")}
       />
       {dialog}
     </>

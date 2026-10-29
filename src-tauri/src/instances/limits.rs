@@ -6,7 +6,9 @@
 //! frame cap RoALT could set without touching the client; a CPU cap is what lowers its load
 //! (its frame rate drops with it). Process handles stay short-lived and are checked against
 //! the start time as in `process`; only the job handle is kept, so its cap can change later.
-//! A job outlives RoALT while its client runs, so a cap set stays until that client closes.
+//! A job outlives RoALT while its client runs, but a restarted RoALT can't find it again (nor
+//! knows what was set), so RoALT takes its limits back when it exits (`release_all`) and sets
+//! them anew on the clients it follows again.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -39,6 +41,7 @@ unsafe impl Send for Job {}
 /// What has been applied to one instance's current process.
 struct Applied {
     pid: u32,
+    t0: u64,
     job: Option<Job>,
     limits: Limits,
     /// When it was last trimmed (or its trim interval set).
@@ -48,8 +51,8 @@ struct Applied {
 }
 
 impl Applied {
-    fn new(pid: u32) -> Applied {
-        Applied { pid, job: None, limits: Limits::default(), trimmed_at: Instant::now(), failed: None }
+    fn new(pid: u32, t0: u64) -> Applied {
+        Applied { pid, t0, job: None, limits: Limits::default(), trimmed_at: Instant::now(), failed: None }
     }
 }
 
@@ -66,9 +69,9 @@ impl Limiter {
     /// what differs from what was applied to it before.
     pub fn apply(&self, id: &str, pid: u32, t0: u64, limits: Limits) -> Result<()> {
         let mut map = self.applied.lock().unwrap_or_else(|e| e.into_inner());
-        let a = map.entry(id.to_owned()).or_insert_with(|| Applied::new(pid));
-        if a.pid != pid {
-            *a = Applied::new(pid);
+        let a = map.entry(id.to_owned()).or_insert_with(|| Applied::new(pid, t0));
+        if (a.pid, a.t0) != (pid, t0) {
+            *a = Applied::new(pid, t0);
         }
         if limits.cpu_cap != a.limits.cpu_cap {
             match &a.job {
@@ -103,6 +106,28 @@ impl Limiter {
             trim(pid, t0)?;
         }
         Ok(())
+    }
+
+    /// At exit: takes back what was set (CPU cap off, efficiency mode off, every core), so a
+    /// restarted RoALT, which assumes nothing is set, starts from the client's own state.
+    // ponytail: a RoALT killed outright leaves its limits on (a cap until the client closes).
+    pub fn release_all(&self) {
+        let applied = std::mem::take(&mut *self.applied.lock().unwrap_or_else(|e| e.into_inner()));
+        for (id, a) in applied {
+            let mut r = Ok(());
+            if let Some(job) = a.job.as_ref().filter(|_| a.limits.cpu_cap.is_some()) {
+                r = r.and(set_cap(job, None));
+            }
+            if a.limits.eco {
+                r = r.and(set_eco(a.pid, a.t0, false));
+            }
+            if a.limits.affinity.is_some() {
+                r = r.and(set_affinity(a.pid, a.t0, None));
+            }
+            if let Err(e) = r {
+                log::warn!("could not take the limits off instance {id}: {e}");
+            }
+        }
     }
 
     /// After each tracker poll, with `plan`'s limits: brings every running client to them
@@ -194,7 +219,7 @@ pub fn trim(pid: u32, t0: u64) -> Result<()> {
     // SAFETY: `h` is live with PROCESS_SET_QUOTA | PROCESS_QUERY_LIMITED_INFORMATION.
     unsafe { K32EmptyWorkingSet(*h) }
         .ok()
-        .map_err(|e| AppError::Internal(format!("Could not trim Roblox (process {pid}): {}", e.message())))
+        .map_err(|e| AppError::Internal(tr!("Could not trim Roblox (process {pid}): {why}", pid = pid, why = e.message())))
 }
 
 /// Sets the cores the client may use; None: all of them (the system's mask). A mask naming no
@@ -206,7 +231,7 @@ fn set_affinity(pid: u32, t0: u64, mask: Option<u64>) -> Result<()> {
     // out pointers are locals.
     unsafe { GetProcessAffinityMask(*h, &mut own, &mut system) }.map_err(|e| failed(pid, e))?;
     let mask = match mask {
-        Some(m) => clamp_affinity(m, system as u64).ok_or_else(|| AppError::Invalid("None of those CPU cores exist here.".into()))?,
+        Some(m) => clamp_affinity(m, system as u64).ok_or_else(|| AppError::Invalid(tr!("None of those CPU cores exist here.")))?,
         None => system as u64,
     };
     // SAFETY: as above; `mask` is a subset of the system mask.
@@ -237,7 +262,7 @@ fn set_cap(job: &Job, cap: Option<u8>) -> Result<()> {
             size_of::<JOBOBJECT_CPU_RATE_CONTROL_INFORMATION>() as u32,
         )
     }
-    .map_err(|e| AppError::Internal(format!("Could not set the CPU limit: {}", e.message())))
+    .map_err(|e| AppError::Internal(tr!("Could not set the CPU limit: {why}", why = e.message())))
 }
 
 fn set_eco(pid: u32, t0: u64, on: bool) -> Result<()> {
@@ -258,15 +283,15 @@ fn set_eco(pid: u32, t0: u64, on: bool) -> Result<()> {
 /// A short-lived handle to the client, only if `pid` is still the process started at `t0`.
 fn client(pid: u32, t0: u64, rights: PROCESS_ACCESS_RIGHTS) -> Result<Owned<HANDLE>> {
     let h = open(pid, rights | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE)
-        .ok_or_else(|| AppError::Internal(format!("Could not reach Roblox (process {pid}).")))?;
+        .ok_or_else(|| AppError::Internal(tr!("Could not reach Roblox (process {pid}).", pid = pid)))?;
     if started(*h) != Some(t0) {
-        return Err(AppError::Invalid("That client has closed.".into()));
+        return Err(AppError::Invalid(tr!("That client has closed.")));
     }
     Ok(h)
 }
 
 fn failed(pid: u32, e: windows::core::Error) -> AppError {
-    AppError::Internal(format!("Could not limit Roblox (process {pid}): {}", e.message()))
+    AppError::Internal(tr!("Could not limit Roblox (process {pid}): {why}", pid = pid, why = e.message()))
 }
 
 #[cfg(test)]
@@ -303,6 +328,10 @@ mod tests {
         }
         assert!(l.apply("j", pid, t0 - 10, capped).is_err(), "a reused pid must not be limited");
         l.sync(&[]);
+        assert!(l.applied.lock().unwrap().is_empty());
+        l.apply("i", pid, t0, Limits { cpu_cap: Some(15), eco: true, affinity: Some(1), ..Limits::default() }).unwrap();
+        l.release_all();
+        assert_eq!(affinity(pid), system(), "every core again at exit");
         assert!(l.applied.lock().unwrap().is_empty());
         child.kill().unwrap();
         child.wait().unwrap();

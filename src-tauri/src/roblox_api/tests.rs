@@ -637,7 +637,7 @@ async fn resolve_with(answers: Vec<String>, target: LaunchTarget) -> (Result<Joi
 async fn resolve_warn(
     answers: Vec<String>,
     target: LaunchTarget,
-) -> (Result<(Join, Option<&'static str>)>, mpsc::Receiver<String>) {
+) -> (Result<(Join, Option<String>)>, mpsc::Receiver<String>) {
     let (base, reqs) = serve(answers);
     let (c, _) = client(&base);
     (resolve(&c, 4, &Secret::new("OLD"), &target).await, reqs)
@@ -753,7 +753,7 @@ async fn experience_invite_joins_its_server_while_valid() {
     assert_eq!(join.unwrap(), Join::Job { place_id: 1818, job_id: JOB.into() });
     let old = format!(r#"{{"notificationExperienceInviteData":{{"status":"Expired","placeId":1818,"instanceId":"{JOB}","launchData":"x"}}}}"#);
     let (r, _) = resolve_warn(vec![ok(&old)], share("NotificationExperienceInvite")).await;
-    assert_eq!(r.unwrap(), (Join::Game { place_id: 1818, launch_data: Some("x".into()) }, Some(EXPIRED_TEXT)));
+    assert_eq!(r.unwrap(), (Join::Game { place_id: 1818, launch_data: Some("x".into()) }, Some(EXPIRED_TEXT.into())));
 }
 
 const EXPIRED_TEXT: &str = "This share link has expired, so Roblox may refuse the join.";

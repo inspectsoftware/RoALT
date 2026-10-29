@@ -60,7 +60,6 @@ const PAGE: &str = include_str!("remote.html");
 /// The page's scripts and styles are inline; it loads nothing else.
 const CSP: &str = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; \
                    img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
-const LOCKED: &str = "Unlock the vault first: the web dashboard only runs while it is open.";
 /// AAD for the certificate's private key.
 const CERT_AAD: &[u8] = b"roalt.remote.cert";
 /// The settings-table row holding the certificate (`StoredCert` JSON).
@@ -181,8 +180,8 @@ fn target_of(t: TargetIn) -> Result<LaunchTarget> {
         TargetIn::Target(t) => Ok(t),
         TargetIn::Text(text) => match crate::launcher::target::parse(&text) {
             ParsedInput::Target { target } => Ok(target),
-            ParsedInput::JobIdOnly { .. } => Err(AppError::Invalid("Paste the server's link, not only its job id.".into())),
-            ParsedInput::Username { .. } => Err(AppError::Invalid("Paste a game link; following a user works in RoALT itself.".into())),
+            ParsedInput::JobIdOnly { .. } => Err(AppError::Invalid(tr!("Paste the server's link, not only its job id."))),
+            ParsedInput::Username { .. } => Err(AppError::Invalid(tr!("Paste a game link; following a user works in RoALT itself."))),
             ParsedInput::Invalid { reason } | ParsedInput::Unsupported { reason } => Err(AppError::Invalid(reason)),
         },
     }
@@ -328,7 +327,7 @@ fn lan_ip() -> Option<Ipv4Addr> {
 pub fn start(app: &AppHandle, port: u16) -> Result<()> {
     let s = app.state::<App>();
     if s.vault.is_locked() {
-        return Err(AppError::Invalid(LOCKED.into()));
+        return Err(AppError::Invalid(tr!("Unlock the vault first: the web dashboard only runs while it is open.")));
     }
     if let Some(why) = crate::network::blocked(&s) {
         return Err(AppError::Invalid(why));
@@ -339,9 +338,9 @@ pub fn start(app: &AppHandle, port: u16) -> Result<()> {
     let pin = stored_pin(&s)?;
     let (cert_der, key_der) = cert(&s)?;
     let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).map_err(|e| match e.kind() {
-        ErrorKind::AddrInUse => AppError::Invalid(format!("Port {port} is in use by another app. Pick another port.")),
-        ErrorKind::PermissionDenied => AppError::Invalid(format!("Windows won't let RoALT use port {port}. Pick another port.")),
-        _ => AppError::Internal(format!("Couldn't open port {port}: {e}")),
+        ErrorKind::AddrInUse => AppError::Invalid(tr!("Port {port} is in use by another app. Pick another port.", port = port)),
+        ErrorKind::PermissionDenied => AppError::Invalid(tr!("Windows won't let RoALT use port {port}. Pick another port.", port = port)),
+        _ => AppError::Internal(tr!("Couldn't open port {port}: {why}", port = port, why = e)),
     })?;
     listener.set_nonblocking(true)?;
     let (stop, stopped) = oneshot::channel::<()>();

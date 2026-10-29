@@ -65,7 +65,7 @@ pub async fn resolve(
     account_id: i64,
     cookie: &Secret,
     target: &LaunchTarget,
-) -> Result<(Join, Option<&'static str>)> {
+) -> Result<(Join, Option<String>)> {
     let mut warning = None;
     let join = match target.clone() {
         LaunchTarget::Place { place_id, launch_data } => Join::Game { place_id, launch_data },
@@ -79,12 +79,12 @@ pub async fn resolve(
         LaunchTarget::ShareLink { code, link_type } => {
             let (join, expired) =
                 share_join(api, api.resolve_share_link(account_id, cookie, &code, &link_type).await?).await?;
-            warning = expired.then_some(EXPIRED);
+            warning = expired.then(expired_warning);
             join
         }
         LaunchTarget::ShareLinkV2 { code } => {
             let v = api.resolve_share_link_v2(account_id, cookie, &code).await?;
-            warning = is_status(&v.status, "Expired").then_some(EXPIRED);
+            warning = is_status(&v.status, "Expired").then(expired_warning);
             v2_join(v)?
         }
         LaunchTarget::Universe { universe_id } => {
@@ -93,11 +93,12 @@ pub async fn resolve(
         LaunchTarget::FollowUser { user_id } => Join::Follow { user_id },
     };
     let (join, dropped) = cap_launch_data(join);
-    Ok((join, warning.or(dropped.then_some(DATA_DROPPED))))
+    Ok((join, warning.or_else(|| dropped.then(|| tr!("The link's launch data is over Roblox's 200-byte limit and was left out.")))))
 }
 
-const EXPIRED: &str = "This share link has expired, so Roblox may refuse the join.";
-const DATA_DROPPED: &str = "The link's launch data is over Roblox's 200-byte limit and was left out.";
+fn expired_warning() -> String {
+    tr!("This share link has expired, so Roblox may refuse the join.")
+}
 
 const MAX_ARGS_LEN: usize = 512;
 const MAX_ARGS: usize = 32;
@@ -107,19 +108,23 @@ const MAX_ARGS: usize = 32;
 /// bootstrapper may hand them to a shell), and anything starting with `roblox-player:` (a
 /// second launch URI). They go after the launch URI as typed; never logged.
 pub fn launch_args(text: &str) -> Result<Vec<String>> {
-    let invalid = |why: &str| Err(AppError::Invalid(format!("Launch arguments {why}.")));
+    let invalid = |why: String| Err(AppError::Invalid(why));
     if text.chars().count() > MAX_ARGS_LEN {
-        return invalid(&format!("can be at most {MAX_ARGS_LEN} characters"));
+        return invalid(tr!("Launch arguments can be at most {max} characters.", max = MAX_ARGS_LEN));
     }
     if let Some(c) = text.chars().find(|&c| c.is_control() && !matches!(c, ' ' | '\t') || "\"'&|<>^".contains(c)) {
-        return invalid(&format!("can't contain {}", if c.is_control() { "line breaks or control characters".into() } else { format!("{c}") }));
+        return invalid(if c.is_control() {
+            tr!("Launch arguments can't contain line breaks or control characters.")
+        } else {
+            tr!("Launch arguments can't contain {char}.", char = c)
+        });
     }
     let args: Vec<String> = text.split_whitespace().map(str::to_owned).collect();
     if args.len() > MAX_ARGS {
-        return invalid(&format!("can be at most {MAX_ARGS} words"));
+        return invalid(tr!("Launch arguments can be at most {max} words.", max = MAX_ARGS));
     }
     if args.iter().any(|a| a.to_ascii_lowercase().starts_with("roblox-player:")) {
-        return invalid("can't contain another roblox-player: link");
+        return invalid(tr!("Launch arguments can't contain another roblox-player: link."));
     }
     Ok(args)
 }
@@ -181,7 +186,7 @@ pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget, fps_cap: Op
         place_id: join.place_id(),
         started_at,
         via_bootstrapper: exe.bootstrapper,
-        warning: warning.map(str::to_owned),
+        warning,
         fps_cap,
         pid_start: Some(pid_start),
     })
@@ -214,7 +219,7 @@ async fn share_join(api: &Client, r: ShareLinkResolution) -> Result<(Join, bool)
         (ShareKind::Profile, r.profile_link_resolution_response_data),
     ];
     let Some((kind, t)) = filled.into_iter().find_map(|(kind, t)| Some((kind, t?))) else {
-        return Err(AppError::Invalid("This share link doesn't lead to a game or a player.".into()));
+        return Err(AppError::Invalid(tr!("This share link doesn't lead to a game or a player.")));
     };
     if is_status(&t.status, "Invalid") {
         return Err(no_longer_valid());
@@ -251,7 +256,7 @@ fn v2_join(v: ShareLinkV2) -> Result<Join> {
         (Some("Experience"), Some(place_id)) => {
             Ok(Join::Game { place_id, launch_data: v.custom_data.as_ref().and_then(text) })
         }
-        _ => Err(AppError::Invalid("This share link doesn't lead to a game.".into())),
+        _ => Err(AppError::Invalid(tr!("This share link doesn't lead to a game."))),
     }
 }
 
@@ -267,7 +272,7 @@ async fn share_place(api: &Client, t: &ShareTarget) -> Result<i64> {
 pub(crate) async fn root_place(api: &Client, universe_id: i64) -> Result<i64> {
     let mut found = api.universe_root_places(&[universe_id]).await?;
     let place = found.remove(&universe_id).map(|(place_id, _)| place_id);
-    place.ok_or_else(|| AppError::Invalid("This game no longer exists.".into()))
+    place.ok_or_else(|| AppError::Invalid(tr!("This game no longer exists.")))
 }
 
 /// Drops launch data over Roblox's 200-byte limit (true when it did). Its content is never logged.
@@ -300,7 +305,7 @@ fn is_status(status: &Option<String>, want: &str) -> bool {
 }
 
 fn no_longer_valid() -> AppError {
-    AppError::Invalid("This share link is no longer valid.".into())
+    AppError::Invalid(tr!("This share link is no longer valid."))
 }
 
 #[cfg(test)]

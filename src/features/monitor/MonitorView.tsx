@@ -3,19 +3,21 @@ import type { AccountSummary, ClientMetrics } from "../../api";
 import { useInstances, useMetrics } from "../../data";
 import { accountName, Avatar } from "../accounts/shared";
 import { isRunning, STATES, uptime, useNow } from "../launch/Running";
+import { fmtNum, t } from "../../i18n";
 
 /** Samples kept per line: two minutes at one every 2 s. */
 const KEEP = 60;
 
 type Series = { cpu: number[]; mem: number[] };
 
-export const mb = (n: number) => (n >= 1024 ? `${(n / 1024).toFixed(1)} GB` : `${Math.round(n)} MB`);
-export const pct = (n: number | null) => (n === null ? "—" : `${n < 10 ? n.toFixed(1) : Math.round(n)}%`);
+const one = (n: number) => fmtNum(n, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+export const mb = (n: number) => (n >= 1024 ? t("monitor.gb", { n: one(n / 1024) }) : t("monitor.mb", { n: fmtNum(Math.round(n)) }));
+export const pct = (n: number | null) => (n === null ? "—" : t("monitor.pct", { n: n < 10 ? one(n) : fmtNum(Math.round(n)) }));
 function rate(bps: number | null) {
   if (bps === null) return "—";
-  if (bps >= 1024 * 1024) return `${(bps / 1024 / 1024).toFixed(1)} MB/s`;
-  if (bps >= 1024) return `${Math.round(bps / 1024)} KB/s`;
-  return `${Math.round(bps)} B/s`;
+  if (bps >= 1024 * 1024) return t("monitor.mbps", { n: one(bps / 1024 / 1024) });
+  if (bps >= 1024) return t("monitor.kbps", { n: fmtNum(Math.round(bps / 1024)) });
+  return t("monitor.bps", { n: fmtNum(Math.round(bps)) });
 }
 const push = (list: number[], v: number) => [...list, v].slice(-KEEP);
 
@@ -41,7 +43,7 @@ function Sparkline({ values, floor, zero, label, format }: {
   const y = (v: number) => h - pad - ((v - base) / (max - base)) * (h - 2 * pad);
   const pts = values.map((v, i) => `${x(i + offset).toFixed(1)},${y(v).toFixed(1)}`);
   const last = values[values.length - 1];
-  const range = `${label}: ${format(Math.min(...values))} to ${format(Math.max(...values))} over the last ${Math.round((values.length * 2) / 60) || 1} min, now ${format(last)}`;
+  const range = t("monitor.range", { label, min: format(Math.min(...values)), max: format(Math.max(...values)), m: Math.round((values.length * 2) / 60) || 1, now: format(last) });
   return (
     <svg width={w} height={h} role="img" aria-label={range} className="flex-none">
       <title>{range}</title>
@@ -98,36 +100,36 @@ export function MonitorView({ accounts }: { accounts: AccountSummary[] }) {
   return (
     <main className="scroll flex-1 min-w-0 px-10 pt-6 pb-12">
       <div className="enter max-w-[1000px] flex flex-col">
-        <h1 className="text-xl font-semibold tracking-[-0.01em]">Monitor</h1>
-        <p className="text-dim mt-1">What each client RoALT runs uses, every 2 seconds. Limits are under each client in Launch.</p>
+        <h1 className="text-xl font-semibold tracking-[-0.01em]">{t("monitor.title")}</h1>
+        <p className="text-dim mt-1">{t("monitor.intro")}</p>
 
         <div className="grid grid-cols-2 lg:grid-cols-4 border border-line mt-5">
-          <Tile label="Clients" value={String(running.length)} />
-          <Tile label="CPU, all clients" value={pct(cpuNow)}>
-            {list.length > 0 && <Sparkline values={hist.totals.cpu} floor={10} zero label="CPU, all clients" format={pct} />}
+          <Tile label={t("monitor.clients")} value={String(running.length)} />
+          <Tile label={t("monitor.cpuAll")} value={pct(cpuNow)}>
+            {list.length > 0 && <Sparkline values={hist.totals.cpu} floor={10} zero label={t("monitor.cpuAll")} format={pct} />}
           </Tile>
-          <Tile label="Private memory" value={mb(memNow)}>
-            {list.length > 0 && <Sparkline values={hist.totals.mem} floor={64} label="Private memory, all clients" format={mb} />}
+          <Tile label={t("monitor.privateMemory")} value={mb(memNow)}>
+            {list.length > 0 && <Sparkline values={hist.totals.mem} floor={64} label={t("monitor.privateMemoryAll")} format={mb} />}
           </Tile>
-          <Tile label="IO" value={rate(ioNow)} />
+          <Tile label={t("monitor.io")} value={rate(ioNow)} />
         </div>
 
         {running.length === 0 ? (
-          <p className="text-dim mt-6">Clients you launch show here while they run.</p>
+          <p className="text-dim mt-6">{t("monitor.empty")}</p>
         ) : (
           <table className="mono w-full border-collapse text-xs mt-6">
             <thead>
               <tr className="h-8 text-dim text-left">
-                <th className="font-normal border-b border-line">Account</th>
-                <th className="font-normal border-b border-line">State</th>
-                <th className="font-normal border-b border-line text-right pr-3">CPU</th>
-                <th className="font-normal border-b border-line"><span className="sr-only">CPU trend</span></th>
-                <th className="font-normal border-b border-line text-right pr-3" title="Private memory (what a leak grows); working set in the tooltip">Memory</th>
-                <th className="font-normal border-b border-line"><span className="sr-only">Memory trend</span></th>
-                <th className="font-normal border-b border-line text-right pr-3">Read</th>
-                <th className="font-normal border-b border-line text-right pr-3">Write</th>
-                <th className="font-normal border-b border-line text-right pr-3">Up</th>
-                <th className="font-normal border-b border-line text-right" title="Rejoins and restarts that led to this client">Restarts</th>
+                <th className="font-normal border-b border-line">{t("monitor.account")}</th>
+                <th className="font-normal border-b border-line">{t("monitor.state")}</th>
+                <th className="font-normal border-b border-line text-right pr-3">{t("monitor.cpu")}</th>
+                <th className="font-normal border-b border-line"><span className="sr-only">{t("monitor.cpuTrend")}</span></th>
+                <th className="font-normal border-b border-line text-right pr-3" title={t("monitor.memoryHint")}>{t("monitor.memory")}</th>
+                <th className="font-normal border-b border-line"><span className="sr-only">{t("monitor.memoryTrend")}</span></th>
+                <th className="font-normal border-b border-line text-right pr-3">{t("monitor.read")}</th>
+                <th className="font-normal border-b border-line text-right pr-3">{t("monitor.write")}</th>
+                <th className="font-normal border-b border-line text-right pr-3">{t("monitor.up")}</th>
+                <th className="font-normal border-b border-line text-right" title={t("monitor.restartsHint")}>{t("monitor.restarts")}</th>
               </tr>
             </thead>
             <tbody>
@@ -141,7 +143,7 @@ export function MonitorView({ accounts }: { accounts: AccountSummary[] }) {
                     <td className="pr-3 max-w-0 w-[24%]">
                       <span className="flex items-center gap-2 min-w-0 font-sans">
                         {a && <Avatar account={a} size={20} />}
-                        <span className="truncate">{a ? accountName(a) : `Account ${i.accountId}`}</span>
+                        <span className="truncate">{a ? accountName(a) : t("monitor.accountId", { id: i.accountId })}</span>
                       </span>
                     </td>
                     <td className="pr-3 whitespace-nowrap">
@@ -152,9 +154,9 @@ export function MonitorView({ accounts }: { accounts: AccountSummary[] }) {
                       </span>
                     </td>
                     <td className="pr-3 text-right">{m ? pct(m.cpuPct) : "—"}</td>
-                    <td className="pr-3"><Sparkline values={h?.cpu ?? []} floor={10} zero label="CPU" format={pct} /></td>
-                    <td className="pr-3 text-right" title={m ? `Working set ${mb(m.workingSetMb)}` : undefined}>{m ? mb(m.privateMb) : "—"}</td>
-                    <td className="pr-3"><Sparkline values={h?.mem ?? []} floor={64} label="Private memory" format={mb} /></td>
+                    <td className="pr-3"><Sparkline values={h?.cpu ?? []} floor={10} zero label={t("monitor.cpu")} format={pct} /></td>
+                    <td className="pr-3 text-right" title={m ? t("monitor.workingSet", { mb: mb(m.workingSetMb) }) : undefined}>{m ? mb(m.privateMb) : "—"}</td>
+                    <td className="pr-3"><Sparkline values={h?.mem ?? []} floor={64} label={t("monitor.privateMemory")} format={mb} /></td>
                     <td className="pr-3 text-right whitespace-nowrap">{m ? rate(m.readBps) : "—"}</td>
                     <td className="pr-3 text-right whitespace-nowrap">{m ? rate(m.writeBps) : "—"}</td>
                     <td className="pr-3 text-right whitespace-nowrap">{uptime(i.startedAt, now)}</td>

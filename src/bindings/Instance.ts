@@ -40,4 +40,9 @@ micro: boolean,
 /**
  * The FPS cap its launch asked for (`LaunchInfo::fps_cap`); a rejoin uses it again.
  */
-fpsCap: number | null, };
+fpsCap: number | null, 
+/**
+ * Its note is "Signed in as another account" or "Roblox wants a human check" (the note
+ * itself is translated, so the UI can't match its text).
+ */
+signInProblem: boolean, };

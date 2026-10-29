@@ -2,11 +2,12 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type { GameServer, PrivateServer } from "../../api";
 import { Icon } from "../../ui/Icon";
 import { toast, toastError } from "../../ui/Toast";
+import { fmtNum, t } from "../../i18n";
 
 export type Pick = { kind: "public"; id: string } | { kind: "private"; id: number } | null;
 
 export const short = (id: string) => `${id.slice(0, 8)}…${id.slice(-4)}`;
-const copyJob = (id: string) => writeText(id).then(() => toast("Job ID copied"), toastError);
+const copyJob = (id: string) => writeText(id).then(() => toast(t("servers.jobCopied")), toastError);
 
 function Players({ playing, max }: { playing: number; max: number }) {
   return (
@@ -25,15 +26,15 @@ function Players({ playing, max }: { playing: number; max: number }) {
 export function PublicTable({ servers, pick, onPick }: { servers: GameServer[]; pick: string | null; onPick: (id: string) => void }) {
   if (!servers.length) return null;
   return (
-    <table className="w-full min-w-[560px] border-collapse" aria-label="Public servers">
+    <table className="w-full min-w-[560px] border-collapse" aria-label={t("servers.publicServers")}>
       <thead>
         <tr>
-          <th className="w-12 pl-6"><span className="sr-only">Pick</span></th>
-          <th className="label">Job ID</th>
-          <th className="label w-[34%]">Players</th>
-          <th className="label text-right">Ping</th>
+          <th className="w-12 pl-6"><span className="sr-only">{t("servers.pick")}</span></th>
+          <th className="label">{t("servers.jobId")}</th>
+          <th className="label w-[34%]">{t("servers.players")}</th>
+          <th className="label text-right">{t("servers.ping")}</th>
           <th className="label text-right pr-4">FPS</th>
-          <th className="w-16"><span className="sr-only">Actions</span></th>
+          <th className="w-16"><span className="sr-only">{t("servers.actions")}</span></th>
         </tr>
       </thead>
       <tbody>
@@ -42,18 +43,18 @@ export function PublicTable({ servers, pick, onPick }: { servers: GameServer[]; 
           return (
             <tr key={s.id} className="row h-11 cursor-pointer" data-selected={pick === s.id || undefined} onClick={() => onPick(s.id)}>
               <td className="pl-6">
-                <input type="radio" className="radio" name="server" aria-label={`Pick server ${id}`} checked={pick === s.id} onChange={() => onPick(s.id)} />
+                <input type="radio" className="radio" name="server" aria-label={t("servers.pickServer", { id })} checked={pick === s.id} onChange={() => onPick(s.id)} />
               </td>
               <td className="mono text-xs">{id}</td>
               <td><Players playing={s.playing} max={s.maxPlayers} /></td>
-              <td className="mono text-xs text-right">{s.ping === null ? "—" : `${s.ping} ms`}</td>
-              <td className="mono text-xs text-right pr-4">{s.fps === null ? "—" : s.fps.toFixed(1)}</td>
+              <td className="mono text-xs text-right">{s.ping === null ? "—" : t("servers.pingMs", { ms: s.ping })}</td>
+              <td className="mono text-xs text-right pr-4">{s.fps === null ? "—" : fmtNum(s.fps, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</td>
               <td className="pr-4">
                 <button
                   type="button"
                   className="wc w-9 h-8 ml-auto"
-                  aria-label={`Copy job ID ${id}`}
-                  title="Copy job ID"
+                  aria-label={t("servers.copyJobIdFor", { id })}
+                  title={t("servers.copyJobId")}
                   onClick={(e) => {
                     e.stopPropagation();
                     void copyJob(s.id);
@@ -74,19 +75,19 @@ export function PublicTable({ servers, pick, onPick }: { servers: GameServer[]; 
 export function PrivateTable({ servers, pick, onPick }: { servers: PrivateServer[]; pick: number | null; onPick: (id: number) => void }) {
   if (!servers.length) return null;
   return (
-    <table className="w-full min-w-[560px] border-collapse" aria-label="Private servers">
+    <table className="w-full min-w-[560px] border-collapse" aria-label={t("servers.privateServers")}>
       <thead>
         <tr>
-          <th className="w-12 pl-6"><span className="sr-only">Pick</span></th>
-          <th className="label">Name</th>
-          <th className="label">Owner</th>
-          <th className="label w-[30%]">Players</th>
-          <th className="label text-right pr-6">Access</th>
+          <th className="w-12 pl-6"><span className="sr-only">{t("servers.pick")}</span></th>
+          <th className="label">{t("servers.name")}</th>
+          <th className="label">{t("servers.owner")}</th>
+          <th className="label w-[30%]">{t("servers.players")}</th>
+          <th className="label text-right pr-6">{t("servers.access")}</th>
         </tr>
       </thead>
       <tbody>
         {servers.map((s) => {
-          const name = s.name || "Unnamed server";
+          const name = s.name || t("servers.unnamed");
           const can = s.accessCode !== null;
           return (
             <tr
@@ -100,7 +101,7 @@ export function PrivateTable({ servers, pick, onPick }: { servers: PrivateServer
                   type="radio"
                   className="radio"
                   name="server"
-                  aria-label={`Pick ${name}`}
+                  aria-label={t("servers.pickName", { name })}
                   disabled={!can}
                   checked={pick === s.vipServerId}
                   onChange={() => onPick(s.vipServerId)}
@@ -109,7 +110,7 @@ export function PrivateTable({ servers, pick, onPick }: { servers: PrivateServer
               <td className="pr-3 max-w-0 truncate" title={name}>{name}</td>
               <td className="pr-3 max-w-0 truncate text-dim">{s.ownerName ? `@${s.ownerName}` : "—"}</td>
               <td><Players playing={s.playing} max={s.maxPlayers} /></td>
-              <td className={`text-right pr-6 ${can ? "" : "text-dim"}`}>{can ? "Joinable" : "No access"}</td>
+              <td className={`text-right pr-6 ${can ? "" : "text-dim"}`}>{can ? t("servers.joinable") : t("servers.noAccess")}</td>
             </tr>
           );
         })}

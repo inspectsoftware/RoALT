@@ -162,7 +162,7 @@ impl Vault {
         let new_password = match mode {
             VaultMode::Master => Some(
                 new_password.filter(|p| p.chars().count() >= MIN_MASTER_PASSWORD).ok_or_else(|| {
-                    AppError::Invalid(format!("Use at least {MIN_MASTER_PASSWORD} characters for the master password."))
+                    AppError::Invalid(tr!("Use at least {min} characters for the master password.", min = MIN_MASTER_PASSWORD))
                 })?,
             ),
             VaultMode::Dpapi => None,
@@ -226,7 +226,7 @@ fn unwrap_dpapi(rec: &VaultRecord) -> Result<Key> {
 
 /// `WrongPassword` when `password` does not open the sealed data key.
 fn unwrap_master(rec: &VaultRecord, password: &str) -> Result<Key> {
-    let kdf = rec.kdf.as_ref().ok_or_else(|| AppError::Internal("No master password is set.".into()))?;
+    let kdf = rec.kdf.as_ref().ok_or_else(|| AppError::Internal(tr!("No master password is set.")))?;
     let sealed = dpapi::unprotect(&rec.wrapped_key)?;
     let kek = master::derive_key(password, kdf)?;
     to_key(&master::open(&kek, KEY_AAD, &sealed).map_err(|_| AppError::WrongPassword)?)

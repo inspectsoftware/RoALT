@@ -136,4 +136,8 @@ remote: RemoteAccess,
 /**
  * Launch and serve the web dashboard on a Public network too (`network`); off: refused.
  */
-allowPublicNetworks: boolean, };
+allowPublicNetworks: boolean, 
+/**
+ * UI and message language (`i18n::LANGS`), or "" to follow Windows' display language.
+ */
+language: string, };

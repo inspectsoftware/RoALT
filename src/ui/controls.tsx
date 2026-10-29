@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { toast } from "./Toast";
+import { t } from "../i18n";
 
 export function Switch({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
   return (
@@ -90,7 +91,7 @@ export function NumberField({ label, unit, short, min, max, step = 1, value, onC
     if (n === value) return;
     if (Number.isInteger(n / step) && n >= min && n <= max) onCommit(n);
     else {
-      toast(step === 1 ? `Use a whole number of ${unit} from ${min} to ${max}.` : `Use ${min} to ${max} ${unit}, in steps of ${step}.`, "error");
+      toast(step === 1 ? t("ui.numberWhole", { unit, min, max }) : t("ui.numberStep", { unit, min, max, step }), "error");
       setText(String(value));
     }
   };

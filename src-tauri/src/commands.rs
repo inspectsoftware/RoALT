@@ -40,7 +40,7 @@ pub async fn vault_unlock(app: AppHandle, s: State<'_, App>, password: String) -
     s.vault.unlock(&rec, &password)?;
     crate::tray::refresh(&app);
     if let Err(e) = crate::remote::resume(&app) {
-        notice(&app, true, format!("The web dashboard didn't start: {e}"));
+        notice(&app, true, tr!("The web dashboard didn't start: {why}", why = e.message()));
     }
     Ok(())
 }
@@ -63,7 +63,7 @@ pub async fn vault_set_mode(
     let rec = s.db.vault_record()?.ok_or(AppError::Internal("vault record missing".into()))?;
     // Otherwise setting a master password would be a way round the Hello check on reveal.
     if rec.mode == VaultMode::Dpapi && mode == VaultMode::Master && crate::vault::hello_available().await {
-        reauth(&app, &s, None, "Confirm it's you to set a master password.").await?;
+        reauth(&app, &s, None, &tr!("Confirm it's you to set a master password.")).await?;
     }
     let new_rec = s.vault.rewrap(&rec, mode, current_password.as_deref(), new_password.as_deref())?;
     s.db.save_vault_record(&new_rec)?;
@@ -90,7 +90,7 @@ fn normalize_cookie(raw: &str) -> Result<Secret> {
     let v = raw.trim().trim_matches(|c| c == '"' || c == '\'').trim();
     let v = v.strip_prefix(".ROBLOSECURITY=").unwrap_or(v).trim_end_matches(';').trim();
     if v.is_empty() || v.len() > 8192 || !v.bytes().all(|b| b.is_ascii_graphic()) {
-        return Err(AppError::Invalid("That doesn't look like a .ROBLOSECURITY cookie.".into()));
+        return Err(AppError::Invalid(tr!("That doesn't look like a .ROBLOSECURITY cookie.")));
     }
     Ok(Secret::new(v))
 }
@@ -202,7 +202,7 @@ pub async fn accounts_import_cookies(app: AppHandle, s: State<'_, App>, text: St
     }
     let found = find_cookies(&text);
     if found.is_empty() {
-        return Err(AppError::Invalid("No .ROBLOSECURITY cookies found. Each starts with _|WARNING:-DO-NOT-SHARE-THIS.".into()));
+        return Err(AppError::Invalid(tr!("No .ROBLOSECURITY cookies found. Each starts with _|WARNING:-DO-NOT-SHARE-THIS.")));
     }
     let total = text.matches(COOKIE_MARK).count();
     let cookies = found.iter().map(|c| normalize_cookie(c).map(|c| (c, ImportExtras::default()))).collect::<Result<Vec<_>>>()?;
@@ -231,7 +231,7 @@ struct RamAccount {
 /// RAM's accounts from its saved JSON (pure): the cookie (blank: None), alias and description.
 fn ram_accounts(json: &[u8]) -> Result<Vec<(Option<String>, ImportExtras)>> {
     let list: Vec<RamAccount> = serde_json::from_slice(json.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(json))
-        .map_err(|_| AppError::Invalid("That isn't a Roblox Account Manager AccountData.json.".into()))?;
+        .map_err(|_| AppError::Invalid(tr!("That isn't a Roblox Account Manager AccountData.json.")))?;
     Ok(list
         .into_iter()
         .map(|a| {
@@ -249,23 +249,23 @@ pub async fn accounts_import_ram(app: AppHandle, s: State<'_, App>, path: String
     if s.vault.is_locked() {
         return Err(AppError::Locked);
     }
-    let meta = std::fs::metadata(&path).map_err(|_| AppError::Invalid("RoALT couldn't read that file.".into()))?;
+    let meta = std::fs::metadata(&path).map_err(|_| AppError::Invalid(tr!("RoALT couldn't read that file.")))?;
     if meta.len() > 32 * 1024 * 1024 {
-        return Err(AppError::Invalid("That file is too big to be an AccountData.json.".into()));
+        return Err(AppError::Invalid(tr!("That file is too big to be an AccountData.json.")));
     }
-    let data = zeroize::Zeroizing::new(std::fs::read(&path).map_err(|_| AppError::Invalid("RoALT couldn't read that file.".into()))?);
+    let data = zeroize::Zeroizing::new(std::fs::read(&path).map_err(|_| AppError::Invalid(tr!("RoALT couldn't read that file.")))?);
     if data.starts_with(RAM_HEADER) {
-        return Err(AppError::Invalid(
-            "This file is locked with a Roblox Account Manager password. Remove the password in Roblox Account Manager, then import again.".into(),
-        ));
+        return Err(AppError::Invalid(tr!(
+            "This file is locked with a Roblox Account Manager password. Remove the password in Roblox Account Manager, then import again."
+        )));
     }
     let entries = match crate::vault::unprotect_with(&data, RAM_ENTROPY) {
         Ok(plain) => ram_accounts(&plain)?,
         Err(_) if data.trim_ascii_start().starts_with(b"[") || data.starts_with(b"\xEF\xBB\xBF") => ram_accounts(&data)?,
         Err(_) => {
-            return Err(AppError::Invalid(
-                "RoALT couldn't decrypt this file. It must come from Roblox Account Manager on this PC, signed in as the same Windows user.".into(),
-            ));
+            return Err(AppError::Invalid(tr!(
+                "RoALT couldn't decrypt this file. It must come from Roblox Account Manager on this PC, signed in as the same Windows user."
+            )));
         }
     };
     let mut cookies = Vec::new();
@@ -368,7 +368,9 @@ async fn reauth(app: &AppHandle, s: &App, password: Option<String>, prompt: &str
     }
 }
 
-const REVEAL_PROMPT: &str = "Confirm it's you to reveal a Roblox cookie.";
+fn reveal_prompt() -> String {
+    tr!("Confirm it's you to reveal a Roblox cookie.")
+}
 
 /// Records a dead or challenged cookie on the account (true when `e` was one).
 fn record_cookie_error(app: &AppHandle, s: &App, id: i64, e: &AppError) -> Result<bool> {
@@ -389,7 +391,7 @@ fn stored_cookie(s: &App, id: i64) -> Result<Secret> {
 
 #[tauri::command]
 pub async fn account_reveal_cookie(app: AppHandle, s: State<'_, App>, id: i64, password: Option<String>) -> Result<String> {
-    reauth(&app, &s, password, REVEAL_PROMPT).await?;
+    reauth(&app, &s, password, &reveal_prompt()).await?;
     Ok(stored_cookie(&s, id)?.expose().to_owned())
 }
 
@@ -398,7 +400,7 @@ pub async fn account_reveal_cookie(app: AppHandle, s: State<'_, App>, id: i64, p
 /// delay, or at exit (`clear_copied_cookie`) if that comes first.
 #[tauri::command]
 pub async fn account_copy_cookie(app: AppHandle, s: State<'_, App>, id: i64, password: Option<String>) -> Result<()> {
-    reauth(&app, &s, password, REVEAL_PROMPT).await?;
+    reauth(&app, &s, password, &reveal_prompt()).await?;
     let secs = s.db.settings()?.clipboard_clear_seconds.max(5);
     let cookie = stored_cookie(&s, id)?;
     app.clipboard().write_secret(cookie.expose().to_owned()).map_err(|e| AppError::Internal(e.to_string()))?;
@@ -631,10 +633,10 @@ pub fn target_parse(input: String) -> ParsedInput {
 pub async fn user_lookup(s: State<'_, App>, name: String) -> Result<UserRef> {
     let name = name.trim().trim_start_matches('@').to_owned();
     if name.is_empty() {
-        return Err(AppError::Invalid("Type a Roblox username.".into()));
+        return Err(AppError::Invalid(tr!("Type a Roblox username.")));
     }
     let found = s.api.users_by_name(std::slice::from_ref(&name)).await?;
-    let u = found.into_iter().next().ok_or(AppError::Invalid(format!("No Roblox user is called \"{name}\".")))?;
+    let u = found.into_iter().next().ok_or_else(|| AppError::Invalid(tr!("No Roblox user is called \"{name}\".", name = name)))?;
     Ok(UserRef { user_id: u.id, username: u.name, display_name: u.display_name })
 }
 
@@ -656,7 +658,9 @@ pub async fn launch(
 }
 
 /// Why launches are refused while `roblox_install` runs.
-pub(crate) const INSTALLING: &str = "Roblox is being installed. Launch again once it is done.";
+pub(crate) fn installing() -> String {
+    tr!("Roblox is being installed. Launch again once it is done.")
+}
 
 /// One launch as every caller does it: the launch cooldown (`Bulk::cooldown`: waits until the
 /// launch delay, `delay_ms` or else the setting's, less its 1 s jitter has passed since the
@@ -676,13 +680,13 @@ pub(crate) async fn launch_tracked(
     fps_cap: Option<u32>,
 ) -> Result<(LaunchInfo, Instance)> {
     let kills = s.bulk.kills();
-    let killed = || AppError::Invalid("Launch cancelled by Kill all.".into());
+    let killed = || AppError::Invalid(tr!("Launch cancelled by Kill all."));
     // Claimed until the client is tracked, so a launch from another path (rejoin, tray,
     // batch) can't start the same account meanwhile.
     let Some(_claim) = s.tracker.claim(account_id) else {
         let name = s.db.account(account_id).map(|a| crate::launcher::bulk::name_of(&a)).ok().filter(|n| !n.is_empty());
-        let name = name.as_deref().unwrap_or("This account");
-        return Err(AppError::Invalid(format!("{name} is already running. Close its client first.")));
+        let name = name.unwrap_or_else(|| tr!("This account"));
+        return Err(AppError::Invalid(tr!("{name} is already running. Close its client first.", name = name)));
     };
     if let Some(why) = crate::network::blocked(s) {
         return Err(AppError::Invalid(why));
@@ -690,7 +694,7 @@ pub(crate) async fn launch_tracked(
     let _busy = s.bulk.begin_launch();
     // After `_busy`: an install starting now sees this launch, one already running is seen here.
     if s.update.installing() {
-        return Err(AppError::Invalid(INSTALLING.into()));
+        return Err(AppError::Invalid(installing()));
     }
     let v = s.db.settings()?;
     // Less the jitter's second, so a batch's own jittered wait never adds to it.
@@ -822,13 +826,13 @@ fn is_image(b: &[u8]) -> bool {
 pub async fn background_set(s: State<'_, App>, path: String) -> Result<()> {
     let bytes = blocking(move || -> Result<Vec<u8>> {
         if std::fs::metadata(&path)?.len() > BACKGROUND_MAX {
-            return Err(AppError::Invalid("Pick an image of 8 MB or less.".into()));
+            return Err(AppError::Invalid(tr!("Pick an image of 8 MB or less.")));
         }
         Ok(std::fs::read(&path)?)
     })
     .await??;
     if !is_image(&bytes) {
-        return Err(AppError::Invalid("Pick a PNG, JPEG, WebP or GIF image.".into()));
+        return Err(AppError::Invalid(tr!("Pick a PNG, JPEG, WebP or GIF image.")));
     }
     s.db.set_setting_value(BACKGROUND_KEY, Some(&crate::discord::hex(&bytes)))
 }
@@ -850,10 +854,10 @@ fn shutdown_secs(at_ms: Option<i64>, in_secs: Option<u32>, now_ms: i64) -> Resul
     let secs = match (in_secs, at_ms) {
         (Some(s), _) => i64::from(s),
         (None, Some(at)) => (at - now_ms + 999).div_euclid(1000),
-        (None, None) => return Err(AppError::Invalid("Pick when to shut down.".into())),
+        (None, None) => return Err(AppError::Invalid(tr!("Pick when to shut down."))),
     };
     if !(60..=7 * 24 * 3600).contains(&secs) {
-        return Err(AppError::Invalid("The shutdown must be 1 minute to 7 days from now.".into()));
+        return Err(AppError::Invalid(tr!("The shutdown must be 1 minute to 7 days from now.")));
     }
     Ok(secs as u32)
 }
@@ -890,7 +894,7 @@ pub fn shutdown_schedule(app: AppHandle, s: State<'_, App>, at_ms: Option<i64>, 
     let (code, text) = shutdown_exe(&["/s", "/t", &secs.to_string()])?;
     if code != 0 {
         // 1190: a shutdown is already scheduled (by another app or by hand).
-        return Err(AppError::Invalid(format!("Windows wouldn't schedule the shutdown: {text}")));
+        return Err(AppError::Invalid(tr!("Windows wouldn't schedule the shutdown: {text}", text = text)));
     }
     let deadline = now_ms() + i64::from(secs) * 1000;
     *at = Some(deadline);
@@ -920,7 +924,7 @@ pub fn shutdown_cancel(s: State<'_, App>) -> Result<Option<i64>> {
         // 1116: none is scheduled any more (called off outside RoALT).
         let (code, text) = shutdown_exe(&["/a"])?;
         if code != 0 && code != 1116 {
-            return Err(AppError::Invalid(format!("Windows wouldn't call off the shutdown: {text}")));
+            return Err(AppError::Invalid(tr!("Windows wouldn't call off the shutdown: {text}", text = text)));
         }
         log::info!("shutdown called off");
     }
@@ -947,12 +951,10 @@ pub fn shutdown_status(s: State<'_, App>) -> Option<i64> {
 #[tauri::command]
 pub async fn data_dir_move(app: AppHandle, s: State<'_, App>, path: String) -> Result<()> {
     if crate::data_dir_overridden() {
-        return Err(AppError::Invalid("A test run's data folder (ROALT_DATA_DIR) can't be moved.".into()));
+        return Err(AppError::Invalid(tr!("A test run's data folder (ROALT_DATA_DIR) can't be moved.")));
     }
     if s.bulk.any_busy() {
-        return Err(AppError::Invalid(
-            "Wait for the running launch, batch or auto-rejoin to finish, then move the data folder.".into(),
-        ));
+        return Err(AppError::Invalid(tr!("Wait for the running launch, batch or auto-rejoin to finish, then move the data folder.")));
     }
     let target = crate::move_target(&s.data_dir, &path)?;
     std::fs::create_dir_all(&target)?;
@@ -1045,7 +1047,7 @@ fn game_info_of(place_id: i64, g: GameDetails, icon_url: Option<String>) -> Game
 /// need). `Invalid` for targets without a game (a user to follow).
 #[tauri::command]
 pub async fn target_place(app: AppHandle, s: State<'_, App>, target: LaunchTarget, account_id: Option<i64>) -> Result<i64> {
-    let no_game = || AppError::Invalid("That link doesn't lead to a game.".into());
+    let no_game = || AppError::Invalid(tr!("That link doesn't lead to a game."));
     match &target {
         LaunchTarget::Place { place_id, .. }
         | LaunchTarget::Server { place_id, .. }
@@ -1053,7 +1055,7 @@ pub async fn target_place(app: AppHandle, s: State<'_, App>, target: LaunchTarge
         | LaunchTarget::PrivateAccess { place_id, .. } => Ok(*place_id),
         LaunchTarget::Universe { universe_id } => crate::launcher::root_place(&s.api, *universe_id).await,
         LaunchTarget::ShareLink { .. } | LaunchTarget::ShareLinkV2 { .. } => {
-            let id = account_id.ok_or_else(|| AppError::Invalid("Pick an account first: share links open as an account.".into()))?;
+            let id = account_id.ok_or_else(|| AppError::Invalid(tr!("Pick an account first: share links open as an account.")))?;
             let cookie = stored_cookie(&s, id)?;
             match crate::launcher::resolve(&s.api, id, &cookie, &target).await {
                 Ok((join, _)) => join.place_id().ok_or_else(no_game),
@@ -1188,7 +1190,7 @@ pub(crate) fn launch_fps(f: Option<u32>) -> Result<Option<u32>> {
 /// An FPS cap the user can set: 0 (none, or the default for an account) or `launcher::fps::RANGE`.
 fn check_fps(f: u32) -> Result<()> {
     if f != 0 && !crate::launcher::fps::RANGE.contains(&f) {
-        return Err(AppError::Invalid("The FPS cap must be 0 (off) or 5 to 360.".into()));
+        return Err(AppError::Invalid(tr!("The FPS cap must be 0 (off) or 5 to 360.")));
     }
     Ok(())
 }
@@ -1196,13 +1198,13 @@ fn check_fps(f: u32) -> Result<()> {
 /// Limits the user can set: a CPU cap of 1-100 %, a trim every 0-1440 minutes, at least one core.
 fn check_limits(l: &Limits) -> Result<()> {
     if l.cpu_cap.is_some_and(|c| !(1..=100).contains(&c)) {
-        return Err(AppError::Invalid("The CPU limit must be between 1 and 100 %.".into()));
+        return Err(AppError::Invalid(tr!("The CPU limit must be between 1 and 100 %.")));
     }
     if l.trim_every_min.is_some_and(|m| m > 24 * 60) {
-        return Err(AppError::Invalid("Trimming can be at most once a day apart.".into()));
+        return Err(AppError::Invalid(tr!("Trimming can be at most once a day apart.")));
     }
     if l.affinity == Some(0) {
-        return Err(AppError::Invalid("Pick at least one CPU core.".into()));
+        return Err(AppError::Invalid(tr!("Pick at least one CPU core.")));
     }
     Ok(())
 }
@@ -1259,7 +1261,7 @@ pub async fn instance_trim(s: State<'_, App>, id: String) -> Result<()> {
         .clients()
         .into_iter()
         .find(|c| c.0 == id)
-        .ok_or_else(|| AppError::Invalid("That client hasn't started yet, or has closed.".into()))?;
+        .ok_or_else(|| AppError::Invalid(tr!("That client hasn't started yet, or has closed.")))?;
     tauri::async_runtime::spawn_blocking(move || crate::instances::limits::trim(pid, t0))
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?
@@ -1273,7 +1275,7 @@ fn client_pid(s: &App, id: &str) -> Result<Option<u32>> {
 }
 
 fn not_started() -> AppError {
-    AppError::Invalid("That client hasn't started yet, or has closed.".into())
+    AppError::Invalid(tr!("That client hasn't started yet, or has closed."))
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T> {
@@ -1308,7 +1310,7 @@ pub async fn instance_show(s: State<'_, App>, id: String, what: crate::instances
 #[tauri::command]
 pub async fn instances_show_all(s: State<'_, App>, what: crate::instances::window::Show) -> Result<()> {
     if what == crate::instances::window::Show::Focus {
-        return Err(AppError::Invalid("Only one client can be in front.".into()));
+        return Err(AppError::Invalid(tr!("Only one client can be in front.")));
     }
     let pids: Vec<u32> = s.tracker.clients().into_iter().map(|c| c.1).collect();
     // One without a window yet has nothing to show or hide.
@@ -1448,7 +1450,7 @@ pub async fn multi_instance_take_over(app: AppHandle) -> Result<MultiInstanceSta
         let s = app.state::<App>();
         let v = s.db.settings()?;
         if !v.multi_instance {
-            return Err(AppError::Invalid("Turn on multi-instance first.".into()));
+            return Err(AppError::Invalid(tr!("Turn on multi-instance first.")));
         }
         s.multi.take_over()?;
         protect_running(&s, &v);
@@ -1480,7 +1482,7 @@ pub fn set_panic_hotkey(app: &AppHandle, old: &str, key: &str) -> Result<()> {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
     let parse = |k: &str| {
         k.parse::<Shortcut>()
-            .map_err(|_| AppError::Invalid(format!("\"{k}\" isn't a key combination, like Ctrl+Shift+F12.")))
+            .map_err(|_| AppError::Invalid(tr!("\"{k}\" isn't a key combination, like Ctrl+Shift+F12.", k = k)))
     };
     let new = if key.is_empty() { None } else { Some(parse(key)?) };
     let gs = app.global_shortcut();
@@ -1498,7 +1500,7 @@ pub fn set_panic_hotkey(app: &AppHandle, old: &str, key: &str) -> Result<()> {
             let _ = gs.register(o);
         }
         log::warn!("could not register the panic hotkey {key}: {e}");
-        return Err(AppError::Invalid(format!("Windows wouldn't give RoALT {key}: another app probably uses it. Pick another.")));
+        return Err(AppError::Invalid(tr!("Windows wouldn't give RoALT {key}: another app probably uses it. Pick another.", key = key)));
     }
     Ok(())
 }
@@ -1545,7 +1547,7 @@ pub fn crash_open_log(app: AppHandle, s: State<'_, App>, id: i64) -> Result<()> 
     use tauri_plugin_opener::OpenerExt;
     let path = s.db.crash_log(id)?;
     if !Path::new(&path).is_file() {
-        return Err(AppError::Invalid("That client log is gone; Roblox deletes old logs.".into()));
+        return Err(AppError::Invalid(tr!("That client log is gone; Roblox deletes old logs.")));
     }
     app.opener().open_path(path, None::<&str>).map_err(|e| AppError::Internal(e.to_string()))
 }
@@ -1727,10 +1729,10 @@ pub async fn backup_export(
     account_ids: Option<Vec<i64>>,
 ) -> Result<u32> {
     if password.chars().count() < MIN_BACKUP_PASSWORD {
-        return Err(AppError::Invalid(format!("Use at least {MIN_BACKUP_PASSWORD} characters for the backup password.")));
+        return Err(AppError::Invalid(tr!("Use at least {min} characters for the backup password.", min = MIN_BACKUP_PASSWORD)));
     }
     // Exporting hands out every cookie, so it needs the same check as reveal.
-    reauth(&app, &s, current_password, "Confirm it's you to export your Roblox accounts.").await?;
+    reauth(&app, &s, current_password, &tr!("Confirm it's you to export your Roblox accounts.")).await?;
     let groups = s.db.groups()?;
     let name_of = |gid: i64| groups.iter().find(|g| g.id == gid).map(|g| g.name.clone());
     let mut accounts = Vec::new();
@@ -1808,34 +1810,40 @@ pub fn settings_get(s: State<'_, App>) -> Result<Settings> {
 pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> Result<Settings> {
     let mut v = s.db.settings()?;
     if let Some(t) = patch.theme { v.theme = t }
+    if let Some(l) = &patch.language {
+        if !(l.is_empty() || crate::i18n::LANGS.contains(&l.as_str())) {
+            return Err(AppError::Invalid(tr!("That language isn't available.")));
+        }
+        v.language = l.clone();
+    }
     if let Some(a) = patch.accent {
         if !(a.is_empty() || (a.len() == 7 && a.starts_with('#') && a[1..].bytes().all(|c| c.is_ascii_hexdigit()))) {
-            return Err(AppError::Invalid("The accent must be a #rrggbb colour.".into()));
+            return Err(AppError::Invalid(tr!("The accent must be a #rrggbb colour.")));
         }
         v.accent = a.to_ascii_lowercase();
     }
     if let Some(d) = patch.background_dim {
         if d > 95 {
-            return Err(AppError::Invalid("The background dim must be 0 to 95 %.".into()));
+            return Err(AppError::Invalid(tr!("The background dim must be 0 to 95 %.")));
         }
         v.background_dim = d;
     }
     if let Some(d) = patch.density { v.density = d }
     if let Some(m) = patch.auto_lock_minutes {
         if m > 24 * 60 {
-            return Err(AppError::Invalid("Auto-lock can be at most 24 hours.".into()));
+            return Err(AppError::Invalid(tr!("Auto-lock can be at most 24 hours.")));
         }
         v.auto_lock_minutes = m;
     }
     if let Some(c) = patch.clipboard_clear_seconds {
         if !(5..=300).contains(&c) {
-            return Err(AppError::Invalid("Clipboard clearing must be between 5 and 300 seconds.".into()));
+            return Err(AppError::Invalid(tr!("Clipboard clearing must be between 5 and 300 seconds.")));
         }
         v.clipboard_clear_seconds = c;
     }
     if let Some(c) = patch.cache_minutes {
         if !(1..=24 * 60).contains(&c) {
-            return Err(AppError::Invalid("Cache time must be between 1 minute and 24 hours.".into()));
+            return Err(AppError::Invalid(tr!("Cache time must be between 1 minute and 24 hours.")));
         }
         v.cache_minutes = c;
     }
@@ -1843,19 +1851,19 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
     if let Some(r) = patch.auto_restart_on_crash { v.auto_restart_on_crash = r }
     if let Some(n) = patch.breaker_max {
         if !(1..=20).contains(&n) {
-            return Err(AppError::Invalid("The restart limit must be between 1 and 20.".into()));
+            return Err(AppError::Invalid(tr!("The restart limit must be between 1 and 20.")));
         }
         v.breaker_max = n;
     }
     if let Some(m) = patch.breaker_window_min {
         if !(1..=240).contains(&m) {
-            return Err(AppError::Invalid("The restart window must be between 1 minute and 4 hours.".into()));
+            return Err(AppError::Invalid(tr!("The restart window must be between 1 minute and 4 hours.")));
         }
         v.breaker_window_min = m;
     }
     if let Some(g) = patch.close_grace_s {
         if !(1..=60).contains(&g) {
-            return Err(AppError::Invalid("The close grace must be between 1 and 60 seconds.".into()));
+            return Err(AppError::Invalid(tr!("The close grace must be between 1 and 60 seconds.")));
         }
         v.close_grace_s = g;
     }
@@ -1871,22 +1879,22 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
 
     if let Some(m) = patch.mem_restart_mb {
         if m != 0 && !(512..=65_536).contains(&m) {
-            return Err(AppError::Invalid("The memory limit must be 0 (off) or 512 to 65 536 MB.".into()));
+            return Err(AppError::Invalid(tr!("The memory limit must be 0 (off) or 512 to 65 536 MB.")));
         }
         v.mem_restart_mb = m;
     }
     if let Some(t) = patch.mem_throttle {
         if t.mb != 0 && !(512..=65_536).contains(&t.mb) {
-            return Err(AppError::Invalid("The memory throttle must be 0 (off) or 512 to 65 536 MB.".into()));
+            return Err(AppError::Invalid(tr!("The memory throttle must be 0 (off) or 512 to 65 536 MB.")));
         }
         if !(1..=100).contains(&t.cpu_cap) {
-            return Err(AppError::Invalid("The throttle's CPU limit must be 1 to 100 %.".into()));
+            return Err(AppError::Invalid(tr!("The throttle's CPU limit must be 1 to 100 %.")));
         }
         v.mem_throttle = t;
     }
     if let Some(m) = patch.trim_every_min {
         if m > 24 * 60 {
-            return Err(AppError::Invalid("Trimming can be at most once a day apart.".into()));
+            return Err(AppError::Invalid(tr!("Trimming can be at most once a day apart.")));
         }
         v.trim_every_min = m;
     }
@@ -1898,13 +1906,13 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
     if let Some(a) = patch.anti_afk {
         // Roblox disconnects after 20 idle minutes.
         if !(1..=19).contains(&a.interval_min) {
-            return Err(AppError::Invalid("Anti-AFK must press a key every 1 to 19 minutes.".into()));
+            return Err(AppError::Invalid(tr!("Anti-AFK must press a key every 1 to 19 minutes.")));
         }
         v.anti_afk = a;
     }
     if let Some(d) = patch.discord {
         if d.status_every_min != 0 && !(5..=24 * 60).contains(&d.status_every_min) {
-            return Err(AppError::Invalid("The status summary must be off (0) or every 5 minutes to 24 hours.".into()));
+            return Err(AppError::Invalid(tr!("The status summary must be off (0) or every 5 minutes to 24 hours.")));
         }
         v.discord = d;
     }
@@ -1916,7 +1924,7 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
     if let Some(c) = patch.clean_logs { v.clean_logs = c }
     if let Some(d) = patch.launch_delay_ms {
         if !(2_000..=60_000).contains(&d) {
-            return Err(AppError::Invalid("The launch delay must be between 2 and 60 seconds.".into()));
+            return Err(AppError::Invalid(tr!("The launch delay must be between 2 and 60 seconds.")));
         }
         v.launch_delay_ms = d;
     }
@@ -1944,13 +1952,13 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
             v.allow_public_networks = a;
             // Turned off on a public network: the dashboard stops at once (not yet saved, so
             // `network::blocked` would still see it allowed).
-            if !a && s.network.get().public.is_some() && s.remote.stop() {
-                notice(&app, false, "The web dashboard stopped: this is a public network.");
+            if !a && s.network.get().public && s.remote.stop() {
+                notice(&app, false, tr!("The web dashboard stopped: this is a public network."));
             }
         }
         if let Some(r) = patch.remote {
             if r.port < 1024 {
-                return Err(AppError::Invalid("Use a port from 1024 to 65535 for the web dashboard.".into()));
+                return Err(AppError::Invalid(tr!("Use a port from 1024 to 65535 for the web dashboard.")));
             }
             if r.enabled {
                 crate::remote::start(&app, r.port)?;
@@ -1965,6 +1973,10 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
         let _ = set_panic_hotkey(&app, &v.panic_hotkey, &had);
     }
     rest?;
+    if patch.language.is_some() {
+        crate::i18n::set(&v.language);
+        crate::tray::refresh(&app);
+    }
     if let Some(u) = self_update {
         crate::self_update::switched(&app, u);
     }

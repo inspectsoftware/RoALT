@@ -5,6 +5,7 @@ import {
   type MultiInstanceStatus, type SameServer, type Settings,
 } from "../../api";
 import { publicBlock, qk, useBulk, useFavourites, useMultiStatus, useNetwork, usePresence, useRobloxClient, useSetSettings, useSettings } from "../../data";
+import { fmtList, t, tx, type Key } from "../../i18n";
 import { NumberField, Segmented, Switch } from "../../ui/controls";
 import { Icon } from "../../ui/Icon";
 import { friendly, toast } from "../../ui/Toast";
@@ -19,10 +20,10 @@ const MARK: Record<Tone, CSSProperties> = {
   info: { background: "var(--blue)" },
   bad: { background: "var(--orange)", transform: "rotate(45deg) scale(.85)" },
 };
-const LAUNCH_ERRORS: Record<string, string> = {
-  cookieInvalid: "Sign in to this account again.",
-  challenge: "Roblox wants a human check — open the account on roblox.com.",
-  notFound: "That account or game no longer exists.",
+const LAUNCH_ERRORS: Record<string, Key> = {
+  cookieInvalid: "launch.err.cookieInvalid",
+  challenge: "launch.err.challenge",
+  notFound: "launch.err.notFound",
 };
 const invalid = (message: string): ErrorPayload => ({ kind: "invalid", message });
 /** One launch at a time, also across remounts of the view. */
@@ -50,21 +51,21 @@ function remember(id: number) {
 /** Why a launch can't start now: launches go one at a time (a running batch blocks single
  * launches too), and several accounts need multi-instance. */
 export function launchBlocked(several: boolean, multi: MultiInstanceStatus | undefined, batch: BulkProgress | null | undefined) {
-  if (batch && !batch.done) return "A batch is still running.";
-  if (several && !multi?.active) return (multi?.enabled && multi.message) || "Turn on multi-instance to launch several accounts.";
+  if (batch && !batch.done) return t("launch.batchRunning");
+  if (several && !multi?.active) return (multi?.enabled && multi.message) || t("launch.needMulti");
   return null;
 }
 
 /** Toasts a started client and remembers its account for the next start. */
 export function launched(a: AccountSummary, info: LaunchInfo) {
   remember(a.id);
-  toast(`Launched ${accountName(a)}${info.viaBootstrapper ? " via a bootstrapper" : ""}`);
+  toast(t(info.viaBootstrapper ? "launch.launchedViaBootstrapper" : "launch.launched", { name: accountName(a) }));
   if (info.warning) toast(info.warning, "error");
 }
 
 export function launchFailed(e: unknown) {
   const err = asError(e);
-  if (err.kind !== "cancelled") toast(LAUNCH_ERRORS[err.kind] ?? friendly(err), "error");
+  if (err.kind !== "cancelled") toast(LAUNCH_ERRORS[err.kind] ? t(LAUNCH_ERRORS[err.kind]) : friendly(err), "error");
 }
 
 export function LaunchView({ accounts, picked, setPicked, sameServer, setSameServer, draft, setDraft, step, setStep }: {
@@ -137,7 +138,7 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
         return p.target;
       case "jobIdOnly": {
         const placeId = placeOf(d.place);
-        if (placeId === null) throw invalid("Enter the place ID for this job ID.");
+        if (placeId === null) throw invalid(t("launch.enterPlaceId"));
         return { kind: "server", placeId, jobId: p.jobId };
       }
       case "username": {
@@ -159,19 +160,19 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
     if (!canLaunch || !account || busy) return;
     const a = account;
     const ids = chosen.map((x) => x.id);
-    const first = ids.length > 1 ? "Starting the batch…" : "Getting a ticket…";
+    const first = ids.length > 1 ? t("launch.step.batch") : t("launch.step.ticket");
     busy = true;
     setStep(first);
     let timer = 0;
     try {
-      const target = await resolveTarget((name) => setStep(`Looking up @${name}…`));
+      const target = await resolveTarget((name) => setStep(t("launch.step.lookup", { name })));
       setStep(first);
       if (ids.length > 1) {
         // From the cache: a stagger committed by this click's blur hasn't re-rendered yet.
         const delay = qc.getQueryData<Settings>(qk.settings)?.launchDelayMs ?? delayMs;
         await api.bulkLaunch({ accountIds: ids, target, delayMs: delay, sameServer, favouriteId: draft.favId, fpsCap: lastFps || null });
       } else {
-        timer = window.setTimeout(() => setStep("Starting Roblox…"), 800);
+        timer = window.setTimeout(() => setStep(t("launch.step.starting")), 800);
         launched(a, await api.launch(a.id, target, draft.favId ?? undefined, lastFps));
       }
       if (draft.favId !== null) qc.invalidateQueries({ queryKey: qk.favourites });
@@ -200,7 +201,7 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
     const p = c.presence;
     setDraft(
       p.kind === "inGame" && p.gameId && p.placeId !== null
-        ? draftFor({ kind: "server", placeId: p.placeId, jobId: p.gameId }, null, `with @${c.username}`)
+        ? draftFor({ kind: "server", placeId: p.placeId, jobId: p.gameId }, null, t("launch.withUser", { name: c.username }))
         : draftForUser({ userId: c.userId, username: c.username, displayName: c.displayName }),
     );
   };
@@ -208,30 +209,30 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
   return (
     <main className="@container flex-[999_1_520px] min-w-0 flex flex-col">
       <div className="flex flex-wrap items-baseline gap-3 px-6 pt-[18px] pb-3">
-        <h1 className="text-xl font-semibold tracking-[-0.01em]">Launch</h1>
-        <span className="text-dim">Paste anything — the target type is detected.</span>
+        <h1 className="text-xl font-semibold tracking-[-0.01em]">{t("common.launch")}</h1>
+        <span className="text-dim">{t("launch.subtitle")}</span>
       </div>
 
       <div className="scroll flex-1 min-h-0">
         <div className="flex flex-col gap-6 max-w-[880px] px-6 pt-2 pb-6">
           <div className="flex flex-col gap-2">
             <div className="flex items-end justify-between gap-2">
-              <label className="label" htmlFor="launch-target">Target</label>
+              <label className="label" htmlFor="launch-target">{t("launch.targetLabel")}</label>
               <button
                 className="btn btn-sm"
                 disabled={!account}
-                title={account ? "A friend online, or one of your accounts" : "Pick an account first"}
+                title={account ? t("launch.joinHint") : t("launch.pickAccountFirst")}
                 onClick={() => setJoinOpen(true)}
               >
                 <Icon name="accounts" size={12} />
-                Join someone
+                {t("launch.joinSomeone")}
               </button>
             </div>
             <input
               id="launch-target"
               autoFocus
               className="field mono h-[38px]"
-              placeholder="Paste a game link, place ID, job ID, private server or share link, or @username"
+              placeholder={t("launch.targetPlaceholder")}
               spellCheck={false}
               autoComplete="off"
               value={text}
@@ -262,7 +263,7 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
                       </span>
                     </>
                   ) : (
-                    <span className="text-dim">Reading…</span>
+                    <span className="text-dim">{t("launch.reading")}</span>
                   )}
                 </span>
                 {draft.note && <span className="tag flex-none max-w-[30%] truncate">{draft.note}</span>}
@@ -273,13 +274,13 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
                   onClick={() => setSaveOpen(true)}
                 >
                   <Icon name="star" size={12} fill={!!fav} />
-                  {fav ? "Edit favourite" : "Save as favourite"}
+                  {fav ? t("launch.editFavourite") : t("launch.saveAsFavourite")}
                 </button>
               </div>
             )}
             {parsed?.kind === "jobIdOnly" && (
               <label className="enter flex flex-col gap-1.5 mt-2 max-w-[320px]">
-                <span className="label">Place ID</span>
+                <span className="label">{t("launch.placeId")}</span>
                 <input
                   className="field mono"
                   ref={(el) => {
@@ -291,7 +292,7 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
                   }}
                   inputMode="numeric"
                   spellCheck={false}
-                  placeholder="The game's place ID or link"
+                  placeholder={t("launch.placeIdPlaceholder")}
                   value={draft.place}
                   aria-invalid={draft.place.trim() !== "" && place === null}
                   onChange={(e) => {
@@ -305,21 +306,21 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
 
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between">
-              <span className="label" id="launch-account-label">Accounts</span>
-              <span className="flex items-center gap-3">
-                <span className="mono text-xs text-dim">{chosen.length} of {validIds.length} valid</span>
+              <span className="label" id="launch-account-label">{t("launch.accounts")}</span>
+              <span className="flex flex-wrap items-center justify-end gap-3">
+                <span className="mono text-xs text-dim">{t("launch.pickedOfValid", { picked: chosen.length, count: validIds.length })}</span>
                 {validIds.length > 1 && (
                   <button
                     className="btn btn-sm"
                     onClick={() => setPicked(chosen.length === validIds.length ? [] : validIds)}
                   >
-                    {chosen.length === validIds.length ? "Clear" : "Select all"}
+                    {chosen.length === validIds.length ? t("launch.clear") : t("launch.selectAll")}
                   </button>
                 )}
               </span>
             </div>
             {accounts.length === 0 ? (
-              <p className="text-dim">No accounts yet. Add one in Accounts.</p>
+              <p className="text-dim">{t("launch.noAccounts")}</p>
             ) : (
               <div role="group" aria-labelledby="launch-account-label" className="grid grid-cols-1 @xl:grid-cols-2 border-t border-l border-line">
                 {accounts.map((a) => {
@@ -327,7 +328,7 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
                   return (
                     <label
                       key={a.id}
-                      title={valid ? undefined : "Only an account with a valid cookie can launch"}
+                      title={valid ? undefined : t("launch.onlyValid")}
                       className={`flex items-center gap-2.5 h-[42px] px-3 border-r border-b border-line has-[:checked]:bg-sel ${valid ? "cursor-pointer hover:bg-hover" : "opacity-55"}`}
                     >
                       <input
@@ -359,16 +360,16 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-6 pt-3.5">
           <span
             className="flex"
-            title="This launch's frame rate cap, for every account in it, instead of each account's own and the default in Settings. 0 leaves those. Not with a bootstrapper such as Bloxstrap."
+            title={t("launch.fpsHint")}
           >
-            <NumberField label="FPS cap" unit="FPS, 0 for each account's own" short="FPS" min={0} max={360} value={fps} onCommit={setFps} />
+            <NumberField label={t("launch.fpsCap")} unit={t("launch.fpsUnit")} short="FPS" min={0} max={360} value={fps} onCommit={setFps} />
           </span>
           {bulk && (
             <>
             <NumberField
-              label="Stagger"
-              unit="seconds"
-              short="s"
+              label={t("launch.stagger")}
+              unit={t("launch.seconds")}
+              short={t("launch.secondsShort")}
               min={2}
               max={60}
               step={0.5}
@@ -376,24 +377,24 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
               onCommit={(s) => setSettings.mutate({ launchDelayMs: Math.round(s * 1000) })}
             />
             <span className="flex items-center gap-2.5">
-              <Switch label="Same server" checked={sameServer !== "off"} onChange={(on) => setSameServer(on ? "pickFirst" : "off")} />
-              <span aria-hidden="true">Same server</span>
+              <Switch label={t("launch.sameServer")} checked={sameServer !== "off"} onChange={(on) => setSameServer(on ? "pickFirst" : "off")} />
+              <span aria-hidden="true">{t("launch.sameServer")}</span>
             </span>
             {sameServer !== "off" && (
               <Segmented
-                label="How to find the server"
+                label={t("launch.findServer")}
                 value={sameServer}
-                options={[{ value: "pickFirst", label: "Pick a server" }, { value: "followFirst", label: "Follow the first" }]}
+                options={[{ value: "pickFirst", label: t("launch.pickServer") }, { value: "followFirst", label: t("launch.followFirst") }]}
                 onChange={setSameServer}
               />
             )}
-            <span className="flex items-center gap-2.5" title="Relaunch a client Roblox disconnects (kicked, server shut down, connection lost) into the same target, until Settings > Give up after.">
+            <span className="flex items-center gap-2.5" title={t("launch.autoRejoinHint")}>
               <Switch
-                label="Auto-rejoin"
+                label={t("launch.autoRejoin")}
                 checked={settings?.autoRejoin ?? false}
                 onChange={(autoRejoin) => setSettings.mutate({ autoRejoin })}
               />
-              <span aria-hidden="true">Auto-rejoin</span>
+              <span aria-hidden="true">{t("launch.autoRejoin")}</span>
             </span>
             </>
           )}
@@ -409,21 +410,21 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
               <span className="alert">{blocked}</span>
             ) : bulk && client?.outdated ? (
               // Not blocking: Roblox updates itself on the first launch, which can end the clients after it.
-              <span className="alert" title={`Installed ${client.version}, latest ${client.latest}`}>
-                Roblox is out of date: its update can close the other clients. Update it in Settings first.
+              <span className="alert" title={t("launch.robloxVersions", { installed: client.version ?? "", latest: client.latest ?? "" })}>
+                {t("launch.robloxOutdated")}
               </span>
             ) : account ? (
               <span className="truncate">
-                As <span className="text-text font-medium">{chosen.map(accountName).join(", ")}</span> · <span className="kbd">Ctrl Enter</span>
+                {tx("launch.asAccounts", { names: <span className="text-text font-medium">{fmtList(chosen.map(accountName))}</span> }, { kbd: (k) => <span className="kbd">{k}</span> })}
               </span>
             ) : (
-              "Pick an account with a valid cookie."
+              t("launch.pickValid")
             )}
           </span>
-          <button className="btn btn-primary h-10 px-5 ml-auto max-w-full" disabled={!canLaunch} title="Launch (Ctrl+Enter)" onClick={() => void launch()}>
+          <button className="btn btn-primary h-10 px-5 ml-auto max-w-full" disabled={!canLaunch} title={t("launch.launchHint")} onClick={() => void launch()}>
             <Icon name="play" size={12} fill />
             <span className="truncate">
-              {step ? "Launching…" : bulk ? `Launch ${chosen.length} accounts` : account ? `Launch ${accountName(account)}` : "Launch"}
+              {step ? t("launch.launching") : bulk ? t("launch.launchMany", { count: chosen.length }) : account ? t("launch.launchAs", { name: accountName(account) }) : t("common.launch")}
             </span>
           </button>
         </div>
@@ -436,7 +437,7 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
         accounts={accounts}
         initial={
           fav ?? {
-            name: look ? `${look.kind} · ${look.detail}`.replace(/ · \w+ code ••••/, "").slice(0, 60) : "",
+            name: look ? `${look.kind} · ${look.detail}`.replace(/ · [^·]*••••/, "").slice(0, 60) : "",
             accountIds: chosen.map((a) => a.id),
             inTray: false,
           }

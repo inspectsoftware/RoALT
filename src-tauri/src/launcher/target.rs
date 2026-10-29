@@ -10,22 +10,54 @@ use url::{Url, form_urlencoded};
 
 use crate::model::{LaunchTarget, ParsedInput};
 
-const EMPTY: &str = "Paste a game link, an ID or a username.";
-const NOT_ROBLOX: &str = "That isn't a Roblox link.";
-const NOT_GAME: &str = "That link doesn't point to a game.";
-const PLACE: &str = "That place ID isn't valid.";
-const USER: &str = "That user ID isn't valid.";
-const UNIVERSE: &str = "That game ID isn't valid.";
-const JOB: &str = "That server ID isn't valid.";
-const LINK_CODE: &str = "That private server link code isn't valid.";
-const ACCESS_CODE: &str = "That private server access code isn't valid.";
-const SHARE_CODE: &str = "That share link's code isn't valid.";
-const SHARE_TYPE_MISSING: &str = "That share link is missing its type.";
-const SHARE_TYPE: &str = "That share link's type isn't known.";
-const USERNAME: &str = "That username isn't valid.";
-const LAUNCH_URI: &str = "Launch links carry a sign-in ticket and aren't accepted. Paste the game link instead.";
-const SHORT_LINK: &str = "Open that ro.blox.com link in your browser, then paste the roblox.com link it goes to.";
-const NESTED: &str = "That ro.blox.com link wraps another ro.blox.com link.";
+fn empty_why() -> String {
+    tr!("Paste a game link, an ID or a username.")
+}
+fn not_roblox_why() -> String {
+    tr!("That isn't a Roblox link.")
+}
+fn not_game_why() -> String {
+    tr!("That link doesn't point to a game.")
+}
+fn place_why() -> String {
+    tr!("That place ID isn't valid.")
+}
+fn user_why() -> String {
+    tr!("That user ID isn't valid.")
+}
+fn universe_why() -> String {
+    tr!("That game ID isn't valid.")
+}
+fn job_why() -> String {
+    tr!("That server ID isn't valid.")
+}
+fn link_code_why() -> String {
+    tr!("That private server link code isn't valid.")
+}
+fn access_code_why() -> String {
+    tr!("That private server access code isn't valid.")
+}
+fn share_code_why() -> String {
+    tr!("That share link's code isn't valid.")
+}
+fn share_type_missing_why() -> String {
+    tr!("That share link is missing its type.")
+}
+fn share_type_why() -> String {
+    tr!("That share link's type isn't known.")
+}
+fn username_why() -> String {
+    tr!("That username isn't valid.")
+}
+fn launch_uri_why() -> String {
+    tr!("Launch links carry a sign-in ticket and aren't accepted. Paste the game link instead.")
+}
+fn short_link_why() -> String {
+    tr!("Open that ro.blox.com link in your browser, then paste the roblox.com link it goes to.")
+}
+fn nested_why() -> String {
+    tr!("That ro.blox.com link wraps another ro.blox.com link.")
+}
 
 const WEB_HOSTS: [&str; 4] = ["roblox.com", "www.roblox.com", "web.roblox.com", "m.roblox.com"];
 /// The web's share-link types; `true` = it can lead into a game.
@@ -54,16 +86,16 @@ pub fn parse(input: &str) -> ParsedInput {
 fn parse_at(input: &str, depth: u8) -> ParsedInput {
     let s = input.trim().trim_matches(['<', '>', '"', '\'']).trim();
     if s.is_empty() {
-        return invalid(EMPTY);
+        return invalid(empty_why());
     }
     if s.bytes().all(|b| b.is_ascii_digit()) {
-        return id(s).map_or_else(|| invalid(PLACE), |place_id| place(place_id, None));
+        return id(s).map_or_else(|| invalid(place_why()), |place_id| place(place_id, None));
     }
     if is_uuid(s) {
         return ParsedInput::JobIdOnly { job_id: s.to_ascii_lowercase() };
     }
     if let Some(name) = s.strip_prefix('@') {
-        return if is_username(name) { username(name) } else { invalid(USERNAME) };
+        return if is_username(name) { username(name) } else { invalid(username_why()) };
     }
     if is_username(s) {
         return username(s);
@@ -73,22 +105,22 @@ fn parse_at(input: &str, depth: u8) -> ParsedInput {
     };
     match scheme.to_ascii_lowercase().as_str() {
         "roblox" if rest.starts_with("//") => deeplink(&rest[2..]),
-        "roblox-player" | "roblox-studio" | "roblox-studio-auth" => invalid(LAUNCH_URI),
+        "roblox-player" | "roblox-studio" | "roblox-studio-auth" => invalid(launch_uri_why()),
         "http" | "https" => web(s, depth),
-        _ => invalid(NOT_ROBLOX),
+        _ => invalid(not_roblox_why()),
     }
 }
 
 /// http(s) links; hosts are read the WHATWG way (`evil.com\@www.roblox.com` is evil.com).
 fn web(s: &str, depth: u8) -> ParsedInput {
-    let Ok(u) = Url::parse(s) else { return invalid(NOT_ROBLOX) };
+    let Ok(u) = Url::parse(s) else { return invalid(not_roblox_why()) };
     let host = u.host_str().unwrap_or("").trim_end_matches('.').to_ascii_lowercase();
     let q = query(u.query().unwrap_or(""));
     if host == "ro.blox.com" {
         return apps_flyer(&q, depth);
     }
     if !WEB_HOSTS.contains(&host.as_str()) {
-        return invalid(NOT_ROBLOX);
+        return invalid(not_roblox_why());
     }
     let low: Vec<String> = u.path().split('/').filter(|x| !x.is_empty()).map(str::to_ascii_lowercase).collect();
     let mut seg: Vec<&str> = low.iter().map(String::as_str).collect();
@@ -97,22 +129,22 @@ fn web(s: &str, depth: u8) -> ParsedInput {
     }
     match seg.as_slice() {
         ["games", "start", ..] => from_query(&q),
-        ["games", p, ..] => id(p).map_or_else(|| invalid(PLACE), |place_id| with_place(place_id, &q, false)),
+        ["games", p, ..] => id(p).map_or_else(|| invalid(place_why()), |place_id| with_place(place_id, &q, false)),
         ["share"] | ["share-links"] => share(&q),
-        ["users", u, ..] => id(u).map_or_else(|| invalid(USER), follow),
-        ["placeitem.aspx"] => q.get("id").and_then(|p| id(p)).map_or_else(|| invalid(PLACE), |p| place(p, None)),
-        _ => unsupported(NOT_GAME),
+        ["users", u, ..] => id(u).map_or_else(|| invalid(user_why()), follow),
+        ["placeitem.aspx"] => q.get("id").and_then(|p| id(p)).map_or_else(|| invalid(place_why()), |p| place(p, None)),
+        _ => unsupported(not_game_why()),
     }
 }
 
 /// ro.blox.com (AppsFlyer): the real link is in the query; short links are never fetched.
 fn apps_flyer(q: &Query, depth: u8) -> ParsedInput {
     if depth > 0 {
-        return invalid(NESTED);
+        return invalid(nested_why());
     }
     match get(q, &["af_dp", "deep_link_value", "af_web_dp"]) {
         Some(inner) => parse_at(inner, depth + 1),
-        None => unsupported(SHORT_LINK),
+        None => unsupported(short_link_why()),
     }
 }
 
@@ -129,18 +161,18 @@ fn deeplink(rest: &str) -> ParsedInput {
         "navigation/game_details" => q
             .get("gameid")
             .and_then(|g| id(g))
-            .map_or_else(|| invalid(UNIVERSE), |universe_id| target(LaunchTarget::Universe { universe_id })),
-        "navigation/profile" => q.get("userid").and_then(|u| id(u)).map_or_else(|| invalid(USER), follow),
-        _ => unsupported(NOT_GAME),
+            .map_or_else(|| invalid(universe_why()), |universe_id| target(LaunchTarget::Universe { universe_id })),
+        "navigation/profile" => q.get("userid").and_then(|u| id(u)).map_or_else(|| invalid(user_why()), follow),
+        _ => unsupported(not_game_why()),
     }
 }
 
 /// `/games/start` and the roblox:// launch forms.
 fn from_query(q: &Query) -> ParsedInput {
     match get(q, &["placeid", "id"]) {
-        Some(p) => id(p).map_or_else(|| invalid(PLACE), |place_id| with_place(place_id, q, true)),
-        None if q.contains_key("userid") => q.get("userid").and_then(|u| id(u)).map_or_else(|| invalid(USER), follow),
-        None => invalid(PLACE),
+        Some(p) => id(p).map_or_else(|| invalid(place_why()), |place_id| with_place(place_id, q, true)),
+        None if q.contains_key("userid") => q.get("userid").and_then(|u| id(u)).map_or_else(|| invalid(user_why()), follow),
+        None => invalid(place_why()),
     }
 }
 
@@ -149,19 +181,19 @@ fn from_query(q: &Query) -> ParsedInput {
 fn with_place(place_id: i64, q: &Query, start: bool) -> ParsedInput {
     if let Some(c) = get(q, &["linkcode", "privateserverlinkcode"]) {
         if !is_digits(c, 64) {
-            return invalid(LINK_CODE);
+            return invalid(link_code_why());
         }
         return target(LaunchTarget::PrivateLink { place_id, link_code: c.to_owned() });
     }
     if start && let Some(a) = q.get("accesscode") {
         if !is_uuid(a) {
-            return invalid(ACCESS_CODE);
+            return invalid(access_code_why());
         }
         return target(LaunchTarget::PrivateAccess { place_id, access_code: a.to_ascii_lowercase() });
     }
     if let Some(j) = q.get("gameinstanceid") {
         if !is_uuid(j) {
-            return invalid(JOB);
+            return invalid(job_why());
         }
         return target(LaunchTarget::Server { place_id, job_id: j.to_ascii_lowercase() });
     }
@@ -171,14 +203,14 @@ fn with_place(place_id: i64, q: &Query, start: bool) -> ParsedInput {
 }
 
 fn share(q: &Query) -> ParsedInput {
-    let Some(code) = q.get("code").filter(|c| is_code(c)) else { return invalid(SHARE_CODE) };
+    let Some(code) = q.get("code").filter(|c| is_code(c)) else { return invalid(share_code_why()) };
     if q.get("v").is_some_and(|v| v.eq_ignore_ascii_case("v2")) {
         return target(LaunchTarget::ShareLinkV2 { code: code.clone() });
     }
-    let Some(t) = q.get("type") else { return invalid(SHARE_TYPE_MISSING) };
+    let Some(t) = q.get("type") else { return invalid(share_type_missing_why()) };
     match SHARE_TYPES.iter().find(|(name, _)| name.eq_ignore_ascii_case(t)) {
-        None => invalid(SHARE_TYPE),
-        Some((_, false)) => unsupported(NOT_GAME),
+        None => invalid(share_type_why()),
+        Some((_, false)) => unsupported(not_game_why()),
         Some((name, true)) => target(LaunchTarget::ShareLink { code: code.clone(), link_type: (*name).to_owned() }),
     }
 }
@@ -259,12 +291,12 @@ fn username(name: &str) -> ParsedInput {
     ParsedInput::Username { name: name.to_owned() }
 }
 
-fn invalid(reason: &str) -> ParsedInput {
-    ParsedInput::Invalid { reason: reason.to_owned() }
+fn invalid(reason: String) -> ParsedInput {
+    ParsedInput::Invalid { reason }
 }
 
-fn unsupported(reason: &str) -> ParsedInput {
-    ParsedInput::Unsupported { reason: reason.to_owned() }
+fn unsupported(reason: String) -> ParsedInput {
+    ParsedInput::Unsupported { reason }
 }
 
 #[cfg(test)]
@@ -274,17 +306,17 @@ mod tests {
     use super::*;
 
     /// The fixture's short reason codes, as the user-facing text.
-    fn reason(code: &str) -> &'static str {
+    fn reason(code: &str) -> String {
         match code {
-            "empty" => EMPTY,
-            "host" => NOT_ROBLOX,
-            "placeId" => PLACE,
-            "linkCode" => LINK_CODE,
-            "jobId" => JOB,
-            "share type missing" => SHARE_TYPE_MISSING,
-            "not a game link" => NOT_GAME,
-            "AppsFlyer short link without af_dp/deep_link_value/af_web_dp" => SHORT_LINK,
-            "launch URI (carries auth ticket) not accepted as input" => LAUNCH_URI,
+            "empty" => empty_why(),
+            "host" => not_roblox_why(),
+            "placeId" => place_why(),
+            "linkCode" => link_code_why(),
+            "jobId" => job_why(),
+            "share type missing" => share_type_missing_why(),
+            "not a game link" => not_game_why(),
+            "AppsFlyer short link without af_dp/deep_link_value/af_web_dp" => short_link_why(),
+            "launch URI (carries auth ticket) not accepted as input" => launch_uri_why(),
             other => panic!("unmapped reason {other}"),
         }
     }
@@ -357,16 +389,16 @@ mod tests {
             ("roblox://experiences/start?placeId=&id=5", place(5, None)),
             ("https://www.roblox.com/games/start?placeId=&userId=156", follow(156)),
             // WHATWG hosts.
-            ("https://evil.com\\@www.roblox.com/games/1", invalid(NOT_ROBLOX)),
-            ("https://www.roblox.com@evil.com/games/1", invalid(NOT_ROBLOX)),
+            ("https://evil.com\\@www.roblox.com/games/1", invalid(not_roblox_why())),
+            ("https://www.roblox.com@evil.com/games/1", invalid(not_roblox_why())),
             ("https://WWW.ROBLOX.COM./games/1", place(1, None)),
             ("https://www.roblox.com:443/games/1", place(1, None)),
             // Legacy place page.
             ("https://www.roblox.com/PlaceItem.aspx?id=920587237", place(920587237, None)),
-            ("https://www.roblox.com/PlaceItem.aspx?id=x", invalid(PLACE)),
+            ("https://www.roblox.com/PlaceItem.aspx?id=x", invalid(place_why())),
             // A linkCode on a game page is kept, not dropped.
             ("https://www.roblox.com/games/1/x?linkCode=123", link(1, "123")),
-            ("https://www.roblox.com/games/1/x?linkCode=12a", invalid(LINK_CODE)),
+            ("https://www.roblox.com/games/1/x?linkCode=12a", invalid(link_code_why())),
             ("https://www.roblox.com/games/1/x?accessCode=8d5f1b3e-6a0c-4f7e-9b2d-1c3e5a7f9b0d", place(1, None)),
         ];
         for (input, want) in cases {
@@ -377,21 +409,21 @@ mod tests {
     #[test]
     fn other_forms() {
         let cases = [
-            ("0", invalid(PLACE)),
+            ("0", invalid(place_why())),
             ("9223372036854775807", place(i64::MAX, None)),
-            ("9223372036854775808", invalid(PLACE)),
+            ("9223372036854775808", invalid(place_why())),
             ("https://www.roblox.com/en-us/games/1", place(1, None)),
             ("roblox://navigation/profile?userId=156", follow(156)),
-            ("roblox://navigation/game_details", invalid(UNIVERSE)),
-            ("roblox://navigation/home", unsupported(NOT_GAME)),
-            ("roblox:placeId=1", invalid(NOT_ROBLOX)),
-            ("ROBLOX-STUDIO:1+launchmode:edit", invalid(LAUNCH_URI)),
-            ("ftp://www.roblox.com/games/1", invalid(NOT_ROBLOX)),
-            ("roblox://experiences/start?placeId=1&accessCode=nope", invalid(ACCESS_CODE)),
-            ("https://www.roblox.com/share?code=a&type=Bogus", invalid(SHARE_TYPE)),
-            ("https://www.roblox.com/share?code=a!b&type=Server", invalid(SHARE_CODE)),
-            ("https://www.roblox.com/users/x/profile", invalid(USER)),
-            ("https://ro.blox.com/Ebh5?af_dp=https%3A%2F%2Fro.blox.com%2FEbh5%3Faf_dp%3D1", invalid(NESTED)),
+            ("roblox://navigation/game_details", invalid(universe_why())),
+            ("roblox://navigation/home", unsupported(not_game_why())),
+            ("roblox:placeId=1", invalid(not_roblox_why())),
+            ("ROBLOX-STUDIO:1+launchmode:edit", invalid(launch_uri_why())),
+            ("ftp://www.roblox.com/games/1", invalid(not_roblox_why())),
+            ("roblox://experiences/start?placeId=1&accessCode=nope", invalid(access_code_why())),
+            ("https://www.roblox.com/share?code=a&type=Bogus", invalid(share_type_why())),
+            ("https://www.roblox.com/share?code=a!b&type=Server", invalid(share_code_why())),
+            ("https://www.roblox.com/users/x/profile", invalid(user_why())),
+            ("https://ro.blox.com/Ebh5?af_dp=https%3A%2F%2Fro.blox.com%2FEbh5%3Faf_dp%3D1", invalid(nested_why())),
             ("https://ro.blox.com/Ebh5?af_dp=&deep_link_value=roblox%3A%2F%2FplaceId%3D7", place(7, None)),
         ];
         for (input, want) in cases {
@@ -408,12 +440,12 @@ mod tests {
             ("Roblox_Dev1", name("Roblox_Dev1")),
             ("@1234", name("1234")),
             ("abc", name("abc")),
-            ("@ab", invalid(USERNAME)),
-            ("@builder-man", invalid(USERNAME)),
-            ("@", invalid(USERNAME)),
+            ("@ab", invalid(username_why())),
+            ("@builder-man", invalid(username_why())),
+            ("@", invalid(username_why())),
             ("123456", place(123456, None)),
-            ("ab", invalid(NOT_ROBLOX)),
-            ("abcdefghijklmnopqrstu", invalid(NOT_ROBLOX)),
+            ("ab", invalid(not_roblox_why())),
+            ("abcdefghijklmnopqrstu", invalid(not_roblox_why())),
         ];
         for (input, want) in cases {
             assert_eq!(parse(input), want, "{input}");

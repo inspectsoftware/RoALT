@@ -28,7 +28,9 @@ use crate::model::MultiInstanceStatus;
 
 pub const SINGLETON_NAME: &str = "ROBLOX_singletonEvent";
 
-const RUNNING: &str = "Roblox is already running. Close it (including its tray icon) to run several clients.";
+fn running() -> String {
+    tr!("Roblox is already running. Close it (including its tray icon) to run several clients.")
+}
 
 pub struct Multi {
     inner: Mutex<Option<Held>>,
@@ -137,6 +139,13 @@ impl Multi {
         self.launches.load(Ordering::SeqCst) > 0
     }
 
+    /// Clients RoALT follows again after a restart (`Tracker::readopt`): its own, not survivors.
+    pub fn adopt(&self, clients: &[(u32, u64)]) {
+        if let Some(h) = self.held().as_mut() {
+            h.survivors.retain(|s| !clients.contains(s));
+        }
+    }
+
     /// Clients from before the lock still run.
     pub fn has_survivors(&self) -> bool {
         self.held().as_mut().is_some_and(survivors_alive)
@@ -165,8 +174,8 @@ impl Multi {
             if active { Vec::new() } else { process::roblox_processes().iter().map(|p| p.pid).collect() };
         let message = match (enabled && !active, blocked_by.is_empty()) {
             (false, _) => None,
-            (true, false) => Some(RUNNING.to_owned()),
-            (true, true) => Some("Multi-instance isn't active yet. Turn it off and on again to retry.".to_owned()),
+            (true, false) => Some(running()),
+            (true, true) => Some(tr!("Multi-instance isn't active yet. Turn it off and on again to retry.")),
         };
         MultiInstanceStatus { enabled, active, protect_shared_login, blocked_by, message }
     }
@@ -201,7 +210,7 @@ impl Multi {
         }
         self.take(name).map_err(|e| match (e, failed) {
             (_, Some(f)) => f,
-            (AppError::Invalid(_), None) => AppError::Invalid(STILL_RUNNING.into()),
+            (AppError::Invalid(_), None) => AppError::Invalid(still_running()),
             (e, None) => e,
         })
     }
@@ -238,17 +247,18 @@ fn create_mutex(name: &str) -> Result<Singleton> {
     // SAFETY: CreateMutexW only reads the name; on success the handle is ours to close.
     let h = unsafe { CreateMutexW(None, false, &HSTRING::from(name)) }.map_err(|e| {
         if e.code() == ERROR_INVALID_HANDLE.to_hresult() {
-            AppError::Invalid(RUNNING.into())
+            AppError::Invalid(running())
         } else {
-            AppError::Internal(format!("Could not take the multi-instance lock: {}", e.message()))
+            AppError::Internal(tr!("Could not take the multi-instance lock: {why}", why = e.message()))
         }
     })?;
     // SAFETY: as above.
     Ok(Singleton { _handle: unsafe { Owned::new(h) } })
 }
 
-const STILL_RUNNING: &str =
-    "Roblox's lock is still there after the take-over (a client may have just started). Close Roblox instead.";
+fn still_running() -> String {
+    tr!("Roblox's lock is still there after the take-over (a client may have just started). Close Roblox instead.")
+}
 
 /// SystemExtendedHandleInformation, ObjectNameInformation, ObjectTypeInformation.
 const SYSTEM_EXTENDED_HANDLE_INFORMATION: u32 = 64;
@@ -299,17 +309,17 @@ fn handle_table(pids: &[u32]) -> Result<Vec<(u32, usize)>> {
             // The table grows between calls: some room on top.
             size = (need as usize + (1 << 16)).max(size * 2);
             if size > 1 << 30 {
-                return Err(AppError::Internal("The system's handle table is too large to read.".into()));
+                return Err(AppError::Internal(tr!("The system's handle table is too large to read.")));
             }
             continue;
         }
         if st < 0 {
-            return Err(AppError::Internal(format!("Could not read the system's handle table (NTSTATUS {st:#x}).")));
+            return Err(AppError::Internal(tr!("Could not read the system's handle table (NTSTATUS {status}).", status = format!("{st:#x}"))));
         }
         // NumberOfHandles, Reserved, then the entries.
         let count = buf[0] as usize;
         if count.saturating_mul(size_of::<HandleEntry>()).saturating_add(16) > size {
-            return Err(AppError::Internal("The system's handle table came back truncated.".into()));
+            return Err(AppError::Internal(tr!("The system's handle table came back truncated.")));
         }
         // SAFETY: the kernel wrote `count` entries right after the two-word header, inside `buf`
         // (checked above); HandleEntry is plain data with the kernel's layout.
@@ -330,7 +340,7 @@ fn close_in(pid: u32, table: &[(u32, usize)], suffix: &str) -> Result<usize> {
     let proc = unsafe { OpenProcess(PROCESS_DUP_HANDLE, false, pid) }
         // SAFETY: as above.
         .map(|h| unsafe { Owned::new(h) })
-        .map_err(|e| AppError::Invalid(format!("Windows wouldn't let RoALT into Roblox (process {pid}): {}", e.message())))?;
+        .map_err(|e| AppError::Invalid(tr!("Windows wouldn't let RoALT into Roblox (process {pid}): {why}", pid = pid, why = e.message())))?;
     let mut closed = 0;
     for &(_, value) in table.iter().filter(|(p, _)| *p == pid) {
         let source = HANDLE(value as *mut c_void);
@@ -465,7 +475,7 @@ mod tests {
         let _roblox = event(&name).unwrap();
         let m = Multi::new();
         let err = m.take(&name).unwrap_err();
-        assert!(matches!(err, AppError::Invalid(ref s) if s == RUNNING), "{err}");
+        assert!(matches!(err, AppError::Invalid(ref s) if *s == running()), "{err}");
         assert!(!m.is_active());
     }
 
@@ -481,12 +491,12 @@ mod tests {
         m.take_over_at(&name, &[std::process::id()]).unwrap();
         assert!(m.is_active());
         // An event of another name is left alone.
-        assert!(matches!(create_mutex(&other), Err(AppError::Invalid(ref s)) if s == RUNNING));
+        assert!(matches!(create_mutex(&other), Err(AppError::Invalid(ref s)) if *s == running()));
         m.disable();
         // Nobody to take over from: the plain error.
         let _roblox = event(&name).unwrap();
         let err = Multi::new().take_over_at(&name, &[]).unwrap_err();
-        assert!(matches!(err, AppError::Invalid(ref s) if s == STILL_RUNNING), "{err}");
+        assert!(matches!(err, AppError::Invalid(ref s) if *s == still_running()), "{err}");
     }
 
     #[test]
@@ -502,6 +512,9 @@ mod tests {
         m.held().as_mut().unwrap().survivors = vec![(child.id(), t), (child.id(), t - 5)];
         assert!(m.has_survivors());
         assert_eq!(m.held().as_ref().unwrap().survivors.len(), 1);
+        m.adopt(&[(child.id(), t)]);
+        assert!(!m.has_survivors(), "followed again: RoALT's own");
+        m.held().as_mut().unwrap().survivors = vec![(child.id(), t)];
         child.kill().unwrap();
         child.wait().unwrap();
         assert!(!m.has_survivors());

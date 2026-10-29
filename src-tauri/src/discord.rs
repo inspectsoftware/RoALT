@@ -19,7 +19,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::App;
 use crate::error::{AppError, Result};
-use crate::instances::{HUNG, Transition, UNEXPECTED};
+use crate::instances::{Transition, hung, unexpected};
 use crate::model::{AccountSummary, BulkProgress, BulkStage, CrashKind, DiscordEvents, DiscordStatus, InstanceState};
 use crate::vault::Secret;
 
@@ -45,7 +45,7 @@ pub struct Webhook {
 /// Accepts only Discord's own webhook URLs (discord.com or discordapp.com, also their ptb. and
 /// canary. hosts), https on the default port, with nothing but `/api/webhooks/<id>/<token>`.
 pub fn parse_webhook(raw: &str) -> Result<Webhook> {
-    let bad = || AppError::Invalid("Paste a Discord webhook URL: https://discord.com/api/webhooks/<id>/<token>.".into());
+    let bad = || AppError::Invalid(tr!("Paste a Discord webhook URL: https://discord.com/api/webhooks/<id>/<token>."));
     let u = url::Url::parse(raw.trim()).map_err(|_| bad())?;
     let host = u.host_str().filter(|h| HOSTS.contains(h)).ok_or_else(bad)?;
     if u.scheme() != "https" || !u.username().is_empty() || u.password().is_some() || u.port().is_some() {
@@ -112,35 +112,61 @@ impl Event {
 
     fn line(&self) -> String {
         match self {
-            Self::Crash { name, place_id: Some(p) } => format!("💥 **{name}**: the client crashed (place {p})."),
-            Self::Crash { name, place_id: None } => format!("💥 **{name}**: the client crashed."),
-            Self::Hang { name } => format!("🧊 **{name}**: the client stopped responding."),
-            Self::Disconnect { name } => format!("🔌 **{name}**: disconnected by Roblox."),
-            Self::Launch { name, place_id: Some(p) } => format!("🎮 **{name}**: in game (place {p})."),
-            Self::Launch { name, place_id: None } => format!("🎮 **{name}**: in game."),
-            Self::Restart { name, cause: CrashKind::Disconnect } => format!("🔁 **{name}**: rejoined."),
-            Self::Restart { name, cause: CrashKind::Mem } => format!("🧹 **{name}**: restarted, it used too much memory."),
-            Self::Restart { name, cause: CrashKind::Hang } => format!("🔁 **{name}**: restarted after it stopped responding."),
-            Self::Restart { name, cause: CrashKind::Crash } => format!("🔁 **{name}**: restarted after a crash."),
-            Self::Breaker { name, count, window_min } => {
-                format!("⛔ **{name}**: RoALT gave up after {count} relaunches in {window_min} min.")
+            Self::Crash { name, place_id: Some(p) } => {
+                format!("💥 {}", tr!("**{name}**: the client crashed (place {place}).", name = name, place = p))
             }
+            Self::Crash { name, place_id: None } => format!("💥 {}", tr!("**{name}**: the client crashed.", name = name)),
+            Self::Hang { name } => format!("🧊 {}", tr!("**{name}**: the client stopped responding.", name = name)),
+            Self::Disconnect { name } => format!("🔌 {}", tr!("**{name}**: disconnected by Roblox.", name = name)),
+            Self::Launch { name, place_id: Some(p) } => {
+                format!("🎮 {}", tr!("**{name}**: in game (place {place}).", name = name, place = p))
+            }
+            Self::Launch { name, place_id: None } => format!("🎮 {}", tr!("**{name}**: in game.", name = name)),
+            Self::Restart { name, cause: CrashKind::Disconnect } => format!("🔁 {}", tr!("**{name}**: rejoined.", name = name)),
+            Self::Restart { name, cause: CrashKind::Mem } => {
+                format!("🧹 {}", tr!("**{name}**: restarted, it used too much memory.", name = name))
+            }
+            Self::Restart { name, cause: CrashKind::Hang } => {
+                format!("🔁 {}", tr!("**{name}**: restarted after it stopped responding.", name = name))
+            }
+            Self::Restart { name, cause: CrashKind::Crash } => {
+                format!("🔁 {}", tr!("**{name}**: restarted after a crash.", name = name))
+            }
+            Self::Breaker { name, count, window_min } => format!(
+                "⛔ {}",
+                trn!(
+                    *count,
+                    "**{name}**: RoALT gave up after {n} relaunch in {minutes} min.",
+                    "**{name}**: RoALT gave up after {n} relaunches in {minutes} min.",
+                    name = name,
+                    minutes = window_min
+                )
+            ),
             Self::BatchDone { total, in_game, done, failed, stopped } => {
-                let mut s = format!("🚀 Batch finished: {in_game} of {total} in game");
+                let mut s = format!("🚀 {}", tr!("Batch finished: {in_game} of {total} in game", in_game = in_game, total = total));
                 if *done > 0 {
-                    s += &format!(", {done} done");
+                    s += &tr!(", {done} done", done = done);
                 }
                 if *failed > 0 {
-                    s += &format!(", {failed} failed");
+                    s += &tr!(", {failed} failed", failed = failed);
                 }
                 if let Some(why) = stopped {
-                    s += &format!(" (stopped: {})", escape(why));
+                    s += &tr!(" (stopped: {why})", why = escape(why));
                 }
                 s + "."
             }
             Self::Status { clients, ram_mb, cpu_pct } => {
                 let cpu = cpu_pct.map(|c| format!(" · {c:.0}% CPU")).unwrap_or_default();
-                format!("📊 {clients} client{} running · {ram_mb:.0} MB RAM{cpu}.", if *clients == 1 { "" } else { "s" })
+                format!(
+                    "📊 {}",
+                    trn!(
+                        *clients,
+                        "{n} client running · {ram} MB RAM{cpu}.",
+                        "{n} clients running · {ram} MB RAM{cpu}.",
+                        ram = format!("{ram_mb:.0}"),
+                        cpu = cpu
+                    )
+                )
             }
         }
     }
@@ -150,7 +176,7 @@ impl Event {
 pub fn name_of(a: Option<&AccountSummary>, account_id: i64) -> String {
     match a {
         Some(a) => escape(&format!("{} (@{})", a.display_name, a.username)),
-        None => format!("Account {account_id}"),
+        None => tr!("Account {id}", id = account_id),
     }
 }
 
@@ -170,13 +196,14 @@ fn escape(s: &str) -> String {
 pub fn change_of(t: &Transition) -> Option<CrashKind> {
     let (b, a) = (&t.before, &t.after);
     if a.state == InstanceState::Exited {
-        let by_itself = b.state != InstanceState::Exited && a.note.as_deref() == Some(UNEXPECTED);
+        let by_itself = b.state != InstanceState::Exited && a.note.as_deref() == Some(&*unexpected());
         return (by_itself && b.state != InstanceState::Disconnected).then_some(CrashKind::Crash);
     }
     if a.state == InstanceState::Disconnected && b.state != InstanceState::Disconnected {
         return Some(CrashKind::Disconnect);
     }
-    (a.note.as_deref() == Some(HUNG) && b.note.as_deref() != Some(HUNG)).then_some(CrashKind::Hang)
+    let hung = hung();
+    (a.note.as_deref() == Some(&*hung) && b.note.as_deref() != Some(&*hung)).then_some(CrashKind::Hang)
 }
 
 /// The client got into a game for the first time (pure): not a rejoin, restart or reconnect.
@@ -191,7 +218,7 @@ pub fn launched(t: &Transition) -> bool {
 pub fn message(events: &[Event]) -> Value {
     let mut lines: Vec<String> = events.iter().take(MAX_LINES).map(Event::line).collect();
     if events.len() > MAX_LINES {
-        lines.push(format!("…and {} more.", events.len() - MAX_LINES));
+        lines.push(trn!(events.len() - MAX_LINES, "…and {n} more.", "…and {n} more."));
     }
     let color = match events.iter().map(Event::severity).max() {
         Some(2) => 0xE5_48_4D,
@@ -334,11 +361,11 @@ pub fn set(s: &App, url: Option<&str>) -> Result<DiscordStatus> {
 
 /// Sends a test message at once (it still counts for the 2 s gap).
 pub async fn test(s: &App) -> Result<()> {
-    let hook = webhook(s)?.ok_or_else(|| AppError::Invalid("Set a webhook first.".into()))?;
+    let hook = webhook(s)?.ok_or_else(|| AppError::Invalid(tr!("Set a webhook first.")))?;
     let body = json!({
         "username": "RoALT",
         "allowed_mentions": { "parse": [] },
-        "embeds": [{ "title": "RoALT", "description": "✅ Test message: RoALT's alerts reach this channel.", "color": 0xB4_F0_00 }],
+        "embeds": [{ "title": "RoALT", "description": format!("✅ {}", tr!("Test message: RoALT's alerts reach this channel.")), "color": 0xB4_F0_00 }],
     });
     let now = Instant::now();
     let r = post(s, &hook, &body).await;
@@ -348,7 +375,7 @@ pub async fn test(s: &App) -> Result<()> {
     }
     match r? {
         None => Ok(()),
-        Some(wait) => Err(AppError::Invalid(format!("Discord is limiting messages. Try again in {} s.", wait.as_secs().max(1)))),
+        Some(wait) => Err(AppError::Invalid(tr!("Discord is limiting messages. Try again in {seconds} s.", seconds = wait.as_secs().max(1)))),
     }
 }
 
@@ -368,9 +395,9 @@ async fn post(s: &App, hook: &Webhook, body: &Value) -> Result<Option<Duration>>
             Ok(Some(retry_after(&r.text().await.unwrap_or_default(), header.as_deref())))
         }
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => {
-            Err(AppError::Invalid("Discord refused the webhook; it may have been deleted. Paste a new one.".into()))
+            Err(AppError::Invalid(tr!("Discord refused the webhook; it may have been deleted. Paste a new one.")))
         }
-        st => Err(AppError::Network(format!("Discord answered {}.", st.as_u16()))),
+        st => Err(AppError::Network(tr!("Discord answered {status}.", status = st.as_u16()))),
     }
 }
 
@@ -498,6 +525,10 @@ mod tests {
     use super::*;
     use crate::model::{Instance, LaunchTarget};
 
+    // The notes in English (tests run in English).
+    const HUNG: &str = "Not responding";
+    const UNEXPECTED: &str = "Closed unexpectedly";
+
     const TOKEN: &str = "aB3_x-Yz09aB3_x-Yz09aB3_x-Yz09aB3_x-Yz09aB3_x-Yz09aB3_x-Yz09abcd";
 
     #[test]
@@ -564,6 +595,7 @@ mod tests {
             throttled: false,
             micro: false,
             fps_cap: None,
+            sign_in_problem: false,
         }
     }
 

@@ -43,7 +43,7 @@ use super::Join;
 use super::target::is_uuid;
 use crate::App;
 use crate::error::{AppError, Result};
-use crate::instances::{CHALLENGED, WRONG_ACCOUNT};
+use crate::instances::{challenged, wrong_account};
 use crate::roblox_api::types::UserPresence;
 use crate::model::{
     AccountStatus, AccountSummary, BulkItem, BulkProgress, BulkRequest, BulkStage, GameServer, Instance,
@@ -53,9 +53,15 @@ use crate::model::{
 const EVENT: &str = "bulk://progress";
 const MIN_DELAY: u32 = 2_000;
 const MAX_DELAY: u32 = 60_000;
-const CANCELLED: &str = "Cancelled";
-const REJOINING: &str = "A rejoin is in progress, try again in a moment.";
-const LAUNCHING: &str = "Another launch is in progress, try again in a moment.";
+fn cancelled() -> String {
+    tr!("Cancelled")
+}
+fn rejoining() -> String {
+    tr!("A rejoin is in progress, try again in a moment.")
+}
+fn launching() -> String {
+    tr!("Another launch is in progress, try again in a moment.")
+}
 /// How often a wait looks at the clients and the cancel flag.
 const TICK: Duration = Duration::from_millis(500);
 const BIND_WAIT: Duration = Duration::from_secs(30);
@@ -173,9 +179,9 @@ impl Bulk {
     /// Why a single launch can't start now: a batch or an auto-rejoin is running.
     pub fn check_single_launch(&self) -> Result<()> {
         if self.running() {
-            Err(AppError::Invalid("A batch is still running.".into()))
+            Err(AppError::Invalid(tr!("A batch is still running.")))
         } else if self.rejoining.load(Ordering::SeqCst) > 0 {
-            Err(AppError::Invalid(REJOINING.into()))
+            Err(AppError::Invalid(rejoining()))
         } else {
             Ok(())
         }
@@ -186,7 +192,7 @@ impl Bulk {
     pub fn begin_single_launch(&self) -> Result<Busy<'_>> {
         self.check_single_launch()?;
         // Taken atomically, so two launches asked for at once can't both start.
-        self.launches.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst).map_err(|_| AppError::Invalid(LAUNCHING.into()))?;
+        self.launches.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst).map_err(|_| AppError::Invalid(launching()))?;
         Ok(Busy(&self.launches))
     }
 
@@ -237,33 +243,33 @@ pub fn start(app: AppHandle, mut req: BulkRequest) -> Result<String> {
     let s = app.state::<App>();
     let ids = &req.account_ids;
     if ids.is_empty() {
-        return Err(AppError::Invalid("Pick at least one account.".into()));
+        return Err(AppError::Invalid(tr!("Pick at least one account.")));
     }
     if ids.iter().enumerate().any(|(i, id)| ids[..i].contains(id)) {
-        return Err(AppError::Invalid("An account is in the list twice.".into()));
+        return Err(AppError::Invalid(tr!("An account is in the list twice.")));
     }
     if s.vault.is_locked() {
         return Err(AppError::Locked);
     }
     if s.update.installing() {
-        return Err(AppError::Invalid(crate::commands::INSTALLING.into()));
+        return Err(AppError::Invalid(crate::commands::installing()));
     }
     let mut accounts = Vec::with_capacity(ids.len());
     for &id in ids {
         let a = s.db.account(id)?;
         let name = name_of(&a);
         if let Some(why) = cant_launch(a.status) {
-            return Err(AppError::Invalid(format!("{name} can't launch: {why}")));
+            return Err(AppError::Invalid(tr!("{name} can't launch: {why}", name = name, why = why)));
         }
         if s.tracker.has_live_client(id) {
-            return Err(AppError::Invalid(format!("{name} is already running. Untick it or close its client first.")));
+            return Err(AppError::Invalid(tr!("{name} is already running. Untick it or close its client first.", name = name)));
         }
         accounts.push(Account { id, user_id: a.user_id, name, allow_disconnect: a.allow_disconnect });
     }
     if ids.len() > 1 && !s.multi.is_active() {
         let v = s.db.settings()?;
         if !v.multi_instance {
-            return Err(AppError::Invalid("Turn on multi-instance to launch several accounts.".into()));
+            return Err(AppError::Invalid(tr!("Turn on multi-instance to launch several accounts.")));
         }
         s.multi.enable()?;
     }
@@ -273,16 +279,16 @@ pub fn start(app: AppHandle, mut req: BulkRequest) -> Result<String> {
     {
         let mut batch = s.bulk.batch();
         if batch.as_ref().is_some_and(|b| !b.progress.done) {
-            return Err(AppError::Invalid("A batch is already running.".into()));
+            return Err(AppError::Invalid(tr!("A batch is already running.")));
         }
         if s.bulk.rejoining.load(Ordering::SeqCst) > 0 {
-            return Err(AppError::Invalid(REJOINING.into()));
+            return Err(AppError::Invalid(rejoining()));
         }
         let last = batch.replace(Batch { progress: progress.clone(), cancel: cancel.clone() });
         // After registering: an install starting now sees this batch, one already running is seen here.
         if s.update.installing() {
             *batch = last;
-            return Err(AppError::Invalid(crate::commands::INSTALLING.into()));
+            return Err(AppError::Invalid(crate::commands::installing()));
         }
     }
     let _ = app.emit(EVENT, &progress);
@@ -318,14 +324,14 @@ pub fn jittered(delay_ms: u32) -> Duration {
 /// `Failed` with the instance's note (or "Disconnected"); `exited` → `Failed` with the note
 /// (or "Closed").
 pub fn stage_of(instance: &Instance, allow_disconnect: bool) -> BulkStage {
-    let failed = |default: &str| BulkStage::Failed { message: instance.note.clone().unwrap_or_else(|| default.into()) };
+    let failed = |default: fn() -> String| BulkStage::Failed { message: instance.note.clone().unwrap_or_else(default) };
     match instance.state {
         InstanceState::Starting => BulkStage::Starting,
         InstanceState::Joining => BulkStage::Joining,
         InstanceState::InGame => BulkStage::InGame,
         InstanceState::Disconnected if allow_disconnect => BulkStage::Done,
-        InstanceState::Disconnected => failed("Disconnected"),
-        InstanceState::Exited => failed("Closed"),
+        InstanceState::Disconnected => failed(|| tr!("Disconnected")),
+        InstanceState::Exited => failed(crate::instances::closed),
     }
 }
 
@@ -389,17 +395,17 @@ impl Run {
                 }
             }
             if self.cancel.load(Ordering::SeqCst) {
-                return Some(CANCELLED.into());
+                return Some(cancelled());
             }
             let s = self.app.state::<App>();
             if i > 0 && !s.multi.is_active() {
-                return Some("Multi-instance was turned off. Turn it on.".into());
+                return Some(tr!("Multi-instance was turned off. Turn it on."));
             }
             // Ids are reused: the account picked must still be this one, with a valid cookie.
             match s.db.account(a.id) {
                 Ok(x) if x.user_id == a.user_id => {
                     if let Some(why) = cant_launch(x.status) {
-                        self.set_stage(i, BulkStage::Failed { message: why.into() });
+                        self.set_stage(i, BulkStage::Failed { message: why });
                         if x.status == AccountStatus::Challenged {
                             return stop_reason(&AppError::Challenge, &a.name);
                         }
@@ -407,7 +413,7 @@ impl Run {
                     }
                 }
                 _ => {
-                    self.set_stage(i, BulkStage::Failed { message: "Removed during the batch".into() });
+                    self.set_stage(i, BulkStage::Failed { message: tr!("Removed during the batch") });
                     continue;
                 }
             }
@@ -433,16 +439,16 @@ impl Run {
                                 self.update(|p| p.job_id = Some(found.1.clone()));
                                 server = Some(found);
                             }
-                            Ok(None) => self.note(format!(
-                                "{}'s server couldn't be read, so the rest were matched by Roblox on their own.",
-                                a.name
+                            Ok(None) => self.note(tr!(
+                                "{name}'s server couldn't be read, so the rest were matched by Roblox on their own.",
+                                name = a.name
                             )),
                         }
                     }
                     prev = Some(inst.id);
                 }
                 Err(e) => {
-                    self.set_stage(i, BulkStage::Failed { message: e.to_string() });
+                    self.set_stage(i, BulkStage::Failed { message: e.message() });
                     if let Some(why) = stop_reason(&e, &a.name) {
                         return Some(why);
                     }
@@ -465,7 +471,7 @@ impl Run {
             Ok((Join::Game { place_id, .. }, cookie)) => (place_id, cookie),
             Ok(_) => return (None, None),
             Err(e) => {
-                self.note(format!("The target couldn't be checked ({e}), so each account joins on its own."));
+                self.note(tr!("The target couldn't be checked ({why}), so each account joins on its own.", why = e.message()));
                 return (None, None);
             }
         };
@@ -475,10 +481,10 @@ impl Run {
         let n = self.accounts.len();
         let why = match pick_server(&s.api, first.id, &cookie, place_id, n).await {
             Ok(Some(job_id)) => return (Some((place_id, job_id)), None),
-            Ok(None) => format!("No server had room for all {n} accounts"),
-            Err(e) => format!("The server list couldn't be read ({e})"),
+            Ok(None) => trn!(n, "No server had room for all {n} accounts", "No server had room for all {n} accounts"),
+            Err(e) => tr!("The server list couldn't be read ({why})", why = e.message()),
         };
-        self.note(format!("{why}, so the rest follow the first account's server."));
+        self.note(tr!("{why}, so the rest follow the first account's server.", why = why));
         (None, Some(place_id))
     }
 
@@ -514,7 +520,7 @@ impl Run {
                 return Some(why);
             }
             if self.cancel.load(Ordering::SeqCst) {
-                return Some(CANCELLED.into());
+                return Some(cancelled());
             }
             let left = end.saturating_duration_since(Instant::now());
             if done() || left.is_zero() {
@@ -619,12 +625,12 @@ pub(crate) fn name_of(a: &AccountSummary) -> String {
 }
 
 /// Why an account can't be in a batch (None when its cookie is valid).
-fn cant_launch(status: AccountStatus) -> Option<&'static str> {
+fn cant_launch(status: AccountStatus) -> Option<String> {
     match status {
         AccountStatus::Valid => None,
-        AccountStatus::Invalid => Some("its cookie is no longer valid. Sign in to it again."),
-        AccountStatus::Challenged => Some("Roblox wants a human check. Sign in to it again."),
-        AccountStatus::Unknown => Some("its cookie hasn't been checked yet. Validate it first."),
+        AccountStatus::Invalid => Some(tr!("its cookie is no longer valid. Sign in to it again.")),
+        AccountStatus::Challenged => Some(tr!("Roblox wants a human check. Sign in to it again.")),
+        AccountStatus::Unknown => Some(tr!("its cookie hasn't been checked yet. Validate it first.")),
     }
 }
 
@@ -632,9 +638,9 @@ fn cant_launch(status: AccountStatus) -> Option<&'static str> {
 fn stop_reason(e: &AppError, name: &str) -> Option<String> {
     match e {
         AppError::Challenge => {
-            Some(format!("Roblox wants a human check for {name}. Sign in to it again with Add account > Sign in."))
+            Some(tr!("Roblox wants a human check for {name}. Sign in to it again with Add account > Sign in.", name = name))
         }
-        AppError::Locked => Some("The vault locked. Unlock it.".into()),
+        AppError::Locked => Some(tr!("The vault locked. Unlock it.")),
         _ => None,
     }
 }
@@ -644,11 +650,14 @@ fn stop_reason(e: &AppError, name: &str) -> Option<String> {
 fn mirror_item(item: &mut BulkItem, inst: &Instance, a: &Account) -> Option<String> {
     let name = &a.name;
     let why = match inst.note.as_deref() {
-        Some(WRONG_ACCOUNT) => format!(
+        Some(n) if n == wrong_account() => tr!(
             "{name}'s client signed in as another account. Close that client and turn on Settings > Protect \
-             each client's sign-in."
+             each client's sign-in.",
+            name = name
         ),
-        Some(CHALLENGED) => format!("Roblox wants a human check for {name}. Finish it in that client or close it."),
+        Some(n) if n == challenged() => {
+            tr!("Roblox wants a human check for {name}. Finish it in that client or close it.", name = name)
+        }
         _ => {
             item.stage = stage_of(inst, a.allow_disconnect);
             return None;
@@ -661,7 +670,7 @@ fn mirror_item(item: &mut BulkItem, inst: &Instance, a: &Account) -> Option<Stri
 /// A started client that left the tracker: it ended.
 fn gone(item: &mut BulkItem) {
     if !matches!(item.stage, BulkStage::Failed { .. }) {
-        item.stage = BulkStage::Failed { message: "Closed".into() };
+        item.stage = BulkStage::Failed { message: crate::instances::closed() };
     }
 }
 
@@ -697,7 +706,7 @@ fn halt(p: &mut BulkProgress, why: String) {
         }
     }
     p.stopped = Some(match why.strip_suffix('.') {
-        Some(s) if cancelled && why != CANCELLED => format!("{s}, then launch the accounts that were cancelled."),
+        Some(s) if cancelled && why != self::cancelled() => tr!("{why}, then launch the accounts that were cancelled.", why = s),
         _ => why,
     });
 }
@@ -713,6 +722,10 @@ fn settled(p: &BulkProgress) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The notes in English (tests run in English).
+    const WRONG_ACCOUNT: &str = "Signed in as another account";
+    const CHALLENGED: &str = "Roblox wants a human check";
 
     fn guid(n: u8) -> String {
         format!("aaaaaaaa-0000-4000-8000-0000000000{n:02}")
@@ -742,6 +755,7 @@ mod tests {
             throttled: false,
             micro: false,
             fps_cap: None,
+            sign_in_problem: false,
         }
     }
 
@@ -855,13 +869,13 @@ mod tests {
         assert!(b.check_single_launch().is_ok() && !b.any_busy());
         let launch = b.begin_launch();
         assert!(b.any_busy() && b.check_single_launch().is_ok());
-        assert!(matches!(b.begin_single_launch(), Err(AppError::Invalid(m)) if m == LAUNCHING));
+        assert!(matches!(b.begin_single_launch(), Err(AppError::Invalid(m)) if m == launching()));
         drop(launch);
         let single = b.begin_single_launch().unwrap();
         assert!(b.begin_single_launch().is_err());
         drop(single);
         let rejoin = b.begin_rejoin().unwrap();
-        assert!(matches!(b.check_single_launch(), Err(AppError::Invalid(m)) if m == REJOINING));
+        assert!(matches!(b.check_single_launch(), Err(AppError::Invalid(m)) if m == rejoining()));
         assert!(b.any_busy());
         drop(rejoin);
         assert!(b.check_single_launch().is_ok() && !b.any_busy());
@@ -940,7 +954,7 @@ mod tests {
         p.items[1] = item(failed("HTTP 500"), false);
         p.items[2] = item(BulkStage::Ticket, false);
         let fresh = p.clone();
-        halt(&mut p, CANCELLED.into());
+        halt(&mut p, cancelled());
         let stages: Vec<_> = p.items.iter().map(|i| i.stage.clone()).collect();
         let cancelled = BulkStage::Cancelled;
         assert_eq!(stages, [BulkStage::InGame, failed("HTTP 500"), cancelled.clone(), cancelled.clone(), cancelled]);

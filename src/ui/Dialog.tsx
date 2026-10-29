@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
 import { Icon } from "./Icon";
+import { t } from "../i18n";
 
 /**
  * Native modal <dialog>. Keep it mounted and drive `open`, so CSS can animate it out.
@@ -45,7 +46,7 @@ export function Dialog({ open, onClose, title, width = 420, children }: {
     >
       <div className="flex items-center gap-3 pl-5 pr-1 h-12 border-b border-line">
         <h2 id={titleId} className="flex-1 text-[15px] font-semibold tracking-[-0.01em]">{title}</h2>
-        <button type="button" className="wc w-10 h-10" aria-label="Close" onClick={onClose}>
+        <button type="button" className="wc w-10 h-10" aria-label={t("common.close")} onClick={onClose}>
           <Icon name="x" size={14} />
         </button>
       </div>
@@ -69,7 +70,7 @@ export function ConfirmDialog({ open, onClose, onConfirm, title, text, confirmLa
     <Dialog open={open} onClose={onClose} title={title} width={400}>
       <div className="p-5 text-dim">{text}</div>
       <div className="flex justify-end gap-2 px-5 pb-5">
-        <button type="button" className="btn" onClick={onClose} data-autofocus>Cancel</button>
+        <button type="button" className="btn" onClick={onClose} data-autofocus>{t("common.cancel")}</button>
         <button type="button" className={`btn ${safe ? "btn-primary" : "btn-danger"}`} onClick={onConfirm} disabled={busy}>
           {confirmLabel}
         </button>

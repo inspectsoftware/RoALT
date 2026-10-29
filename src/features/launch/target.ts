@@ -1,6 +1,7 @@
 // The Launch composer's state and how a target reads in the UI. Shell owns the draft, so it
 // survives switching views and is dropped with everything else when the vault locks.
 import type { LaunchTarget, ParsedInput, UserRef } from "../../api";
+import { t } from "../../i18n";
 
 export type Draft = {
   text: string;
@@ -66,28 +67,28 @@ export function placeOf(s: string): number | null {
 export type Tone = "ok" | "info" | "bad";
 export type Look = { kind: string; detail: string; tone: Tone };
 
-const job = (j: string) => `job ${j.slice(0, 8)}…${j.slice(-4)}`;
+const job = (j: string) => `${j.slice(0, 8)}…${j.slice(-4)}`;
 const ok = (kind: string, detail: string): Look => ({ kind, detail, tone: "ok" });
 
 /** "Game · place 1818"; link and access codes never show. */
-export function describeTarget(t: LaunchTarget): Look {
-  switch (t.kind) {
+export function describeTarget(tg: LaunchTarget): Look {
+  switch (tg.kind) {
     case "place":
-      return ok("Game", `place ${t.placeId}${t.launchData ? " · with launch data" : ""}`);
+      return ok(t("launch.target.game"), t(tg.launchData ? "launch.target.placeWithData" : "launch.target.place", { place: tg.placeId }));
     case "server":
-      return ok("Server", `place ${t.placeId} · ${job(t.jobId)}`);
+      return ok(t("launch.target.server"), t("launch.target.placeJob", { place: tg.placeId, job: job(tg.jobId) }));
     case "privateLink":
-      return ok("Private server", `place ${t.placeId} · link code ••••`);
+      return ok(t("launch.target.privateServer"), t("launch.target.linkCode", { place: tg.placeId }));
     case "privateAccess":
-      return ok("Private server", `place ${t.placeId} · access code ••••`);
+      return ok(t("launch.target.privateServer"), t("launch.target.accessCode", { place: tg.placeId }));
     case "shareLink":
-      return ok("Share link", t.linkType);
+      return ok(t("launch.target.shareLink"), tg.linkType);
     case "shareLinkV2":
-      return ok("Share link", "opened when you launch");
+      return ok(t("launch.target.shareLink"), t("launch.target.openedOnLaunch"));
     case "universe":
-      return ok("Game", `universe ${t.universeId} · start place`);
+      return ok(t("launch.target.game"), t("launch.target.universe", { universe: tg.universeId }));
     case "followUser":
-      return ok("Join user", `user ${t.userId}`);
+      return ok(t("launch.target.joinUser"), t("launch.target.user", { user: tg.userId }));
   }
 }
 
@@ -97,14 +98,14 @@ export function describe(p: ParsedInput, place: number | null, user: UserRef | n
       return describeTarget(p.target);
     case "jobIdOnly":
       return place === null
-        ? { kind: "Server", detail: `${job(p.jobId)} · needs a place ID`, tone: "info" }
-        : ok("Server", `place ${place} · ${job(p.jobId)}`);
+        ? { kind: t("launch.target.server"), detail: t("launch.target.jobNeedsPlace", { job: job(p.jobId) }), tone: "info" }
+        : ok(t("launch.target.server"), t("launch.target.placeJob", { place, job: job(p.jobId) }));
     case "username":
-      return { kind: "Join user", detail: `@${p.name}${user ? ` (${user.displayName})` : ""}`, tone: user ? "ok" : "info" };
+      return { kind: t("launch.target.joinUser"), detail: `@${p.name}${user ? ` (${user.displayName})` : ""}`, tone: user ? "ok" : "info" };
     case "invalid":
-      return { kind: "Not recognised", detail: p.reason, tone: "bad" };
+      return { kind: t("launch.target.notRecognised"), detail: p.reason, tone: "bad" };
     case "unsupported":
-      return { kind: "Not supported", detail: p.reason, tone: "bad" };
+      return { kind: t("launch.target.notSupported"), detail: p.reason, tone: "bad" };
   }
 }
 

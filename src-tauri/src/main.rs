@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[macro_use]
+mod i18n;
 mod commands;
 mod discord;
 mod error;
@@ -121,11 +123,12 @@ fn chosen_dir(default: PathBuf, json: Option<&str>) -> std::result::Result<(Path
             } else if same_dir(&l.data_dir, &default) {
                 Ok((default, None))
             } else {
-                Err(format!(
-                    "RoALT's data folder {} isn't available (no {DB_FILE}). Connect that drive and start RoALT again, \
-                     or delete {} to start fresh in the default folder.",
-                    l.data_dir.display(),
-                    default.join(LOCATION).display()
+                Err(tr!(
+                    "RoALT's data folder {folder} isn't available (no {db}). Connect that drive and start RoALT again, \
+                     or delete {location} to start fresh in the default folder.",
+                    folder = l.data_dir.display(),
+                    db = DB_FILE,
+                    location = default.join(LOCATION).display()
                 ))
             }
         }
@@ -159,20 +162,20 @@ pub fn same_dir(a: &Path, b: &Path) -> bool {
 /// Where a data folder move to `path` goes: a full path that isn't the current folder or
 /// inside it, and holds no RoALT database yet.
 pub fn move_target(current: &Path, path: &str) -> Result<PathBuf> {
-    let refuse = |why: &str| Err(AppError::Invalid(why.into()));
+    let refuse = |why: String| Err(AppError::Invalid(why));
     let path = Path::new(path.trim());
     if !path.is_absolute() {
-        return refuse(r"Pick a full folder path, like D:\RoALT.");
+        return refuse(tr!("Pick a full folder path, like D:\\RoALT."));
     }
     let target = std::path::absolute(path)?;
     if same_dir(&target, current) {
-        return refuse("RoALT already keeps its data there.");
+        return refuse(tr!("RoALT already keeps its data there."));
     }
     if path_key(&target).starts_with(&path_key(current)) {
-        return refuse("Pick a folder outside the current data folder.");
+        return refuse(tr!("Pick a folder outside the current data folder."));
     }
     if DB_FILES.iter().any(|f| target.join(f).exists()) {
-        return refuse("That folder already has a RoALT database. Pick another one.");
+        return refuse(tr!("That folder already has a RoALT database. Pick another one."));
     }
     Ok(target)
 }
@@ -272,21 +275,22 @@ fn fatal(message: &str) -> ! {
 fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::result::Result<(), String> {
     webview::sweep_temp_profiles(data_dir);
     let db_path = data_dir.join(DB_FILE);
-    let db = storage::Db::open(&db_path).map_err(|e| format!("RoALT can't open its database {}: {e}", db_path.display()))?;
-    let record = db.vault_record().map_err(|e| e.to_string())?;
+    let db = storage::Db::open(&db_path).map_err(|e| tr!("RoALT can't open its database {path}: {why}", path = db_path.display(), why = e.message()))?;
+    let record = db.vault_record().map_err(|e| e.message())?;
     // Only a database with a vault is the copy that replaces the old one.
     let moved_from = moved_from.filter(|_| record.is_some());
     let vault = match record {
         Some(rec) => vault::Vault::open(&rec).map_err(|e| {
-            format!(
-                "RoALT can't open its vault on this Windows account ({e}).\n\nIf this data folder came from another PC or \
-                 Windows account, rename {} and import a .roalt backup.",
-                db_path.display()
+            tr!(
+                "RoALT can't open its vault on this Windows account ({why}).\n\nIf this data folder came from another PC or \
+                 Windows account, rename {path} and import a .roalt backup.",
+                why = e.message(),
+                path = db_path.display()
             )
         })?,
         None => {
-            let (v, rec) = vault::Vault::create().map_err(|e| e.to_string())?;
-            db.save_vault_record(&rec).map_err(|e| e.to_string())?;
+            let (v, rec) = vault::Vault::create().map_err(|e| e.message())?;
+            db.save_vault_record(&rec).map_err(|e| e.message())?;
             v
         }
     };
@@ -295,7 +299,8 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
     }
     let handle = app.handle().clone();
     let api = roblox_api::Client::new(Arc::new(move |id, cookie| handle.state::<App>().store_rotated(id, cookie)));
-    let settings = db.settings().map_err(|e| e.to_string())?;
+    let settings = db.settings().map_err(|e| e.message())?;
+    i18n::set(&settings.language);
     let shutdown = commands::pending_shutdown(&db);
     let multi = instances::multi::Multi::new();
     if settings.multi_instance
@@ -332,7 +337,7 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
         // Said once the window is up.
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(Duration::from_secs(5)).await;
-            commands::notice(&handle, true, format!("{e} The panic hotkey is off; change it in Settings, Automation."));
+            commands::notice(&handle, true, tr!("{why} The panic hotkey is off; change it in Settings, Automation.", why = e.message()));
         });
     }
     // Master mode starts locked: then it starts on unlock (`commands::vault_unlock`).
@@ -341,7 +346,7 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
         let handle = app.handle().clone();
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(Duration::from_secs(5)).await;
-            commands::notice(&handle, true, format!("The web dashboard didn't start: {e}"));
+            commands::notice(&handle, true, tr!("The web dashboard didn't start: {why}", why = e.message()));
         });
     }
     if let Err(e) = tray::setup(app.handle()) {
@@ -351,9 +356,10 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
     self_update::spawn(app.handle().clone());
     app.manage(splash::Pending::default());
     main_window(app, data_dir).map_err(|e| {
-        format!(
-            "RoALT can't open its window ({e}).\n\nIt needs the Microsoft Edge WebView2 Runtime: \
-             https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+        tr!(
+            "RoALT can't open its window ({why}).\n\nIt needs the Microsoft Edge WebView2 Runtime: \
+             https://go.microsoft.com/fwlink/p/?LinkId=2124703",
+            why = e
         )
     })?;
     spawn_auto_lock(app.handle().clone());
@@ -376,7 +382,7 @@ fn remind_bandwidth(handle: AppHandle) {
             commands::notice(
                 &handle,
                 true,
-                "The Roblox bandwidth limit is off: Windows clears it when it restarts. Apply it again in Settings, Performance.",
+                tr!("The Roblox bandwidth limit is off: Windows clears it when it restarts. Apply it again in Settings, Performance."),
             );
         }
     });
@@ -395,9 +401,11 @@ fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
 
 fn main() {
     webview::clear_webview2_env();
+    // Windows' language until the settings are read.
+    i18n::set("");
     let (data_dir, moved_from) = data_dir().unwrap_or_else(|e| fatal(&e));
     if let Err(e) = std::fs::create_dir_all(&data_dir) {
-        fatal(&format!("RoALT can't create its data folder {}: {e}", data_dir.display()));
+        fatal(&tr!("RoALT can't create its data folder {path}: {why}", path = data_dir.display(), why = e));
     }
     let log_dir = data_dir.join("logs");
 
@@ -528,10 +536,15 @@ fn main() {
             commands::remote_new_certificate,
         ])
         .build(tauri::generate_context!())
-        .unwrap_or_else(|e| fatal(&format!("RoALT failed to start: {e}")))
+        .unwrap_or_else(|e| fatal(&tr!("RoALT failed to start: {why}", why = e)))
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 commands::clear_copied_cookie(app);
+                // The next start follows the running clients again (`Tracker::readopt`).
+                if let Some(s) = app.try_state::<App>() {
+                    s.tracker.persist(&s.db, true);
+                    s.limiter.release_all();
+                }
             }
         });
 }

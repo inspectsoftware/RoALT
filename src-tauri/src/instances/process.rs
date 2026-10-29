@@ -87,9 +87,9 @@ pub fn close(pid: u32, expected: Option<u64>, force: bool, grace: Duration) -> R
 }
 
 fn terminate(pid: u32, t0: u64) -> Result<()> {
-    let failed = |e: String| AppError::Internal(format!("Could not close Roblox (process {pid}): {e}"));
+    let failed = |e: String| AppError::Internal(tr!("Could not close Roblox (process {pid}): {why}", pid = pid, why = e));
     let Some(h) = open(pid, PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE) else {
-        return if start_time(pid) == Some(t0) { Err(failed("access denied".into())) } else { Ok(()) };
+        return if start_time(pid) == Some(t0) { Err(failed(tr!("access denied"))) } else { Ok(()) };
     };
     if started(*h) != Some(t0) {
         return Ok(());

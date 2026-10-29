@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, UNIX_EPOCH};
 
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use super::logwatch::{self, LogFacts};
@@ -18,13 +19,27 @@ const REBIND_MS: i64 = 120_000;
 const MAX_ENDED: usize = 30;
 /// How far a client's start may be from its log file's creation, in seconds.
 const LOG_SKEW_SECS: u64 = 3;
+// Notes are made in the current language and compared against these (a note made before a
+// language switch stops matching until the next poll remakes it).
 /// The note of a client whose log signed in as a different user than its account.
-pub const WRONG_ACCOUNT: &str = "Signed in as another account";
-pub const CHALLENGED: &str = "Roblox wants a human check";
+pub fn wrong_account() -> String {
+    tr!("Signed in as another account")
+}
+pub fn challenged() -> String {
+    tr!("Roblox wants a human check")
+}
 /// The note of a client that ended without RoALT closing it and with nothing else to blame.
-pub const UNEXPECTED: &str = "Closed unexpectedly";
+pub fn unexpected() -> String {
+    tr!("Closed unexpectedly")
+}
 /// The note of a running client whose window stopped responding.
-pub const HUNG: &str = "Not responding";
+pub fn hung() -> String {
+    tr!("Not responding")
+}
+/// The note of a client the user (or RoALT) closed.
+pub fn closed() -> String {
+    tr!("Closed")
+}
 /// Polls (about seconds) a client's window must be not responding in a row to count as hung.
 const HANG_POLLS: u32 = 30;
 
@@ -34,6 +49,22 @@ pub struct Tracker {
     claimed: Mutex<Vec<i64>>,
     /// Clients that ended badly since the last `take_crashes`; locked after `inner`.
     crashes: Mutex<Vec<Ended>>,
+    /// What `persist` last wrote to the database; locked after `inner`.
+    persisted: Mutex<Vec<Saved>>,
+}
+
+/// What a restarted RoALT needs to follow a running client again (`readopt`), kept in the
+/// database while the client runs (`persist`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Saved {
+    inst: Instance,
+    btid: i64,
+    /// Start time of `inst.pid`, the client itself.
+    start_time: u64,
+    log: Option<PathBuf>,
+    offset: u64,
+    facts: LogFacts,
+    in_game_at: Option<i64>,
 }
 
 /// A client that ended badly (`crash_kind`), for the crash history.
@@ -100,6 +131,31 @@ struct Entry {
 }
 
 impl Entry {
+    fn new(inst: Instance, btid: i64, start_time: Option<u64>, adopted: bool) -> Entry {
+        Entry {
+            inst,
+            btid,
+            start_time,
+            adopted,
+            alive: true,
+            log: None,
+            offset: 0,
+            facts: LogFacts::default(),
+            expected_user: None,
+            user_checked: false,
+            closing: false,
+            in_game_at: None,
+            hung_polls: 0,
+            gave_up: None,
+            gone_at: None,
+            rejoin_seen: false,
+            mem_strikes: 0,
+            mem_mb: 0,
+            mem_restart: false,
+            window_seen: false,
+        }
+    }
+
     fn hung(&self) -> bool {
         self.hung_polls >= HANG_POLLS
     }
@@ -120,7 +176,12 @@ impl Entry {
 
 impl Tracker {
     pub fn new() -> Tracker {
-        Tracker { inner: Mutex::new(Vec::new()), claimed: Mutex::new(Vec::new()), crashes: Mutex::new(Vec::new()) }
+        Tracker {
+            inner: Mutex::new(Vec::new()),
+            claimed: Mutex::new(Vec::new()),
+            crashes: Mutex::new(Vec::new()),
+            persisted: Mutex::new(Vec::new()),
+        }
     }
 
     fn entries(&self) -> MutexGuard<'_, Vec<Entry>> {
@@ -148,30 +209,62 @@ impl Tracker {
             throttled: false,
             micro: false,
             fps_cap: info.fps_cap,
+            sign_in_problem: false,
         };
-        self.entries().push(Entry {
-            inst: inst.clone(),
-            btid: info.browser_tracker_id,
-            start_time: info.pid_start,
-            adopted: !info.via_bootstrapper,
-            alive: true,
-            log: None,
-            offset: 0,
-            facts: LogFacts::default(),
-            expected_user: None,
-            user_checked: false,
-            closing: false,
-            in_game_at: None,
-            hung_polls: 0,
-            gave_up: None,
-            gone_at: None,
-            rejoin_seen: false,
-            mem_strikes: 0,
-            mem_mb: 0,
-            mem_restart: false,
-            window_seen: false,
-        });
+        self.entries().push(Entry::new(inst.clone(), info.browser_tracker_id, info.pid_start, !info.via_bootstrapper));
         inst
+    }
+
+    /// The running clients a restarted RoALT can follow again: those known to be the client
+    /// itself (not a bootstrapper standing in for it).
+    pub fn saved(&self) -> Vec<Saved> {
+        self.entries()
+            .iter()
+            .filter(|e| e.inst.state != InstanceState::Exited)
+            .filter_map(|e| {
+                let (_, start_time) = client_of(e)?;
+                let (log, facts) = (e.log.clone(), e.facts.clone());
+                Some(Saved { inst: e.inst.clone(), btid: e.btid, start_time, log, offset: e.offset, facts, in_game_at: e.in_game_at })
+            })
+            .collect()
+    }
+
+    /// Writes `saved` to the database when a client started, changed or ended; when only how
+    /// far their logs were read changed, only if `due` (re-reading a few lines after a restart
+    /// gives the same facts).
+    pub fn persist(&self, db: &crate::storage::Db, due: bool) {
+        let now = self.saved();
+        let mut last = self.persisted.lock().unwrap_or_else(|e| e.into_inner());
+        let moved = now.len() != last.len() || now.iter().zip(last.iter()).any(|(a, b)| a.inst != b.inst);
+        if *last == now || !(moved || due) {
+            return;
+        }
+        let rows: Vec<(String, String)> =
+            now.iter().filter_map(|c| Some((c.inst.id.clone(), serde_json::to_string(c).ok()?))).collect();
+        match db.save_tracked(&rows) {
+            Ok(()) => *last = now,
+            Err(e) => log::warn!("could not save the tracked clients: {e}"),
+        }
+    }
+
+    /// Follows clients from before RoALT restarted again (before the first poll): each one
+    /// `readoptable` among the running Roblox clients `roblox`, its log read on from where it
+    /// was. Returns the (pid, start time) of each one followed again.
+    pub fn readopt(&self, saved: Vec<Saved>, roblox: &[ProcInfo]) -> Vec<(u32, u64)> {
+        let mut entries = self.entries();
+        let mut out = Vec::new();
+        for s in saved {
+            if !readoptable(&s, roblox, &entries) {
+                continue;
+            }
+            out.push((s.inst.pid, s.start_time));
+            let mut e = Entry::new(s.inst, s.btid, Some(s.start_time), true);
+            (e.log, e.offset, e.facts, e.in_game_at) = (s.log, s.offset, s.facts, s.in_game_at);
+            // "Minimize on launch" was done with it before.
+            e.window_seen = true;
+            entries.push(e);
+        }
+        out
     }
 
     /// Running ones first, then ended ones (newest first, at most 30 kept).
@@ -444,6 +537,7 @@ impl Tracker {
     /// for the memory restart (not while a launch or batch runs). With `clean_logs`, Roblox's old
     /// logs go hourly (`logwatch::clean`).
     pub fn spawn(app: AppHandle) {
+        restore(&app);
         tauri::async_runtime::spawn(async move {
             let mut tick: u64 = 0;
             loop {
@@ -498,6 +592,7 @@ impl Tracker {
                             log::warn!("could not record the end of instance {}: {e}", c.instance_id);
                         }
                     }
+                    s.tracker.persist(&s.db, tick.is_multiple_of(10));
                     (moved, s.tracker.take_rejoins(), throttle_moved)
                 })
                 .await
@@ -556,6 +651,32 @@ impl Tracker {
     }
 }
 
+/// Follows the clients saved before RoALT closed again (`readopt`), as its own (not multi-
+/// instance survivors); the saved ones no longer running go from the database.
+fn restore(app: &AppHandle) {
+    let s = app.state::<crate::App>();
+    let saved: Vec<Saved> = match s.db.tracked() {
+        Ok(rows) => rows.iter().filter_map(|j| serde_json::from_str(j).ok()).collect(),
+        Err(e) => return log::warn!("could not read the tracked clients: {e}"),
+    };
+    if saved.is_empty() {
+        return;
+    }
+    // What the database holds, so `persist` drops the ones not followed again.
+    *s.tracker.persisted.lock().unwrap_or_else(|e| e.into_inner()) = saved.clone();
+    let found = s.tracker.readopt(saved, &process::roblox_processes());
+    s.multi.adopt(&found);
+    log::info!("following {} client(s) from before RoALT restarted", found.len());
+    s.tracker.persist(&s.db, true);
+}
+
+/// A saved client to follow again (pure): its pid still runs as a Roblox client started at the
+/// same time, and no entry follows that instance or that process already.
+fn readoptable(s: &Saved, roblox: &[ProcInfo], entries: &[Entry]) -> bool {
+    roblox.iter().any(|p| p.pid == s.inst.pid && p.start_time == s.start_time)
+        && !entries.iter().any(|e| e.inst.id == s.inst.id || (e.inst.pid == s.inst.pid && e.inst.state != InstanceState::Exited))
+}
+
 /// One client's change in a poll: what the UI saw before and sees now.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Transition {
@@ -594,11 +715,11 @@ pub fn wants_rejoin(inst: &Instance, facts: &LogFacts, hung: bool) -> Option<Cra
         return None;
     }
     match inst.state {
-        InstanceState::Exited if inst.note.as_deref() == Some(UNEXPECTED) => {
+        InstanceState::Exited if inst.note.as_deref() == Some(&*unexpected()) => {
             Some(if facts.disconnected { CrashKind::Disconnect } else { CrashKind::Crash })
         }
         InstanceState::Exited => None,
-        _ if hung => inst.note.as_deref().is_none_or(|n| n == HUNG).then_some(CrashKind::Hang),
+        _ if hung => inst.note.as_deref().is_none_or(|n| n == self::hung()).then_some(CrashKind::Hang),
         InstanceState::Disconnected if inst.note.is_none() => Some(CrashKind::Disconnect),
         _ => None,
     }
@@ -612,7 +733,7 @@ fn crash_kind(facts: &LogFacts, hung: bool, note: Option<&str>) -> Option<CrashK
         Some(CrashKind::Hang)
     } else if facts.disconnected && !facts.left {
         Some(CrashKind::Disconnect)
-    } else if note == Some(UNEXPECTED) && !facts.left {
+    } else if note == Some(&*unexpected()) && !facts.left {
         Some(CrashKind::Crash)
     } else {
         None
@@ -627,8 +748,8 @@ fn ended(e: &Entry, kind: CrashKind, now: i64) -> Ended {
         at: now,
         uptime_ms: (now - e.inst.started_at).max(0),
         reason: match kind {
-            CrashKind::Hang => Some(HUNG.into()),
-            CrashKind::Mem => Some(format!("Used {} MB of private memory", e.mem_mb)),
+            CrashKind::Hang => Some(hung()),
+            CrashKind::Mem => Some(tr!("Used {mb} MB of private memory", mb = e.mem_mb)),
             _ => e.facts.reason.clone(),
         },
         place_id: e.inst.place_id,
@@ -768,8 +889,9 @@ fn settle(e: &mut Entry, now: i64) -> Option<CrashKind> {
         true => crash_kind(&e.facts, e.hung(), note.as_deref()),
         false => None,
     };
+    e.inst.sign_in_problem = note.as_ref().is_some_and(|n| *n == wrong_account() || *n == challenged());
     if !ended && e.hung() && note.is_none() {
-        note = Some(HUNG.into());
+        note = Some(hung());
     }
     if let Some(g) = e.gave_up.as_ref().filter(|_| !e.closing) {
         note = Some(g.clone());
@@ -792,17 +914,17 @@ fn settle(e: &mut Entry, now: i64) -> Option<CrashKind> {
 /// gone for good, whether the user closed it, and the account's user id (pure).
 fn state_of(facts: &LogFacts, bound: bool, ended: bool, closing: bool, expected_user: Option<i64>) -> (InstanceState, Option<String>) {
     let problem = if facts.replaced {
-        Some("Replaced by another Roblox client")
+        Some(tr!("Replaced by another Roblox client"))
     } else if matches!((facts.user_id, expected_user), (Some(got), Some(want)) if got != want) {
-        Some(WRONG_ACCOUNT)
+        Some(wrong_account())
     } else if facts.challenged {
-        Some(CHALLENGED)
+        Some(challenged())
     } else {
         None
     };
     if ended {
-        let note = if closing { "Closed" } else { problem.unwrap_or(UNEXPECTED) };
-        return (InstanceState::Exited, Some(note.into()));
+        let note = if closing { closed() } else { problem.unwrap_or_else(unexpected) };
+        return (InstanceState::Exited, Some(note));
     }
     let state = if facts.disconnected {
         InstanceState::Disconnected
@@ -833,6 +955,11 @@ mod tests {
     use super::*;
     use crate::model::InstanceState::*;
 
+    // The notes in English (tests run in English).
+    const WRONG_ACCOUNT: &str = "Signed in as another account";
+    const CHALLENGED: &str = "Roblox wants a human check";
+    const UNEXPECTED: &str = "Closed unexpectedly";
+    const HUNG: &str = "Not responding";
     const BTID: i64 = 5_550_001;
     const USER: i64 = 261;
 
@@ -1078,6 +1205,39 @@ mod tests {
         t.poll(Some(&dir), &procs, &user_of, start + 2_000);
         assert_eq!(state(&t, &id), (Exited, note("Closed"), 100));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn readopts_only_the_same_running_client() {
+        let old = Tracker::new();
+        let start = now_ms();
+        let a = old.register(&LaunchInfo { pid_start: Some(50), ..info(900, start, false) }, target()).id;
+        old.register(&LaunchInfo { pid_start: Some(60), ..info(901, start, true) }, target());
+        old.entries()[0].offset = 4_096;
+        old.entries()[0].facts.in_game = true;
+        old.entries()[0].in_game_at = Some(start + 9);
+        // Per-client options travel with it.
+        assert!(old.set_limits(&a, Limits { cpu_cap: Some(20), ..Limits::default() }).is_some() && old.set_anti_afk(&a, false));
+        // The bootstrapper one isn't the client yet: not saved.
+        let saved = old.saved();
+        assert_eq!(saved.len(), 1);
+        let json = serde_json::to_string(&saved).unwrap();
+        let saved: Vec<Saved> = serde_json::from_str(&json).unwrap();
+        assert_eq!(saved, old.saved(), "JSON round trip");
+
+        let p = |pid, start_time| ProcInfo { pid, start_time };
+        let fresh = Tracker::new();
+        assert!(readoptable(&saved[0], &[p(900, 50)], &fresh.entries()));
+        assert!(!readoptable(&saved[0], &[], &fresh.entries()), "gone");
+        assert!(!readoptable(&saved[0], &[p(900, 51)], &fresh.entries()), "pid reused");
+        assert!(!readoptable(&saved[0], &[p(900, 50)], &old.entries()), "already followed");
+
+        assert_eq!(fresh.readopt(saved.clone(), &[p(900, 50)]), [(900, 50)]);
+        assert_eq!(fresh.readopt(saved, &[p(900, 50)]), [], "not twice");
+        let e = fresh.entries()[0].clone();
+        assert_eq!((e.offset, e.facts.in_game, e.in_game_at, e.window_seen), (4_096, true, Some(start + 9), true));
+        assert_eq!(fresh.get(&a), old.get(&a), "the UI sees it as before");
+        assert_eq!(fresh.clients().len(), 1, "limits apply to it again");
     }
 
     #[test]

@@ -101,7 +101,7 @@ pub fn thumbnail(pid: u32, max_w: u32) -> Option<Thumb> {
 /// Shows, minimizes or focuses the client's window. Minimize and Restore are queued, so a
 /// busy or hung client holds up nothing; Focus waits, and refuses a client not responding.
 pub fn show(pid: u32, what: Show) -> Result<()> {
-    let (hwnd, minimized) = process::main_window(pid).ok_or_else(|| AppError::Invalid("That client has no window yet.".into()))?;
+    let (hwnd, minimized) = process::main_window(pid).ok_or_else(|| AppError::Invalid(tr!("That client has no window yet.")))?;
     let queue = |cmd| {
         // SAFETY: a window-manager call on a top-level window; posted, its return the old visibility.
         let _ = unsafe { ShowWindowAsync(hwnd, cmd) };
@@ -116,7 +116,7 @@ pub fn show(pid: u32, what: Show) -> Result<()> {
                 let _ = unsafe { ShowWindow(hwnd, SW_RESTORE) };
             }
             if !afk::to_front(hwnd) {
-                return Err(AppError::Invalid("Windows didn't let RoALT bring that client to the front.".into()));
+                return Err(AppError::Invalid(tr!("Windows didn't let RoALT bring that client to the front.")));
             }
         }
     }
@@ -148,9 +148,9 @@ pub fn minimize_quietly(pid: u32) {
 /// The client's main window, for changing it: an error while it has none or doesn't respond
 /// (sizing a hung window would wait until it does).
 fn window_to_change(pid: u32) -> Result<HWND> {
-    let (hwnd, _) = process::main_window(pid).ok_or_else(|| AppError::Invalid("That client has no window yet.".into()))?;
+    let (hwnd, _) = process::main_window(pid).ok_or_else(|| AppError::Invalid(tr!("That client has no window yet.")))?;
     if process::hung(pid) {
-        return Err(AppError::Invalid("That client isn't responding.".into()));
+        return Err(AppError::Invalid(tr!("That client isn't responding.")));
     }
     Ok(hwnd)
 }
@@ -179,10 +179,10 @@ pub fn micro(id: &str, pid: u32, on: bool) -> Result<(u32, u32)> {
         if let Some(mut wp) = before {
             wp.showCmd = restore_cmd(wp.showCmd, (wp.flags & WPF_RESTORETOMAXIMIZED).0 != 0);
             // SAFETY: `wp` was filled by GetWindowPlacement for this window, its length set.
-            unsafe { SetWindowPlacement(hwnd, &wp) }.map_err(|e| AppError::Internal(format!("Could not resize that window: {e}")))?;
+            unsafe { SetWindowPlacement(hwnd, &wp) }.map_err(|e| AppError::Internal(tr!("Could not resize that window: {why}", why = e.message())))?;
         }
     }
-    client_size(hwnd).ok_or_else(|| AppError::Invalid("That client's window has closed.".into()))
+    client_size(hwnd).ok_or_else(|| AppError::Invalid(tr!("That client's window has closed.")))
 }
 
 /// Lays the clients (instance id, pid) out in a grid on the work area (taskbar left free) of

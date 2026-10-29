@@ -7,7 +7,8 @@
 //! - a master-password vault locks (on joining such a network, not again while on it).
 //!
 //! Read through the Network List Manager every `TICK`. Only networks with internet access
-//! count: Hyper-V, WSL and VPN adapters are often filed Public but reach nothing.
+//! count: Hyper-V, WSL and VPN adapters are often filed Public but reach nothing. The network's
+//! name is never read: it would show on a streamer's screen and in the log.
 
 use std::sync::Mutex;
 use std::thread::sleep;
@@ -45,15 +46,14 @@ impl Network {
 
 /// One connected network as Windows files it.
 struct Seen {
-    name: String,
     category: NLM_NETWORK_CATEGORY,
     connectivity: NLM_CONNECTIVITY,
 }
 
-/// The first connected network that is Public and reaches the internet (pure).
-fn public_of(nets: &[Seen]) -> Option<&str> {
+/// Whether a connected network is Public and reaches the internet (pure).
+fn public_of(nets: &[Seen]) -> bool {
     let internet = NLM_CONNECTIVITY_IPV4_INTERNET.0 | NLM_CONNECTIVITY_IPV6_INTERNET.0;
-    nets.iter().find(|n| n.category == NLM_NETWORK_CATEGORY_PUBLIC && n.connectivity.0 & internet != 0).map(|n| n.name.as_str())
+    nets.iter().any(|n| n.category == NLM_NETWORK_CATEGORY_PUBLIC && n.connectivity.0 & internet != 0)
 }
 
 /// Reads the connected networks; not public when Windows can't say (logged).
@@ -62,10 +62,10 @@ pub fn scan() -> NetworkStatus {
     // `OleInitialize` (RPC_E_CHANGED_MODE, the app doesn't start).
     let read = std::thread::spawn(networks).join().unwrap_or_else(|_| Err(windows::core::Error::empty()));
     match read {
-        Ok(nets) => NetworkStatus { public: public_of(&nets).map(str::to_owned) },
+        Ok(nets) => NetworkStatus { public: public_of(&nets) },
         Err(e) => {
             log::warn!("couldn't read the network category: {e}");
-            NetworkStatus { public: None }
+            NetworkStatus { public: false }
         }
     }
 }
@@ -84,7 +84,6 @@ fn networks() -> windows::core::Result<Vec<Seen>> {
             list.Next(&mut one, Some(&mut got))?;
             let Some(net) = one[0].take().filter(|_| got == 1) else { break };
             out.push(Seen {
-                name: net.GetName().map(|b| b.to_string()).unwrap_or_default(),
                 category: net.GetCategory()?,
                 connectivity: net.GetConnectivity()?,
             });
@@ -95,12 +94,11 @@ fn networks() -> windows::core::Result<Vec<Seen>> {
 
 /// Why launching, or the web dashboard, isn't allowed now; None when it is.
 pub fn blocked(s: &App) -> Option<String> {
-    let name = s.network.get().public?;
-    if s.db.settings().is_ok_and(|v| v.allow_public_networks) {
+    if !s.network.get().public || s.db.settings().is_ok_and(|v| v.allow_public_networks) {
         return None;
     }
-    Some(format!(
-        "You're on a public network ({name}). RoALT doesn't launch or serve the web dashboard there; join a private \
+    Some(tr!(
+        "You're on a public network. RoALT doesn't launch or serve the web dashboard there; join a private \
          network, or allow public networks in Settings, Security."
     ))
 }
@@ -114,7 +112,7 @@ pub fn spawn(app: AppHandle) {
             let s = app.state::<App>();
             let now = scan();
             if now != s.network.get() {
-                log::info!("network: {}", now.public.as_deref().map_or("not public".into(), |n| format!("public ({n})")));
+                log::info!("network: {}", if now.public { "public" } else { "not public" });
                 s.network.set(now.clone());
                 let _ = app.emit("app://network", now);
             }
@@ -142,14 +140,12 @@ fn enforce(app: &AppHandle, why: &str) {
         crate::commands::lock_vault(app);
     }
     if dashboard || lock {
-        let mut done = Vec::new();
-        if dashboard {
-            done.push("the web dashboard stopped");
-        }
-        if lock {
-            done.push("the vault locked");
-        }
-        notice(app, true, format!("{why} Meanwhile {}.", done.join(" and ")));
+        let text = match (dashboard, lock) {
+            (true, true) => tr!("{why} Meanwhile the web dashboard stopped and the vault locked.", why = why),
+            (true, false) => tr!("{why} Meanwhile the web dashboard stopped.", why = why),
+            _ => tr!("{why} Meanwhile the vault locked.", why = why),
+        };
+        notice(app, true, text);
     }
     log::info!("public network: launches blocked{}", if lock { ", vault locked" } else { "" });
 }
@@ -161,22 +157,21 @@ mod tests {
         NLM_CONNECTIVITY_DISCONNECTED, NLM_CONNECTIVITY_IPV4_LOCALNETWORK, NLM_NETWORK_CATEGORY_PRIVATE,
     };
 
-    fn net(name: &str, category: NLM_NETWORK_CATEGORY, connectivity: NLM_CONNECTIVITY) -> Seen {
-        Seen { name: name.into(), category, connectivity }
+    fn net(category: NLM_NETWORK_CATEGORY, connectivity: NLM_CONNECTIVITY) -> Seen {
+        Seen { category, connectivity }
     }
 
     #[test]
     fn only_public_networks_with_internet_count() {
-        let home = net("Home", NLM_NETWORK_CATEGORY_PRIVATE, NLM_CONNECTIVITY_IPV4_INTERNET);
-        let hyperv = net("Unidentified network", NLM_NETWORK_CATEGORY_PUBLIC, NLM_CONNECTIVITY_IPV4_LOCALNETWORK);
-        let cafe = net("Cafe", NLM_NETWORK_CATEGORY_PUBLIC, NLM_CONNECTIVITY_IPV6_INTERNET);
-        let gone = net("Old", NLM_NETWORK_CATEGORY_PUBLIC, NLM_CONNECTIVITY_DISCONNECTED);
-        assert_eq!(public_of(&[]), None);
-        assert_eq!(public_of(&[home, hyperv, gone]), None);
-        let home = net("Home", NLM_NETWORK_CATEGORY_PRIVATE, NLM_CONNECTIVITY_IPV4_INTERNET);
-        assert_eq!(public_of(&[home, cafe]), Some("Cafe"));
+        let home = || net(NLM_NETWORK_CATEGORY_PRIVATE, NLM_CONNECTIVITY_IPV4_INTERNET);
+        let hyperv = net(NLM_NETWORK_CATEGORY_PUBLIC, NLM_CONNECTIVITY_IPV4_LOCALNETWORK);
+        let cafe = net(NLM_NETWORK_CATEGORY_PUBLIC, NLM_CONNECTIVITY_IPV6_INTERNET);
+        let gone = net(NLM_NETWORK_CATEGORY_PUBLIC, NLM_CONNECTIVITY_DISCONNECTED);
+        assert!(!public_of(&[]));
+        assert!(!public_of(&[home(), hyperv, gone]));
+        assert!(public_of(&[home(), cafe]));
         // Both IPv4 and IPv6 internet bits.
-        let both = net("Hotel", NLM_NETWORK_CATEGORY_PUBLIC, NLM_CONNECTIVITY(NLM_CONNECTIVITY_IPV4_INTERNET.0 | NLM_CONNECTIVITY_IPV6_INTERNET.0));
-        assert_eq!(public_of(&[both]), Some("Hotel"));
+        let both = net(NLM_NETWORK_CATEGORY_PUBLIC, NLM_CONNECTIVITY(NLM_CONNECTIVITY_IPV4_INTERNET.0 | NLM_CONNECTIVITY_IPV6_INTERNET.0));
+        assert!(public_of(&[both]));
     }
 }

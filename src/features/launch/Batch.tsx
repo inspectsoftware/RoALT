@@ -2,23 +2,24 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, type AccountSummary, type BulkStage, type Instance } from "../../api";
 import { dismissBulk, useBulk, useInstances } from "../../data";
+import { fmtNum, t, type Key } from "../../i18n";
 import { Icon } from "../../ui/Icon";
 import { toastError } from "../../ui/Toast";
 import { accountName, Avatar } from "../accounts/shared";
 import { describeTarget } from "./target";
 
-const STEPS = ["TKT", "RUN", "JOIN", "IN"];
+const STEPS: Key[] = ["launch.batch.stepTicket", "launch.batch.stepRun", "launch.batch.stepJoin", "launch.batch.stepIn"];
 type Kind = Exclude<BulkStage["kind"], "failed">;
 /** The step in progress; 4 is all done, -1 none. */
 const AT: Record<Kind, number> = { queued: -1, ticket: 0, starting: 1, joining: 2, inGame: 4, done: 4, cancelled: -1 };
-const NOTE: Record<Kind, string> = {
-  queued: "queued",
-  ticket: "getting ticket",
-  starting: "starting client",
-  joining: "joining server",
-  inGame: "in game",
-  done: "done · disconnected",
-  cancelled: "cancelled",
+const NOTE: Record<Kind, Key> = {
+  queued: "launch.batch.queued",
+  ticket: "launch.batch.ticket",
+  starting: "launch.batch.starting",
+  joining: "launch.batch.joining",
+  inGame: "launch.batch.inGameNote",
+  done: "launch.batch.doneNote",
+  cancelled: "launch.batch.cancelled",
 };
 
 function steps(stage: BulkStage, started: boolean, done: boolean) {
@@ -32,16 +33,16 @@ function steps(stage: BulkStage, started: boolean, done: boolean) {
  * moving after the batch itself stopped. `allowDisconnect`: its account's setting. */
 function stageOf(i: Instance, allowDisconnect: boolean): BulkStage {
   // As the backend's mirror_item: these notes fail the item whatever the state.
-  if (i.note === "Signed in as another account" || i.note === "Roblox wants a human check") return { kind: "failed", message: i.note };
+  if (i.signInProblem) return { kind: "failed", message: i.note ?? "" };
   switch (i.state) {
     case "starting":
     case "joining":
     case "inGame":
       return { kind: i.state };
     case "disconnected":
-      return allowDisconnect ? { kind: "done" } : { kind: "failed", message: i.note ?? "Disconnected" };
+      return allowDisconnect ? { kind: "done" } : { kind: "failed", message: i.note ?? t("launch.batch.disconnected") };
     case "exited":
-      return { kind: "failed", message: i.note ?? "Closed" };
+      return { kind: "failed", message: i.note ?? t("launch.batch.closed") };
   }
 }
 
@@ -60,7 +61,7 @@ export function BatchSection({ accounts, onPick }: { accounts: AccountSummary[];
     return a && a.userId === i.userId ? a : undefined;
   };
   const live = new Map(instances?.map((i) => [i.id, i]));
-  const closed: BulkStage = { kind: "failed", message: "Closed" };
+  const closed: BulkStage = { kind: "failed", message: t("launch.batch.closed") };
   const items = p.items.map((item) => {
     const inst = item.instanceId ? live.get(item.instanceId) : undefined;
     const running = item.stage.kind === "starting" || item.stage.kind === "joining" || item.stage.kind === "inGame";
@@ -79,7 +80,7 @@ export function BatchSection({ accounts, onPick }: { accounts: AccountSummary[];
     .filter((i) => own(i)?.status === "valid")
     .map((i) => i.accountId);
   const target = describeTarget(p.target);
-  const summary = [target.kind, p.sameServer === "pickFirst" ? "same server" : p.sameServer === "followFirst" ? "following the first" : null, `${p.delayMs / 1000} s`]
+  const summary = [target.kind, p.sameServer === "pickFirst" ? t("launch.batch.sameServer") : p.sameServer === "followFirst" ? t("launch.batch.followingFirst") : null, t("launch.batch.seconds", { s: fmtNum(p.delayMs / 1000) })]
     .filter(Boolean)
     .join(" · ");
   const cancel = () => {
@@ -94,23 +95,24 @@ export function BatchSection({ accounts, onPick }: { accounts: AccountSummary[];
     <section aria-labelledby="batch-label" className="enter flex-none flex flex-col border-b border-line">
       <div className="flex flex-col gap-2.5 px-5 pt-[18px] pb-3.5 border-b border-line">
         <div className="flex items-center gap-2.5 min-w-0">
-          <span id="batch-label" className="label">Batch</span>
+          <span id="batch-label" className="label">{t("launch.batch.label")}</span>
           <span className="mono text-xs text-dim truncate" title={target.detail}>{summary}</span>
           {p.done ? (
-            <button className="wc w-7 h-7 ml-auto" aria-label="Dismiss batch" title="Dismiss" onClick={() => dismissBulk(qc, p.batchId)}>
+            <button className="wc w-7 h-7 ml-auto" aria-label={t("launch.batch.dismiss")} title={t("common.dismiss")} onClick={() => dismissBulk(qc, p.batchId)}>
               <Icon name="x" size={10} />
             </button>
           ) : (
             <button className="btn btn-sm ml-auto" disabled={cancelling === p.batchId} onClick={cancel}>
-              {cancelling === p.batchId ? "Cancelling…" : "Cancel"}
+              {cancelling === p.batchId ? t("launch.batch.cancelling") : t("common.cancel")}
             </button>
           )}
         </div>
         <div className="flex items-baseline gap-2" role="status">
           <span className="mono text-[26px] font-medium">{ok}/{n}</span>
           <span className="text-dim">
-            {done ? "in game / done" : "in game"}{failed ? ` · ${failed} failed` : ""}
-            {p.done ? " · finished" : ""}
+            {[done ? t("launch.batch.inGameDone") : t("launch.batch.inGame"), failed ? t("launch.batch.failed", { count: failed }) : null, p.done ? t("launch.batch.finished") : null]
+              .filter(Boolean)
+              .join(" · ")}
           </span>
         </div>
         <div className="h-0.5 bg-line">
@@ -121,7 +123,7 @@ export function BatchSection({ accounts, onPick }: { accounts: AccountSummary[];
             <p role="alert" className="alert">{p.stopped}</p>
             {rest.length > 0 && (
               <button className="btn btn-sm" onClick={() => onPick(rest)}>
-                Pick the {rest.length === 1 ? "account" : `${rest.length} accounts`} that didn't launch
+                {t("launch.batch.pickRest", { count: rest.length })}
               </button>
             )}
           </div>
@@ -131,7 +133,7 @@ export function BatchSection({ accounts, onPick }: { accounts: AccountSummary[];
       <div aria-hidden="true" className="mono grid grid-cols-[minmax(0,1fr)_132px] gap-x-4 px-5 pt-2 text-[9px] text-dim">
         <span />
         <span className="grid grid-cols-4 gap-[3px]">
-          {STEPS.map((s) => <span key={s}>{s}</span>)}
+          {STEPS.map((s) => <span key={s} className="truncate">{t(s)}</span>)}
         </span>
       </div>
       <ol className="scroll max-h-[40vh]">
@@ -139,7 +141,9 @@ export function BatchSection({ accounts, onPick }: { accounts: AccountSummary[];
           const a = own(item);
           const st = item.stage;
           const job = item.job;
-          const note = st.kind === "failed" ? `failed · ${st.message}` : `${NOTE[st.kind]}${st.kind === "inGame" && job ? ` · job ${job.slice(0, 8)}` : ""}`;
+          const note = st.kind === "failed"
+            ? t("launch.batch.failedNote", { message: st.message })
+            : st.kind === "inGame" && job ? t("launch.batch.inGameJob", { job: job.slice(0, 8) }) : t(NOTE[st.kind]);
           return (
             <li
               key={item.accountId}
@@ -147,7 +151,7 @@ export function BatchSection({ accounts, onPick }: { accounts: AccountSummary[];
             >
               <span className="flex items-center gap-2.5 min-w-0">
                 {a && <Avatar account={a} size={20} />}
-                <span className="truncate font-medium">{a ? accountName(a) : `Account ${item.accountId}`}</span>
+                <span className="truncate font-medium">{a ? accountName(a) : t("launch.accountN", { id: item.accountId })}</span>
               </span>
               <span aria-hidden="true" className="grid grid-cols-4 gap-[3px]">
                 {steps(st, !!item.instanceId, p.done).map((c, i) => <span key={i} className={c} />)}

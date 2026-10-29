@@ -8,12 +8,20 @@ import { NumberField, Switch, TextField } from "../../ui/controls";
 import { Icon } from "../../ui/Icon";
 import { friendly, toast, toastError } from "../../ui/Toast";
 import { PasswordDialog } from "../vault/PasswordDialog";
+import { fmtDate, fmtList, fmtNum, t, type Key } from "../../i18n";
 import { accountAge, ago, Avatar, formatDate, PresenceStatus, Status, SWATCHES } from "./shared";
 
 const REVEAL_SECONDS = 20;
 const HEX = /^#[0-9a-f]{6}$/i;
-const NO_ANSWER = "Roblox didn't answer";
-const STATS = ["Robux", "Friends", "Followers", "Following", "Joined", "Age"];
+const NO_ANSWER: Key = "accounts.detail.noAnswer";
+const STATS: Key[] = [
+  "accounts.detail.robux",
+  "accounts.detail.friends",
+  "accounts.detail.followers",
+  "accounts.detail.following",
+  "accounts.detail.joined",
+  "accounts.detail.age",
+];
 
 const clip = (text: string, done: string) => writeText(text).then(() => toast(done), toastError);
 const openLink = (url: string) => openUrl(url).catch(toastError);
@@ -46,8 +54,8 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
     onSuccess: () =>
       toast(
         a.status === "valid"
-          ? "Opened a signed-in roblox.com window. Signing out there signs this account out of RoALT too."
-          : "Opened roblox.com for this account. Sign in or finish the check there; RoALT keeps the new session when you close the window.",
+          ? t("accounts.detail.sessionOpenedValid")
+          : t("accounts.detail.sessionOpenedOther"),
       ),
   });
   const [alias, setAlias] = useState(a.alias);
@@ -64,14 +72,14 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
   // Revealed cookies hide themselves; unmounting (other account, lock) drops them too.
   useEffect(() => {
     if (!cookie) return;
-    const t = setTimeout(() => setCookie(null), REVEAL_SECONDS * 1000);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setCookie(null), REVEAL_SECONDS * 1000);
+    return () => clearTimeout(timer);
   }, [cookie]);
 
   const reveal = async (password?: string) => setCookie(await api.accountRevealCookie(a.id, password));
   const copy = async (password?: string) => {
     await api.accountCopyCookie(a.id, password);
-    toast(`Cookie copied. The clipboard clears in ${clipboardSeconds} s.`);
+    toast(t("accounts.detail.cookieCopied", { count: clipboardSeconds }));
   };
   const start = (kind: "reveal" | "copy") => {
     if (vaultMode === "master") {
@@ -92,8 +100,8 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
   const toggleGroup = (gid: number) =>
     save({ groupIds: a.groupIds.includes(gid) ? a.groupIds.filter((x) => x !== gid) : [...a.groupIds, gid] });
 
-  const copyId = () => clip(String(a.userId), "User ID copied");
-  const copyName = () => clip(username, "Username copied");
+  const copyId = () => clip(String(a.userId), t("accounts.menu.userIdCopied"));
+  const copyName = () => clip(username, t("accounts.menu.usernameCopied"));
 
   return (
     <div className="enter flex flex-col">
@@ -103,11 +111,11 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
           <div className="text-lg font-semibold tracking-[-0.01em] truncate">{d?.displayName || a.displayName}</div>
           <div className="flex items-center gap-1.5 min-w-0">
             <span className="mono text-dim truncate selectable">@{username}</span>
-            <CopyButton label="Copy username" onClick={copyName} />
+            <CopyButton label={t("accounts.menu.copyUsername")} onClick={copyName} />
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="mono text-xs text-dim selectable">ID {a.userId}</span>
-            <CopyButton label="Copy user ID" onClick={copyId} />
+            <span className="mono text-xs text-dim selectable">{t("accounts.detail.userId", { id: a.userId })}</span>
+            <CopyButton label={t("accounts.menu.copyUserId")} onClick={copyId} />
           </div>
         </div>
       </div>
@@ -115,15 +123,15 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
       <div className="flex flex-col gap-1 px-5 py-2.5 border-b border-line">
         <div className="flex items-center justify-between gap-2">
           <span className="mono text-[11px] text-dim">
-            {d ? `Updated ${ago(d.fetchedAt)}` : info.isError ? "Not loaded" : "Loading…"}
+            {d ? t("accounts.detail.updated", { when: ago(d.fetchedAt) }) : info.isError ? t("accounts.detail.notLoaded") : t("common.loading")}
           </span>
-          <button className="btn btn-sm" onClick={() => refresh.mutate()} disabled={busy} title="Ask Roblox again">
+          <button className="btn btn-sm" onClick={() => refresh.mutate()} disabled={busy} title={t("accounts.detail.refreshHint")}>
             <Icon name="refresh" size={12} className={busy ? "spin" : ""} />
-            Refresh
+            {t("accounts.detail.refresh")}
           </button>
         </div>
         {d && d.unavailable.length > 0 && (
-          <div className="text-xs text-dim">Roblox didn't answer for: {d.unavailable.join(", ")}.</div>
+          <div className="text-xs text-dim">{t("accounts.detail.unavailable", { parts: fmtList(d.unavailable.map(partName)) })}</div>
         )}
       </div>
 
@@ -134,7 +142,7 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
           <div role="alert" className="alert">{friendly(asError(info.error))}</div>
           <button className="btn btn-sm" onClick={() => info.refetch()} disabled={info.isFetching}>
             <Icon name="refresh" size={12} className={info.isFetching ? "spin" : ""} />
-            Try again
+            {t("common.tryAgain")}
           </button>
         </div>
       ) : (
@@ -145,41 +153,41 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
         <button
           className="btn btn-primary"
           disabled={a.status !== "valid"}
-          title={a.status === "valid" ? "Pick a target in Launch for this account" : "Only an account with a valid cookie can launch"}
+          title={a.status === "valid" ? t("accounts.detail.launchHint") : t("accounts.detail.launchDisabled")}
           onClick={onLaunch}
         >
           <Icon name="play" size={12} fill />
-          Launch
+          {t("common.launch")}
         </button>
         <div className="grid grid-cols-2 gap-2">
-          <ActionButton icon="external" label="Open profile" onClick={() => openLink(`https://www.roblox.com/users/${a.userId}/profile`)} />
+          <ActionButton icon="external" label={t("accounts.menu.openProfile")} onClick={() => openLink(`https://www.roblox.com/users/${a.userId}/profile`)} />
           <ActionButton
             icon="external"
-            label="Open on roblox.com"
-            title="Opens roblox.com signed in as this account, in its own window"
+            label={t("accounts.menu.openSession")}
+            title={t("accounts.detail.openSessionHint")}
             disabled={session.isPending}
             onClick={() => session.mutate()}
           />
-          <ActionButton icon="copy" label="Copy user ID" onClick={copyId} />
-          <ActionButton icon="copy" label="Copy username" onClick={copyName} />
+          <ActionButton icon="copy" label={t("accounts.menu.copyUserId")} onClick={copyId} />
+          <ActionButton icon="copy" label={t("accounts.menu.copyUsername")} onClick={copyName} />
         </div>
       </Section>
 
       <Section>
         <div className="flex items-center justify-between gap-2">
           <Status status={a.status} checking={checking} />
-          <span className="mono text-[11px] text-dim">checked {ago(a.statusCheckedAt)}</span>
+          <span className="mono text-[11px] text-dim">{t("accounts.detail.checked", { when: ago(a.statusCheckedAt) })}</span>
         </div>
-        <div className="mono text-[11px] text-dim">Added {formatDate(a.createdAt)}</div>
+        <div className="mono text-[11px] text-dim">{t("accounts.detail.addedOn", { date: formatDate(a.createdAt) })}</div>
         <button className="btn" onClick={onValidate} disabled={checking}>
           <Icon name="refresh" size={14} className={checking ? "spin" : ""} />
-          Validate
+          {t("accounts.menu.validate")}
         </button>
       </Section>
 
       <Section>
         <label className="flex flex-col gap-1.5">
-          <span className="label">Alias</span>
+          <span className="label">{t("accounts.detail.alias")}</span>
           <input
             className="field"
             value={alias}
@@ -197,7 +205,7 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
           />
         </label>
         <label className="flex flex-col gap-1.5">
-          <span className="label">Notes</span>
+          <span className="label">{t("accounts.detail.notes")}</span>
           <textarea
             className="field"
             rows={3}
@@ -208,14 +216,14 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
           />
         </label>
         <div className="flex flex-col gap-1.5">
-          <span className="label" id="colour-label">Colour</span>
+          <span className="label" id="colour-label">{t("accounts.detail.colour")}</span>
           <div className="flex flex-wrap items-center gap-1.5" role="group" aria-labelledby="colour-label">
             {SWATCHES.map((c) => (
               <button
                 key={c}
                 className="swatch"
                 style={{ background: c }}
-                aria-label={`Colour ${c}`}
+                aria-label={t("accounts.groups.colourValue", { color: c })}
                 aria-pressed={a.color?.toLowerCase() === c.toLowerCase()}
                 onClick={() => {
                   setHex(c.toLowerCase());
@@ -225,7 +233,7 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
             ))}
             <input
               className="field mono h-7 w-[86px] px-2 text-xs"
-              aria-label="Custom colour, #rrggbb"
+              aria-label={t("accounts.detail.customColour")}
               placeholder="#rrggbb"
               value={hex}
               maxLength={7}
@@ -238,9 +246,9 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
           </div>
         </div>
         <div className="flex flex-col gap-1.5">
-          <span className="label" id="groups-label">Groups</span>
+          <span className="label" id="groups-label">{t("accounts.groups.title")}</span>
           {groups.length === 0 ? (
-            <span className="text-dim text-xs">No groups yet. Add one in the sidebar.</span>
+            <span className="text-dim text-xs">{t("accounts.detail.noGroups")}</span>
           ) : (
             <div className="flex flex-wrap gap-1.5" role="group" aria-labelledby="groups-label">
               {groups.map((g) => (
@@ -253,42 +261,42 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
           )}
         </div>
         <div className="flex items-center justify-between gap-2">
-          <span>Favourite</span>
-          <Switch label="Favourite" checked={a.favourite} onChange={(v) => save({ favourite: v })} />
+          <span>{t("accounts.detail.favourite")}</span>
+          <Switch label={t("accounts.detail.favourite")} checked={a.favourite} onChange={(v) => save({ favourite: v })} />
         </div>
         <div className="flex items-center justify-between gap-2">
           <span className="flex flex-col gap-0.5">
-            <span>Allow disconnects</span>
-            <span className="text-xs text-dim">Never rejoined or restarted; a batch counts a disconnect as done.</span>
+            <span>{t("accounts.menu.allowDisconnect")}</span>
+            <span className="text-xs text-dim">{t("accounts.detail.allowDisconnectHint")}</span>
           </span>
-          <Switch label="Allow disconnects" checked={a.allowDisconnect} onChange={(v) => save({ allowDisconnect: v })} />
+          <Switch label={t("accounts.menu.allowDisconnect")} checked={a.allowDisconnect} onChange={(v) => save({ allowDisconnect: v })} />
         </div>
         <div className="flex items-center justify-between gap-2">
           <span className="flex flex-col gap-0.5">
-            <span>Mute Discord alerts</span>
-            <span className="text-xs text-dim">No alerts about this account's clients; batch and status summaries still go.</span>
+            <span>{t("accounts.detail.muteDiscord")}</span>
+            <span className="text-xs text-dim">{t("accounts.detail.muteDiscordHint")}</span>
           </span>
-          <Switch label="Mute Discord alerts" checked={a.discordMuted} onChange={(v) => save({ discordMuted: v })} />
+          <Switch label={t("accounts.detail.muteDiscord")} checked={a.discordMuted} onChange={(v) => save({ discordMuted: v })} />
         </div>
         <label className="flex flex-col gap-1.5">
-          <span className="label">Launch arguments</span>
-          <TextField label="Launch arguments" placeholder="The default from Settings" value={a.launchArgs ?? ""} onCommit={(launchArgs) => update.mutateAsync({ id: a.id, patch: { launchArgs } })} />
+          <span className="label">{t("accounts.detail.launchArgs")}</span>
+          <TextField label={t("accounts.detail.launchArgs")} placeholder={t("accounts.detail.launchArgsDefault")} value={a.launchArgs ?? ""} onCommit={(launchArgs) => update.mutateAsync({ id: a.id, patch: { launchArgs } })} />
         </label>
         <div className="flex items-center justify-between gap-2">
           <span className="flex flex-col gap-0.5">
-            <span>FPS cap</span>
-            <span className="text-xs text-dim">Set when its client starts, 5 to 360. 0 uses the default from Settings.</span>
+            <span>{t("accounts.detail.fpsCap")}</span>
+            <span className="text-xs text-dim">{t("accounts.detail.fpsCapHint")}</span>
           </span>
-          <NumberField unit="FPS, 0 for the default" short="FPS" min={0} max={360} value={a.fpsCap ?? 0} onCommit={(fpsCap) => save({ fpsCap })} />
+          <NumberField unit={t("accounts.detail.fpsUnit")} short="FPS" min={0} max={360} value={a.fpsCap ?? 0} onCommit={(fpsCap) => save({ fpsCap })} />
         </div>
 
       </Section>
 
       <Section>
         <div className="flex items-center justify-between">
-          <span className="label">Cookie</span>
+          <span className="label">{t("accounts.detail.cookie")}</span>
           <span className="mono text-[11px] text-dim">
-            {a.status === "invalid" ? "expired · sign in again" : "encrypted on this PC"}
+            {a.status === "invalid" ? t("accounts.detail.cookieExpired") : t("accounts.detail.cookieEncrypted")}
           </span>
         </div>
         {cookie ? (
@@ -306,35 +314,35 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
         <div className="grid grid-cols-2 gap-2">
           <button className="btn" onClick={() => (cookie ? setCookie(null) : start("reveal"))}>
             <Icon name={cookie ? "eyeOff" : "lock"} size={14} />
-            {cookie ? "Hide" : "Reveal"}
+            {cookie ? t("accounts.detail.hide") : t("accounts.detail.reveal")}
           </button>
           <button className="btn" onClick={() => start("copy")}>
             <Icon name="copy" size={14} />
-            Copy
+            {t("common.copy")}
           </button>
         </div>
         <div className="text-xs text-dim">
           {cookie
-            ? `Hides in ${REVEAL_SECONDS} s. Never share it: it signs in as this account.`
+            ? t("accounts.detail.cookieHides", { count: REVEAL_SECONDS })
             : vaultMode === "master"
-              ? "Reveal and copy ask for your master password first."
-              : "Reveal and copy ask for Windows Hello first."}
+              ? t("accounts.detail.cookieAskMaster")
+              : t("accounts.detail.cookieAskHello")}
         </div>
       </Section>
 
       <div className="p-5">
         <button className="btn btn-danger w-full" onClick={onRemove}>
           <Icon name="trash" size={14} />
-          Remove account
+          {t("accounts.detail.remove")}
         </button>
       </div>
 
       <PasswordDialog
         open={ask !== null}
         onClose={() => setAsk(null)}
-        title={lastAsk === "reveal" ? "Reveal cookie" : "Copy cookie"}
-        text={`Enter your master password to ${lastAsk} the cookie for @${a.username}.`}
-        submitLabel={lastAsk === "reveal" ? "Reveal" : "Copy"}
+        title={lastAsk === "reveal" ? t("accounts.detail.revealTitle") : t("accounts.detail.copyTitle")}
+        text={lastAsk === "reveal" ? t("accounts.detail.revealText", { name: a.username }) : t("accounts.detail.copyText", { name: a.username })}
+        submitLabel={lastAsk === "reveal" ? t("accounts.detail.reveal") : t("common.copy")}
         current
         onSubmit={({ current }) => (lastAsk === "reveal" ? reveal(current) : copy(current))}
       />
@@ -346,12 +354,12 @@ function Info({ d }: { d: AccountInfo }) {
   const joined = d.created ? new Date(d.created) : null;
   const when = joined && !Number.isNaN(joined.getTime()) ? joined : null;
   const stats: Stat[] = [
-    num("Robux", d.robux),
-    num("Friends", d.friends),
-    num("Followers", d.followers),
-    num("Following", d.following),
-    ["Joined", when?.toLocaleDateString(undefined, { month: "short", year: "numeric" }) ?? null, when?.toLocaleDateString(undefined, { dateStyle: "long" })],
-    ["Age", d.created ? accountAge(d.created) : null],
+    num("accounts.detail.robux", d.robux),
+    num("accounts.detail.friends", d.friends),
+    num("accounts.detail.followers", d.followers),
+    num("accounts.detail.following", d.following),
+    ["accounts.detail.joined", when ? fmtDate(when, { month: "short", year: "numeric" }) : null, when ? fmtDate(when, { dateStyle: "long" }) : undefined],
+    ["accounts.detail.age", d.created ? accountAge(d.created) : null],
   ];
   return (
     <>
@@ -365,8 +373,8 @@ function Info({ d }: { d: AccountInfo }) {
       <div className="grid grid-cols-3 gap-px bg-line border-b border-line">
         {stats.map(([k, v, title]) => (
           <div key={k} className="min-w-0 bg-panel px-4 py-3">
-            <div className="label">{k}</div>
-            <div className="mono text-[15px] font-medium mt-0.5 truncate" title={v === null ? NO_ANSWER : title}>
+            <div className="label truncate" title={t(k)}>{t(k)}</div>
+            <div className="mono text-[15px] font-medium mt-0.5 truncate" title={v === null ? t(NO_ANSWER) : title}>
               {v ?? "—"}
             </div>
           </div>
@@ -379,13 +387,13 @@ function Info({ d }: { d: AccountInfo }) {
 }
 
 /** Label, value (null = no answer), tooltip. */
-type Stat = [string, string | null, string?];
+type Stat = [Key, string | null, string?];
 
 /** Big counts shrink to "1.2M" with the exact number as the tooltip. */
-function num(k: string, n: number | null): Stat {
+function num(k: Key, n: number | null): Stat {
   if (n === null) return [k, null];
-  if (n < 100_000) return [k, n.toLocaleString()];
-  return [k, n.toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 }), n.toLocaleString()];
+  if (n < 100_000) return [k, fmtNum(n)];
+  return [k, fmtNum(n, { notation: "compact", maximumFractionDigits: 1 }), fmtNum(n)];
 }
 
 type Badge = { label: string; tone?: keyof typeof TONE; title?: string };
@@ -396,25 +404,25 @@ const TONE: Record<"on" | "warn", CSSProperties> = {
 
 function badges(d: AccountInfo): Badge[] {
   const out: Badge[] = [];
-  if (d.isBanned) out.push({ label: "Banned", tone: "warn" });
-  if (d.subscription === "plus") out.push({ label: "Plus", tone: "on" });
-  if (d.subscription === "premium") out.push({ label: "Premium (legacy)", tone: "on" });
+  if (d.isBanned) out.push({ label: t("accounts.badge.banned"), tone: "warn" });
+  if (d.subscription === "plus") out.push({ label: t("accounts.badge.plus"), tone: "on" });
+  if (d.subscription === "premium") out.push({ label: t("accounts.badge.premium"), tone: "on" });
   const m = d.twoStepMethods;
   out.push(
     m === null
-      ? { label: "2FA —", title: NO_ANSWER }
+      ? { label: t("accounts.badge.twoStepUnknown"), title: t(NO_ANSWER) }
       : m.length
-        ? { label: "2FA on", tone: "on", title: m.join(", ") }
-        : { label: "2FA off" },
+        ? { label: t("accounts.badge.twoStepOn"), tone: "on", title: fmtList(m) }
+        : { label: t("accounts.badge.twoStepOff") },
   );
   out.push(
     d.emailVerified === null
-      ? { label: "Email —", title: NO_ANSWER }
+      ? { label: t("accounts.badge.emailUnknown"), title: t(NO_ANSWER) }
       : d.emailVerified
-        ? { label: "Email verified", tone: "on" }
-        : { label: "Email not verified" },
+        ? { label: t("accounts.badge.emailVerified"), tone: "on" }
+        : { label: t("accounts.badge.emailNotVerified") },
   );
-  if (d.verifiedBadge) out.push({ label: "Verified badge", tone: "on" });
+  if (d.verifiedBadge) out.push({ label: t("accounts.badge.verified"), tone: "on" });
   return out;
 }
 
@@ -423,36 +431,37 @@ function PresenceBlock({ p }: { p: Presence | null }) {
   const place = p?.placeId ?? null;
   return (
     <div className="flex flex-col gap-2.5 px-5 py-4 border-b border-line">
-      <span className="label">Presence</span>
+      <span className="label">{t("accounts.detail.presence")}</span>
       {!p ? (
-        <span className="text-dim self-start" title={NO_ANSWER}>—</span>
+        <span className="text-dim self-start" title={t(NO_ANSWER)}>—</span>
       ) : p.kind !== "inGame" ? (
         <PresenceStatus presence={p} />
       ) : (
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center gap-2 min-w-0">
             <span aria-hidden="true" className="w-2 h-2 flex-none bg-accent-text" />
-            {p.lastLocation && <span className="sr-only">In game:</span>}
-            <span className="font-semibold truncate" title={p.lastLocation ?? undefined}>{p.lastLocation ?? "In game"}</span>
+            {p.lastLocation && <span className="sr-only">{t("accounts.detail.inGameSr")}</span>}
+            <span className="font-semibold truncate" title={p.lastLocation ?? undefined}>{p.lastLocation ?? t("accounts.presence.inGame")}</span>
           </div>
           {place !== null && (
             <div className="mono text-xs text-dim truncate selectable">
-              place {place}
-              {job && ` · job ${job.slice(0, 8)}…${job.slice(-4)}`}
+              {job
+                ? t("accounts.detail.placeJob", { place, job: `${job.slice(0, 8)}…${job.slice(-4)}` })
+                : t("accounts.detail.place", { place })}
             </div>
           )}
           {(place !== null || job) && (
             <div className="flex gap-2 mt-1">
               {place !== null && (
                 <button className="btn flex-1 min-w-0" onClick={() => openLink(`https://www.roblox.com/games/${place}`)}>
-                  <span className="truncate">Open game page</span>
+                  <span className="truncate">{t("accounts.detail.openGame")}</span>
                   <Icon name="external" size={12} />
                 </button>
               )}
               {job && (
-                <button className="btn" onClick={() => clip(job, "Job ID copied")} aria-label="Copy job ID" title="Copy job ID">
+                <button className="btn" onClick={() => clip(job, t("accounts.detail.jobIdCopied"))} aria-label={t("accounts.detail.copyJobId")} title={t("accounts.detail.copyJobId")}>
                   <Icon name="copy" size={12} />
-                  Job ID
+                  {t("accounts.detail.jobId")}
                 </button>
               )}
             </div>
@@ -474,11 +483,11 @@ function About({ text }: { text: string }) {
   }, [text]);
   return (
     <div className="flex flex-col gap-1.5 px-5 py-4 border-b border-line">
-      <span className="label">About</span>
+      <span className="label">{t("accounts.detail.about")}</span>
       <p ref={p} className={`whitespace-pre-line break-words selectable ${more ? "" : "line-clamp-3"}`}>{text}</p>
       {cut && (
         <button className="linkbtn self-start text-xs text-dim" aria-expanded={more} onClick={() => setMore(!more)}>
-          {more ? "Show less" : "Show more"}
+          {more ? t("accounts.detail.showLess") : t("accounts.detail.showMore")}
         </button>
       )}
     </div>
@@ -487,7 +496,7 @@ function About({ text }: { text: string }) {
 
 function InfoSkeleton() {
   return (
-    <div aria-busy="true" aria-label="Loading account info">
+    <div aria-busy="true" aria-label={t("accounts.detail.loadingInfo")}>
       <div className="flex gap-1.5 px-5 py-3.5 border-b border-line">
         {[56, 64, 96].map((w) => (
           <span key={w} className="skel h-6" style={{ width: w }} />
@@ -496,13 +505,13 @@ function InfoSkeleton() {
       <div className="grid grid-cols-3 gap-px bg-line border-b border-line">
         {STATS.map((k) => (
           <div key={k} className="bg-panel px-4 py-3">
-            <div className="label">{k}</div>
+            <div className="label truncate">{t(k)}</div>
             <div className="skel h-[18px] w-12 mt-1" />
           </div>
         ))}
       </div>
       <div className="flex flex-col gap-2.5 px-5 py-4 border-b border-line">
-        <span className="label">Presence</span>
+        <span className="label">{t("accounts.detail.presence")}</span>
         <span className="skel h-[18px] w-36" />
       </div>
     </div>
@@ -536,3 +545,16 @@ function ActionButton({ icon, label, title, disabled, onClick }: {
 function Section({ children }: { children: ReactNode }) {
   return <div className="flex flex-col gap-3 px-5 py-4 border-b border-line">{children}</div>;
 }
+
+/** The UI name of an AccountInfo part Roblox didn't answer for (ids from `account_info`). */
+const PARTS: Record<string, Key> = {
+  profile: "accounts.part.profile",
+  avatar: "accounts.part.avatar",
+  robux: "accounts.part.robux",
+  friends: "accounts.part.friends",
+  presence: "accounts.part.presence",
+  email: "accounts.part.email",
+  "2-step": "accounts.part.twoStep",
+  subscription: "accounts.part.subscription",
+};
+const partName = (id: string) => (PARTS[id] ? t(PARTS[id]) : id);

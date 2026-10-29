@@ -236,6 +236,8 @@ pub struct Settings {
     pub remote: RemoteAccess,
     /// Launch and serve the web dashboard on a Public network too (`network`); off: refused.
     pub allow_public_networks: bool,
+    /// UI and message language (`i18n::LANGS`), or "" to follow Windows' display language.
+    pub language: String,
 }
 
 /// The LAN web dashboard: served on every network address at `port` while `enabled` and the
@@ -255,14 +257,13 @@ impl Default for RemoteAccess {
     }
 }
 
-/// The web dashboard as the UI shows it (`remote_status`); never its PIN.
-/// The network RoALT runs on (`network`).
+/// The network RoALT runs on (`network`). Never its name: streamers show RoALT on screen.
 #[derive(Serialize, TS, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct NetworkStatus {
-    /// The name of a connected Public network with internet access; None: not on one.
-    pub public: Option<String>,
+    /// A connected Public network with internet access.
+    pub public: bool,
 }
 
 #[derive(Serialize, TS, Clone, Debug, PartialEq)]
@@ -415,6 +416,7 @@ impl Default for Settings {
             fps_cap: 0,
             remote: RemoteAccess::default(),
             allow_public_networks: false,
+            language: String::new(),
         }
     }
 }
@@ -487,6 +489,8 @@ pub struct SettingsPatch {
     pub remote: Option<RemoteAccess>,
     #[ts(optional)]
     pub allow_public_networks: Option<bool>,
+    #[ts(optional)]
+    pub language: Option<String>,
 }
 
 /// What a Roblox log clean-up deleted (`logs_clean`).
@@ -777,6 +781,10 @@ pub struct Instance {
     pub micro: bool,
     /// The FPS cap its launch asked for (`LaunchInfo::fps_cap`); a rejoin uses it again.
     pub fps_cap: Option<u32>,
+    /// Its note is "Signed in as another account" or "Roblox wants a human check" (the note
+    /// itself is translated, so the UI can't match its text).
+    #[serde(default)]
+    pub sign_in_problem: bool,
 }
 
 /// What Windows holds one client to (instances::limits). Lasts as long as the client.

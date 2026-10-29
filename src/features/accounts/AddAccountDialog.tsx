@@ -6,6 +6,7 @@ import { qk } from "../../data";
 import { Dialog } from "../../ui/Dialog";
 import { Icon } from "../../ui/Icon";
 import { friendly, toast } from "../../ui/Toast";
+import { fmtList, t, tx } from "../../i18n";
 
 type Tab = "login" | "cookie" | "many";
 
@@ -34,7 +35,7 @@ export function AddAccountDialog({ open, onClose, onAdded }: {
   const added = (a: AccountSummary) => {
     qc.invalidateQueries({ queryKey: qk.accounts });
     qc.invalidateQueries({ queryKey: qk.vault });
-    toast(`Added @${a.username}`);
+    toast(t("accounts.add.added", { name: a.username }));
     onAdded(a);
     onClose();
   };
@@ -71,8 +72,13 @@ export function AddAccountDialog({ open, onClose, onAdded }: {
   const imported = (r: ImportReport) => {
     qc.invalidateQueries({ queryKey: qk.accounts });
     qc.invalidateQueries({ queryKey: qk.vault });
-    const parts = [`${r.added} added`, r.updated && `${r.updated} refreshed`, r.skipped && `${r.skipped} repeated`, r.failed && `${r.failed} failed`];
-    toast(`Import: ${parts.filter(Boolean).join(", ")}.`);
+    const parts = [
+      t("accounts.add.importAdded", { count: r.added }),
+      r.updated && t("accounts.add.importRefreshed", { count: r.updated }),
+      r.skipped && t("accounts.add.importRepeated", { count: r.skipped }),
+      r.failed && t("accounts.add.importFailed", { count: r.failed }),
+    ].filter((p): p is string => !!p);
+    toast(t("accounts.add.importResult", { list: fmtList(parts) }));
     if (r.added + r.updated > 0) onClose();
   };
 
@@ -99,26 +105,26 @@ export function AddAccountDialog({ open, onClose, onAdded }: {
 
   async function fromRam() {
     if (busy) return;
-    const path = await openFile({ multiple: false, directory: false, filters: RAM_FILTER, title: "Choose Roblox Account Manager's AccountData.json" }).catch((e) => {
+    const path = await openFile({ multiple: false, directory: false, filters: RAM_FILTER, title: t("accounts.add.ramPickerTitle") }).catch((e) => {
       setError(friendly(asError(e)));
       return null;
     });
     if (path) runImport(() => api.accountsImportRam(path));
   }
 
-  const tabBtn = (t: Tab, label: string, icon: "signin" | "key" | "upload") => (
+  const tabBtn = (id: Tab, label: string, icon: "signin" | "key" | "upload") => (
     <button
       type="button"
       role="tab"
-      id={`add-tab-${t}`}
-      aria-selected={tab === t}
-      aria-controls={`add-panel-${t}`}
+      id={`add-tab-${id}`}
+      aria-selected={tab === id}
+      aria-controls={`add-panel-${id}`}
       onClick={() => {
-        setTab(t);
+        setTab(id);
         setError(null);
       }}
-      className={`flex-1 flex items-center justify-center gap-2 h-10 border-b-2 ${
-        tab === t ? "border-[var(--on)] text-text" : "border-transparent text-dim hover:text-text"
+      className={`flex-1 min-w-0 flex items-center justify-center gap-2 min-h-10 py-1 text-center border-b-2 ${
+        tab === id ? "border-[var(--on)] text-text" : "border-transparent text-dim hover:text-text"
       }`}
     >
       <Icon name={icon} size={14} />
@@ -127,31 +133,30 @@ export function AddAccountDialog({ open, onClose, onAdded }: {
   );
 
   return (
-    <Dialog open={open} onClose={onClose} title="Add account" width={460}>
-      <div role="tablist" aria-label="How to add" className="flex px-5 border-b border-line">
-        {tabBtn("login", "Sign in", "signin")}
-        {tabBtn("cookie", "Paste cookie", "key")}
-        {tabBtn("many", "Paste many", "upload")}
+    <Dialog open={open} onClose={onClose} title={t("accounts.add.title")} width={460}>
+      <div role="tablist" aria-label={t("accounts.add.how")} className="flex px-5 border-b border-line">
+        {tabBtn("login", t("accounts.add.tabLogin"), "signin")}
+        {tabBtn("cookie", t("accounts.add.tabCookie"), "key")}
+        {tabBtn("many", t("accounts.add.tabMany"), "upload")}
       </div>
 
       {tab === "login" ? (
         <div key="login" role="tabpanel" id="add-panel-login" aria-labelledby="add-tab-login" className="enter flex flex-col gap-4 p-5">
           <p className="text-dim">
-            A Roblox sign-in window opens. Sign in as usual: passkeys, security keys and 2-step verification work there.
-            RoALT keeps the session and closes the window by itself.
+            {t("accounts.add.loginIntro")}
           </p>
           <p className="text-dim text-xs">
-            The window uses a fresh private browser profile that is deleted afterwards. Close it to cancel.
+            {t("accounts.add.loginPrivate")}
           </p>
           {waiting ? (
             <div className="enter flex flex-col gap-2.5 py-1" role="status">
               <div className="live-bar" />
-              <span>Waiting for you to finish signing in…</span>
+              <span>{t("accounts.add.waiting")}</span>
             </div>
           ) : (
             <button type="button" className="btn btn-primary self-start" onClick={signIn} data-autofocus>
               <Icon name="external" size={14} />
-              Open Roblox sign-in
+              {t("accounts.add.openSignIn")}
             </button>
           )}
           {error && <div role="alert" className="alert">{error}</div>}
@@ -159,7 +164,7 @@ export function AddAccountDialog({ open, onClose, onAdded }: {
       ) : tab === "many" ? (
         <form key="many" role="tabpanel" id="add-panel-many" aria-labelledby="add-tab-many" onSubmit={pasteMany} className="enter flex flex-col gap-3 p-5">
           <label className="flex flex-col gap-1.5">
-            <span className="label">Cookies, one per line</span>
+            <span className="label">{t("accounts.add.manyLabel")}</span>
             <textarea
               className="field secret mono text-xs"
               rows={6}
@@ -169,29 +174,28 @@ export function AddAccountDialog({ open, onClose, onAdded }: {
               autoCorrect="off"
               autoCapitalize="off"
               spellCheck={false}
-              placeholder="_|WARNING:-DO-NOT-SHARE-THIS…  or  user:pass:_|WARNING:…"
+              placeholder={t("accounts.add.manyPlaceholder")}
             />
           </label>
           <p className="text-xs text-dim">
-            Every .ROBLOSECURITY cookie in the text is checked with Roblox one by one, so a long list takes a while.
-            Lines like <span className="mono">user:pass:cookie</span> work too; only the cookie is kept.
+            {tx("accounts.add.manyHelp", {}, { mono: (s) => <span className="mono">{s}</span> })}
           </p>
-          {busy && <div className="live-bar" role="status" aria-label="Importing" />}
+          {busy && <div className="live-bar" role="status" aria-label={t("accounts.add.importing")} />}
           {error && <div role="alert" className="alert">{error}</div>}
-          <div className="flex justify-between gap-2 pt-1">
-            <button type="button" className="btn" onClick={fromRam} disabled={busy} title="Its AccountData.json; one locked with a RAM password can't be read">
+          <div className="flex flex-wrap justify-between gap-2 pt-1">
+            <button type="button" className="btn" onClick={fromRam} disabled={busy} title={t("accounts.add.ramHint")}>
               <Icon name="upload" size={14} />
-              Import from Roblox Account Manager
+              {t("accounts.add.ramImport")}
             </button>
             <button type="submit" className="btn btn-primary" disabled={busy || !many.trim()}>
-              {busy ? "Importing…" : "Import"}
+              {busy ? t("accounts.add.importingEllipsis") : t("accounts.add.import")}
             </button>
           </div>
         </form>
       ) : (
         <form key="cookie" role="tabpanel" id="add-panel-cookie" aria-labelledby="add-tab-cookie" onSubmit={paste} className="enter flex flex-col gap-3 p-5">
           <label className="flex flex-col gap-1.5">
-            <span className="label">.ROBLOSECURITY cookie</span>
+            <span className="label">{t("accounts.add.cookieLabel")}</span>
             <textarea
               className="field secret mono text-xs"
               rows={4}
@@ -202,18 +206,17 @@ export function AddAccountDialog({ open, onClose, onAdded }: {
               autoCorrect="off"
               autoCapitalize="off"
               spellCheck={false}
-              placeholder="Paste the value here"
+              placeholder={t("accounts.add.cookiePlaceholder")}
             />
           </label>
           <p className="text-xs text-dim">
-            The raw value or <span className="mono">.ROBLOSECURITY=…</span> both work. RoALT checks it with Roblox, then keeps it
-            encrypted on this PC. Anyone with this cookie can sign in as you; never paste it anywhere else.
+            {tx("accounts.add.cookieHelp", {}, { mono: (s) => <span className="mono">{s}</span> })}
           </p>
           {error && <div role="alert" className="alert">{error}</div>}
           <div className="flex justify-end gap-2 pt-1">
-            <button type="button" className="btn" onClick={onClose}>Cancel</button>
+            <button type="button" className="btn" onClick={onClose}>{t("common.cancel")}</button>
             <button type="submit" className="btn btn-primary" disabled={busy || !cookie.trim()}>
-              {busy ? "Checking…" : "Add account"}
+              {busy ? t("accounts.status.checking") : t("accounts.add.title")}
             </button>
           </div>
         </form>

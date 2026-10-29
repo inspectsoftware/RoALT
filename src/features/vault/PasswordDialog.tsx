@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { asError } from "../../api";
 import { Dialog } from "../../ui/Dialog";
 import { friendly } from "../../ui/Toast";
+import { getLang, t } from "../../i18n";
 
 export const MIN_PASSWORD = 8;
 
@@ -12,7 +13,7 @@ export const MIN_PASSWORD = 8;
  */
 export function PasswordDialog({
   open, onClose, title, text, submitLabel, onSubmit,
-  current = false, next = false, currentLabel = "Master password", nextLabel = "New password",
+  current = false, next = false, currentLabel = t("settings.masterPassword"), nextLabel = t("vault.newPassword"),
 }: {
   open: boolean;
   onClose: () => void;
@@ -54,9 +55,9 @@ export function PasswordDialog({
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (busy) return;
-    if (current && !cur) return fail(`Enter your ${currentLabel.toLowerCase()}.`);
-    if (next && nw.length < MIN_PASSWORD) return fail(`Use at least ${MIN_PASSWORD} characters.`);
-    if (next && nw !== confirm) return fail("The two passwords don't match.");
+    if (current && !cur) return fail(t("vault.enterField", { label: getLang() === "en" ? currentLabel.toLowerCase() : currentLabel }));
+    if (next && nw.length < MIN_PASSWORD) return fail(t("vault.tooShort", { count: MIN_PASSWORD }));
+    if (next && nw !== confirm) return fail(t("vault.mismatch"));
     setBusy(true);
     setError(null);
     try {
@@ -65,7 +66,7 @@ export function PasswordDialog({
     } catch (err) {
       const e2 = asError(err);
       if (e2.kind === "wrongPassword") setCur("");
-      if (e2.kind !== "cancelled") fail(e2.kind === "wrongPassword" ? "Wrong password." : friendly(e2));
+      if (e2.kind !== "cancelled") fail(e2.kind === "wrongPassword" ? t("ui.error.wrongPassword") : friendly(e2));
     } finally {
       setBusy(false);
     }
@@ -80,14 +81,14 @@ export function PasswordDialog({
         )}
         {next && (
           <>
-            <Field label={nextLabel} value={nw} onChange={setNw} autoComplete="new-password" hint={`At least ${MIN_PASSWORD} characters.`} />
-            <Field label="Confirm" value={confirm} onChange={setConfirm} autoComplete="new-password" />
+            <Field label={nextLabel} value={nw} onChange={setNw} autoComplete="new-password" hint={t("vault.minLength", { count: MIN_PASSWORD })} />
+            <Field label={t("vault.confirm")} value={confirm} onChange={setConfirm} autoComplete="new-password" />
           </>
         )}
         {error && <div role="alert" className="alert">{error}</div>}
         <div className="flex justify-end gap-2 pt-1">
-          <button type="button" className="btn" onClick={close} disabled={busy}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={busy}>{busy ? "Working…" : submitLabel}</button>
+          <button type="button" className="btn" onClick={close} disabled={busy}>{t("common.cancel")}</button>
+          <button type="submit" className="btn btn-primary" disabled={busy}>{busy ? t("vault.working") : submitLabel}</button>
         </div>
       </form>
     </Dialog>

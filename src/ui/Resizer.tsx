@@ -1,4 +1,5 @@
 import { useState, type KeyboardEvent, type PointerEvent } from "react";
+import { t } from "../i18n";
 
 const KEY = "roalt.width.";
 
@@ -67,7 +68,7 @@ export function Divider({ panel, side, label }: {
       aria-valuemin={panel.min}
       aria-valuemax={panel.max}
       tabIndex={0}
-      title="Drag to resize · double-click to reset"
+      title={t("ui.resizeHint")}
       onPointerDown={drag}
       onDoubleClick={panel.reset}
       onKeyDown={key}

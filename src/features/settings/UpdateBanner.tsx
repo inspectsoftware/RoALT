@@ -5,8 +5,8 @@ import { qk, useInstances } from "../../data";
 import { ConfirmDialog } from "../../ui/Dialog";
 import { Icon } from "../../ui/Icon";
 import { toastError } from "../../ui/Toast";
-import { plural } from "../accounts/shared";
 import { isRunning } from "../launch/Running";
+import { t, tx } from "../../i18n";
 
 /** The version Later hid: not offered again until RoALT restarts, or Check now finds it. */
 let hidden: string | null = null;
@@ -48,22 +48,22 @@ export function UpdateBanner() {
     <div role="status" className="enter flex-none flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2 bg-panel border-b border-line">
       <Icon name="download" />
       <span className="flex-1 min-w-0">
-        RoALT <span className="mono">{version}</span> is ready.
-        {busy && <span className="text-dim"> Downloading and checking its signature…</span>}
+        {tx("settings.updateReady", { version: <span className="mono">{version}</span> })}
+        {busy && <span className="text-dim"> {t("settings.updateDownloading")}</span>}
       </span>
       <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => (running ? setConfirm(true) : void update())}>
-        Update now
+        {t("settings.updateNow")}
       </button>
       <button className="btn btn-sm" disabled={busy} onClick={() => hide(version)}>
-        Later
+        {t("settings.updateLater")}
       </button>
       <ConfirmDialog
         open={confirm}
         onClose={() => setConfirm(false)}
         onConfirm={() => void update()}
-        title={`Update RoALT to ${version}?`}
-        text={`RoALT closes while it updates and starts again by itself. ${plural(running, "Roblox client")} ${running === 1 ? "keeps" : "keep"} running, but the restarted RoALT doesn't track ${running === 1 ? "it" : "them"}: ${running === 1 ? "it leaves" : "they leave"} Running clients, and auto-rejoin, crash restarts, anti-AFK and memory rules stop for ${running === 1 ? "it" : "them"}.`}
-        confirmLabel="Update now"
+        title={t("settings.updateConfirmTitle", { version })}
+        text={t("settings.updateConfirmText", { count: running })}
+        confirmLabel={t("settings.updateNow")}
         safe
       />
     </div>

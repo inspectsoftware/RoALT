@@ -54,6 +54,27 @@ impl AppError {
             Self::Internal(_) => "internal",
         }
     }
+
+    /// The message in the current language (Display stays English, for logs).
+    pub fn message(&self) -> String {
+        match self {
+            Self::Locked => tr!("The vault is locked."),
+            Self::WrongPassword => tr!("Wrong password."),
+            Self::CookieInvalid => tr!("This cookie is not valid or has expired. Sign in again."),
+            Self::Challenge => {
+                tr!("Roblox wants a human check for this account. Sign in to it again with Add account > Sign in.")
+            }
+            Self::RateLimited(s) => tr!("Roblox is limiting requests. Try again in {seconds} s.", seconds = s),
+            Self::BoundSessionRequired => tr!("Roblox now requires a bound session for this account."),
+            Self::Roblox(why) => tr!("Roblox answered unexpectedly ({why}).", why = why),
+            Self::Network(why) => tr!("Network error: {why}", why = why),
+            Self::NotFound => tr!("Not found."),
+            Self::Cancelled => tr!("Cancelled."),
+            Self::Invalid(m) | Self::Internal(m) => m.clone(),
+            Self::Storage(why) => tr!("Storage error: {why}", why = why),
+            Self::Crypto => tr!("Encryption failed."),
+        }
+    }
 }
 
 /// What a rejected `invoke` carries to the UI.
@@ -66,7 +87,7 @@ pub struct ErrorPayload {
 
 impl Serialize for AppError {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        ErrorPayload { kind: self.kind().into(), message: self.to_string() }.serialize(s)
+        ErrorPayload { kind: self.kind().into(), message: self.message() }.serialize(s)
     }
 }
 

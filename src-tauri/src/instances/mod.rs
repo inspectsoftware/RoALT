@@ -13,4 +13,4 @@ pub mod window;
 mod tracker;
 
 pub mod rejoin;
-pub use tracker::{CHALLENGED, HUNG, Tracker, Transition, UNEXPECTED, WRONG_ACCOUNT};
+pub use tracker::{Tracker, Transition, challenged, closed, hung, unexpected, wrong_account};

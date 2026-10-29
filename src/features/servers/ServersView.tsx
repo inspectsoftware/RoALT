@@ -5,18 +5,19 @@ import { qk, useBulk, useMultiStatus, useRobloxClient, useSettings } from "../..
 import { Segmented, Switch } from "../../ui/controls";
 import { Icon } from "../../ui/Icon";
 import { friendly } from "../../ui/Toast";
-import { accountName, avatarColor, plural } from "../accounts/shared";
+import { fmtNum, t, tx, type Key } from "../../i18n";
+import { accountName, avatarColor } from "../accounts/shared";
 import { launchBlocked, launched, launchFailed } from "../launch/LaunchView";
 import { useNow } from "../launch/Running";
 import { PrivateTable, PublicTable, short, type Pick } from "./ServerTables";
 
 const PAGE = 25;
 const SIGNED_IN: ServerOrder[] = ["recommended", "bestLatency"];
-const ORDERS: { value: ServerOrder; label: string }[] = [
-  { value: "occupancyDesc", label: "Most full" },
-  { value: "occupancyAsc", label: "Most empty" },
-  { value: "recommended", label: "Recommended" },
-  { value: "bestLatency", label: "Best ping" },
+const ORDERS: { value: ServerOrder; label: Key }[] = [
+  { value: "occupancyDesc", label: "servers.orderMostFull" },
+  { value: "occupancyAsc", label: "servers.orderMostEmpty" },
+  { value: "recommended", label: "servers.orderRecommended" },
+  { value: "bestLatency", label: "servers.orderBestPing" },
 ];
 
 /** The server browser. Roblox rate-limits the list, so pages load only when asked for. */
@@ -69,7 +70,7 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
     // signed-in sort.
     queryFn: ({ pageParam }) =>
       needsAccount
-        ? Promise.reject({ kind: "invalid", message: "Pick an account: Roblox sorts this way only for a signed-in account." })
+        ? Promise.reject({ kind: "invalid", message: t("servers.needAccountSort") })
         : api.serversList(place!, order, hideFull, PAGE, pageParam ?? undefined, asker),
     initialPageParam: null as string | null,
     getNextPageParam: (p) => p.nextCursor,
@@ -100,20 +101,20 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
     : privPick?.accessCode ? { kind: "privateAccess", placeId: place, accessCode: privPick.accessCode }
     : null;
   const summary = pubPick
-    ? `${short(pubPick)}${free === null ? "" : ` · ${free} free`}`
-    : privPick ? `${privPick.name || "Private server"} · ${free} free` : "No server picked";
+    ? free === null ? short(pubPick) : t("servers.summaryFree", { name: short(pubPick), count: free })
+    : privPick ? t("servers.summaryFree", { name: privPick.name || t("servers.privateServer"), count: free ?? 0 }) : t("servers.noServerPicked");
   const n = chosen.length;
   const client = useRobloxClient().data;
   const askerName = chosen[0] ? accountName(chosen[0]) : "";
   const restricted = !!privPick && !!priv.data?.pages.some((p) => p.joinRestricted);
-  const noJoin = `Roblox doesn't let ${askerName} join servers of this game.`;
+  const noJoin = t("servers.noJoin", { name: askerName });
   const blocked = launchBlocked(n > 1, multi, batch) ?? (restricted && n === 1 ? noJoin : null);
   const warning =
     [
       blocked ?? (restricted ? noJoin : null),
-      privPick && n > 1 ? `Access was checked for ${askerName} only; accounts without access can't join.` : null,
-      free !== null && n > free ? `Only ${plural(free, "free slot")} for ${plural(n, "account")}.` : null,
-      n > 1 && client?.outdated ? "Roblox is out of date: its update can close the other clients. Update it in Settings first." : null,
+      privPick && n > 1 ? t("servers.accessCheckedFor", { name: askerName }) : null,
+      free !== null && n > free ? t("servers.onlyFreeSlots", { count: free, accounts: t("servers.nAccounts", { count: n }) }) : null,
+      n > 1 && client?.outdated ? t("servers.outdated") : null,
     ]
       .filter(Boolean)
       .join(" ") || null;
@@ -128,22 +129,22 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
     const mine = ++loads.current;
     const p = await api.targetParse(text).catch(() => null);
     if (mine !== loads.current) return;
-    const t = p?.kind === "target" ? p.target : null;
-    if (!t || t.kind === "followUser") {
-      setTextError(p && "reason" in p ? p.reason : "Paste a game link or place ID.");
+    const tgt = p?.kind === "target" ? p.target : null;
+    if (!tgt || tgt.kind === "followUser") {
+      setTextError(p && "reason" in p ? p.reason : t("servers.pasteLink"));
       return;
     }
     // Universe and share links need a lookup (share links with the first picked account).
     setLoading(true);
     try {
-      const id = "placeId" in t ? t.placeId : await api.targetPlace(t, asker);
+      const id = "placeId" in tgt ? tgt.placeId : await api.targetPlace(tgt, asker);
       if (mine !== loads.current) return;
       // Loading the game already shown asks for its icon again if it was missing.
       if (id === place && g && !g.iconUrl) void game.refetch();
       setPlace(id);
       setTextError(null);
       setTab("public");
-      setPick(t.kind === "server" ? { kind: "public", id: t.jobId } : null);
+      setPick(tgt.kind === "server" ? { kind: "public", id: tgt.jobId } : null);
     } catch (e) {
       if (mine === loads.current) setTextError(friendly(asError(e)));
     } finally {
@@ -163,7 +164,7 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
 
   async function join() {
     if (!canJoin || !target) return;
-    setStep(n > 1 ? "Starting the batch…" : "Getting a ticket…");
+    setStep(n > 1 ? t("servers.startingBatch") : t("servers.gettingTicket"));
     try {
       if (n > 1) {
         await api.bulkLaunch({ accountIds: chosen.map((a) => a.id), target, delayMs, sameServer: "off", favouriteId: null, fpsCap: null });
@@ -182,15 +183,15 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
   return (
     <main className="flex-1 min-w-0 flex flex-col">
       <div className="flex-none flex flex-wrap items-center gap-x-5 gap-y-3 px-6 py-5 border-b border-line bg-panel">
-        {g ? <GameHead game={g} /> : <h1 className="text-xl font-semibold tracking-[-0.01em]">Servers</h1>}
+        {g ? <GameHead game={g} /> : <h1 className="text-xl font-semibold tracking-[-0.01em]">{t("servers.title")}</h1>}
         <form className="flex flex-col gap-1.5 ml-auto flex-[0_1_340px] min-w-[220px]" onSubmit={(e) => void load(e)}>
           <div className="flex">
-            <label htmlFor="servers-game" className="sr-only">Game link or place ID</label>
+            <label htmlFor="servers-game" className="sr-only">{t("servers.gameInput")}</label>
             <input
               id="servers-game"
               autoFocus={place === null}
               className="field mono flex-1 min-w-0"
-              placeholder="Game link or place ID"
+              placeholder={t("servers.gameInput")}
               spellCheck={false}
               autoComplete="off"
               value={text}
@@ -201,32 +202,32 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
                 setTextError(null);
               }}
             />
-            <button className="btn border-l-0" disabled={loading}>{loading ? "Loading…" : "Load"}</button>
+            <button className="btn border-l-0" disabled={loading}>{loading ? t("common.loading") : t("servers.load")}</button>
           </div>
           {textError && <p id="servers-game-error" role="alert" className="alert">{textError}</p>}
         </form>
       </div>
 
       {place === null ? (
-        <Note>Paste a game link or place ID to see its servers.</Note>
+        <Note>{t("servers.pastePrompt")}</Note>
       ) : game.isPending ? (
         <Note>
-          <span className="flex items-center gap-2"><span aria-hidden="true" className="w-2 h-2 bg-dim pulse" />Loading the game…</span>
+          <span className="flex items-center gap-2"><span aria-hidden="true" className="w-2 h-2 bg-dim pulse" />{t("servers.loadingGame")}</span>
         </Note>
       ) : gameError ? (
         <Note>
           <span className="flex flex-col items-start gap-3">
-            <span role="alert" className="alert">{gameError.kind === "notFound" ? "No game has that place ID." : friendly(gameError)}</span>
-            {gameError.kind !== "notFound" && <button className="btn" onClick={() => void game.refetch()}>Try again</button>}
+            <span role="alert" className="alert">{gameError.kind === "notFound" ? t("servers.noGame") : friendly(gameError)}</span>
+            {gameError.kind !== "notFound" && <button className="btn" onClick={() => void game.refetch()}>{t("common.tryAgain")}</button>}
           </span>
         </Note>
       ) : (
         <>
           <div className="flex-none flex flex-wrap items-center gap-3 px-6 py-3.5">
             <Segmented
-              label="Server type"
+              label={t("servers.serverType")}
               value={view}
-              options={[{ value: "public", label: "Public" }, { value: "private", label: "Private" }]}
+              options={[{ value: "public", label: t("servers.public") }, { value: "private", label: t("servers.private") }]}
               onChange={(v) => {
                 setTab(v);
                 setPick(null);
@@ -235,49 +236,48 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
             {view === "public" && (
               <>
                 <Segmented
-                  label="Sort servers"
+                  label={t("servers.sortServers")}
                   value={order}
-                  options={ORDERS.map((o) =>
-                    asker === undefined && SIGNED_IN.includes(o.value)
-                      ? { ...o, disabled: true, title: "Pick an account: Roblox sorts this way only for a signed-in account." }
-                      : o,
-                  )}
+                  options={ORDERS.map((o) => {
+                    const opt = { value: o.value, label: t(o.label) };
+                    return asker === undefined && SIGNED_IN.includes(o.value) ? { ...opt, disabled: true, title: t("servers.needAccountSort") } : opt;
+                  })}
                   onChange={setOrder}
                 />
                 <span className="flex items-center gap-2.5">
-                  <Switch label="Hide full servers" checked={hideFull} onChange={setHideFull} />
-                  <span aria-hidden="true">Hide full</span>
+                  <Switch label={t("servers.hideFullServers")} checked={hideFull} onChange={setHideFull} />
+                  <span aria-hidden="true">{t("servers.hideFull")}</span>
                 </span>
               </>
             )}
             <span className="flex items-center gap-3 ml-auto">
               {list.isFetching ? (
-                <span className="mono text-xs text-dim">loading…</span>
+                <span className="mono text-xs text-dim">{t("servers.loadingLower")}</span>
               ) : (
                 list.dataUpdatedAt > 0 && <Updated at={list.dataUpdatedAt} />
               )}
               <button className="btn" disabled={list.isFetching || asker === undefined && (view === "private" || needsAccount)} onClick={refresh}>
                 <Icon name="refresh" size={14} className={list.isFetching ? "spin" : ""} />
-                Refresh
+                {t("servers.refresh")}
               </button>
             </span>
             <span role="status" className="sr-only">
-              {list.isFetching ? "Loading servers" : list.isSuccess ? `${plural(count, "server")} listed` : ""}
+              {list.isFetching ? t("servers.loadingServers") : list.isSuccess ? t("servers.serversListed", { count }) : ""}
             </span>
           </div>
 
           <div className="scroll flex-1 min-h-0 border-t border-line">
             {view === "public" && needsAccount && !pub.data ? (
-              <p className="px-6 py-4 text-dim">Pick an account below: Roblox sorts this way only for a signed-in account.</p>
+              <p className="px-6 py-4 text-dim">{t("servers.pickAccountSort")}</p>
             ) : view === "public" ? (
               <PublicTable servers={servers} pick={pubPick} onPick={(id) => setPick({ kind: "public", id })} />
             ) : asker === undefined ? (
-              <p className="px-6 py-4 text-dim">Pick an account below: Roblox lists the private servers that account can see.</p>
+              <p className="px-6 py-4 text-dim">{t("servers.pickAccountPrivate")}</p>
             ) : (
               <>
-                <p className="px-6 pt-3 text-xs text-dim">As {askerName}</p>
+                <p className="px-6 pt-3 text-xs text-dim">{t("servers.asName", { name: askerName })}</p>
                 {priv.data?.pages.some((p) => p.joinRestricted) && (
-                  <p className="alert mx-6 my-3">Roblox doesn't let {askerName} join servers of this game.</p>
+                  <p className="alert mx-6 my-3">{noJoin}</p>
                 )}
                 <PrivateTable servers={privates} pick={privPick?.vipServerId ?? null} onPick={(id) => setPick({ kind: "private", id })} />
               </>
@@ -287,17 +287,17 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
                 <>
                   <p role="alert" className="alert">{friendly(asError(list.error))}</p>
                   <button className="btn" disabled={list.isFetching || (view === "public" && needsAccount)} onClick={() => void (list.isFetchNextPageError ? list.fetchNextPage() : refresh())}>
-                    Try again
+                    {t("common.tryAgain")}
                   </button>
                 </>
               ) : list.isFetching && !list.isFetchingNextPage && count === 0 ? (
-                "Loading servers…"
+                t("servers.loadingServersEllipsis")
               ) : list.isSuccess && count === 0 ? (
-                view === "private" ? `No private servers ${askerName} can see.` : hideFull ? "No servers with room right now." : "No servers right now."
+                view === "private" ? t("servers.noPrivate", { name: askerName }) : hideFull ? t("servers.noRoom") : t("servers.noServers")
               ) : (
                 list.hasNextPage && (
                   <button className="btn" disabled={list.isFetching || (view === "public" && needsAccount)} onClick={() => void list.fetchNextPage()}>
-                    {list.isFetchingNextPage ? "Loading…" : `Load next ${PAGE}`}
+                    {list.isFetchingNextPage ? t("common.loading") : t("servers.loadNext", { n: PAGE })}
                   </button>
                 )
               )}
@@ -307,9 +307,9 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
           <div className="flex-none px-6 py-3 border-t border-line-strong bg-raised">
             <div className="flex flex-wrap items-center gap-2.5">
               <span className="mono font-medium">{summary}</span>
-              <span aria-hidden="true" className="text-dim">send</span>
+              <span aria-hidden="true" className="text-dim">{t("servers.send")}</span>
               {valid.length ? (
-                <div role="group" aria-label="Accounts to send" className="flex flex-wrap gap-1.5">
+                <div role="group" aria-label={t("servers.accountsToSend")} className="flex flex-wrap gap-1.5">
                   {valid.map((a) => (
                     <button key={a.id} type="button" className="chip chip-sm" aria-pressed={picked.includes(a.id)} onClick={() => toggle(a.id)}>
                       <span aria-hidden="true" className="w-2 h-2" style={{ background: avatarColor(a) }} />
@@ -318,16 +318,16 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
                   ))}
                 </div>
               ) : (
-                <span className="text-dim">no account with a valid cookie</span>
+                <span className="text-dim">{t("servers.noValidAccount")}</span>
               )}
               <button
                 className="btn btn-primary ml-auto"
                 disabled={!canJoin}
-                title={target ? (blocked ?? undefined) : "Pick a server first"}
+                title={target ? (blocked ?? undefined) : t("servers.pickServerFirst")}
                 onClick={() => void join()}
               >
                 <Icon name="play" size={12} fill />
-                {step ? "Joining…" : `Join with ${plural(n, "account")}`}
+                {step ? t("servers.joining") : t("servers.joinWith", { count: n })}
               </button>
             </div>
             <div aria-live="polite">{warning && <p className="alert mt-2">{warning}</p>}</div>
@@ -344,7 +344,7 @@ function Note({ children }: { children: ReactNode }) {
 
 function Updated({ at }: { at: number }) {
   const s = Math.max(0, Math.round((useNow(1000) - at) / 1000));
-  return <span className="mono text-xs text-dim">updated {s < 60 ? `${s} s` : `${Math.floor(s / 60)} min`} ago</span>;
+  return <span className="mono text-xs text-dim">{s < 60 ? t("servers.updatedSec", { s }) : t("servers.updatedMin", { m: Math.floor(s / 60) })}</span>;
 }
 
 function GameHead({ game: g }: { game: GameInfo }) {
@@ -354,19 +354,22 @@ function GameHead({ game: g }: { game: GameInfo }) {
         <img src={g.iconUrl} alt="" className="w-16 h-16 flex-none object-cover border border-line-strong" />
       ) : (
         <div aria-hidden="true" className="gridbg w-16 h-16 flex-none grid place-content-center border border-line-strong" style={{ backgroundSize: "8px 8px" }}>
-          <span className="mono text-[10px] text-dim">ICON</span>
+          <span className="mono text-[10px] text-dim">{t("servers.icon")}</span>
         </div>
       )}
       <div className="flex flex-col gap-1 min-w-0">
         <div className="flex items-baseline gap-2 min-w-0">
           <h1 className="text-xl font-semibold tracking-[-0.01em] truncate min-w-0">{g.name}</h1>
-          <span className="text-dim truncate flex-none max-w-[40%]">by {g.creator}</span>
+          <span className="text-dim truncate flex-none max-w-[40%]">{t("servers.byCreator", { creator: g.creator })}</span>
         </div>
-        <span className="mono text-xs text-dim selectable">place {g.placeId} · universe {g.universeId}</span>
+        <span className="mono text-xs text-dim selectable">{t("servers.placeUniverse", { place: g.placeId, universe: g.universeId })}</span>
         <span className="flex items-center gap-1.5">
           <span aria-hidden="true" className="w-1.5 h-1.5 bg-accent-text" />
-          <span className="mono">{g.playing.toLocaleString()}</span>
-          <span className="text-dim">playing</span>
+          {tx(
+            "servers.playing",
+            { count: g.playing, num: <span className="mono">{fmtNum(g.playing)}</span> },
+            { dim: (s) => <span className="text-dim">{s}</span> },
+          )}
         </span>
       </div>
     </div>

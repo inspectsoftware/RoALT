@@ -73,7 +73,7 @@ pub fn write_key(path: &Path, key: &[u8]) -> Result<()> {
 
 /// Exports the database open on `conn` into the new file `to`, encrypted with `key`.
 pub fn export(conn: &Connection, to: &Path, key: &[u8]) -> Result<()> {
-    let to = to.to_str().ok_or_else(|| AppError::Invalid("That folder's name can't be used.".into()))?;
+    let to = to.to_str().ok_or_else(|| AppError::Invalid(tr!("That folder's name can't be used.")))?;
     conn.execute(&format!("ATTACH DATABASE ?1 AS enc KEY {}", key_literal(key).as_str()), [to])?;
     let done = (|| {
         conn.query_row("SELECT sqlcipher_export('enc')", [], |_| Ok(()))?;

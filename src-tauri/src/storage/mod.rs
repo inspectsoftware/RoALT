@@ -131,7 +131,7 @@ impl Db {
     /// meanwhile. Fails when `path` exists.
     pub fn copy_to<T>(&self, path: &Path, then: impl FnOnce() -> Result<T>) -> Result<T> {
         if path.exists() {
-            return Err(AppError::Invalid("That folder already has a RoALT database.".into()));
+            return Err(AppError::Invalid(tr!("That folder already has a RoALT database.")));
         }
         let conn = self.conn();
         match &self.file {
@@ -141,7 +141,7 @@ impl Db {
                 cipher::write_key(&key_path(path), &key)?;
             }
             None => {
-                let path = path.to_str().ok_or_else(|| AppError::Invalid("That folder's name can't be used.".into()))?;
+                let path = path.to_str().ok_or_else(|| AppError::Invalid(tr!("That folder's name can't be used.")))?;
                 conn.execute("VACUUM INTO ?1", [path])?;
             }
         }
@@ -427,7 +427,7 @@ impl Db {
     pub fn save_favourite(&self, id: Option<i64>, name: &str, target: &[u8], account_ids: &[i64], in_tray: bool) -> Result<i64> {
         let name = name.trim();
         if name.is_empty() || name.chars().count() > 60 {
-            return Err(AppError::Invalid("Favourite names need 1 to 60 characters.".into()));
+            return Err(AppError::Invalid(tr!("Favourite names need 1 to 60 characters.")));
         }
         let ids = serde_json::to_string(account_ids).map_err(|e| AppError::Internal(e.to_string()))?;
         let c = self.conn();
@@ -539,6 +539,26 @@ impl Db {
         )?;
         Ok(())
     }
+
+    /// Replaces the saved tracked clients with `rows` (instance id, JSON).
+    pub fn save_tracked(&self, rows: &[(String, String)]) -> Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM tracked", [])?;
+        for (id, data) in rows {
+            tx.execute("INSERT INTO tracked (instance_id, data) VALUES (?1, ?2)", params![id, data])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The saved tracked clients (JSON each).
+    pub fn tracked(&self) -> Result<Vec<String>> {
+        let c = self.conn();
+        let mut st = c.prepare("SELECT data FROM tracked")?;
+        let rows = st.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
 }
 
 fn account_row(r: &Row) -> rusqlite::Result<AccountSummary> {
@@ -584,17 +604,17 @@ fn color(c: Option<&str>) -> Result<Option<String>> {
         Some(c) if c.len() == 7 && c.starts_with('#') && c[1..].bytes().all(|b| b.is_ascii_hexdigit()) => {
             Ok(Some(c.to_ascii_lowercase()))
         }
-        Some(_) => Err(invalid("Colour must look like #a1b2c3.")),
+        Some(_) => Err(invalid(tr!("Colour must look like #a1b2c3."))),
     }
 }
 
 fn write_meta(c: &Connection, id: i64, m: &AccountMeta) -> Result<()> {
     let alias = m.alias.trim();
     if alias.chars().count() > MAX_ALIAS {
-        return Err(invalid(format!("Alias can be at most {MAX_ALIAS} characters.")));
+        return Err(invalid(tr!("Alias can be at most {max} characters.", max = MAX_ALIAS)));
     }
     if m.notes.chars().count() > MAX_NOTES {
-        return Err(invalid(format!("Notes can be at most {MAX_NOTES} characters.")));
+        return Err(invalid(tr!("Notes can be at most {max} characters.", max = MAX_NOTES)));
     }
     let color = color(m.color.as_deref())?;
     let sql = "UPDATE accounts SET alias = ?2, notes = ?3, color = ?4, favourite = ?5, updated_at = ?6 WHERE id = ?1";
@@ -607,7 +627,7 @@ fn replace_groups(c: &Connection, account_id: i64, group_ids: &[i64]) -> Result<
     for &gid in group_ids {
         let exists: bool = c.query_row("SELECT EXISTS (SELECT 1 FROM groups WHERE id = ?1)", [gid], |r| r.get(0))?;
         if !exists {
-            return Err(invalid("That group no longer exists."));
+            return Err(invalid(tr!("That group no longer exists.")));
         }
         c.execute("INSERT OR IGNORE INTO account_groups (account_id, group_id) VALUES (?1, ?2)", [account_id, gid])?;
     }
@@ -618,13 +638,13 @@ fn replace_groups(c: &Connection, account_id: i64, group_ids: &[i64]) -> Result<
 fn write_group(c: &Connection, id: Option<i64>, name: &str, color_in: Option<&str>) -> Result<i64> {
     let name = name.trim();
     if !(1..=MAX_GROUP_NAME).contains(&name.chars().count()) {
-        return Err(invalid(format!("Group names need 1 to {MAX_GROUP_NAME} characters.")));
+        return Err(invalid(tr!("Group names need 1 to {max} characters.", max = MAX_GROUP_NAME)));
     }
     let color = color(color_in)?;
     // `name` is COLLATE NOCASE, so `=` compares case-insensitively.
     let sql = "SELECT EXISTS (SELECT 1 FROM groups WHERE name = ?1 AND id IS NOT ?2)";
     if c.query_row(sql, params![name, id], |r| r.get::<_, bool>(0))? {
-        return Err(invalid(format!("A group called \"{name}\" already exists.")));
+        return Err(invalid(tr!("A group called \"{name}\" already exists.", name = name)));
     }
     match id {
         None => {
@@ -945,6 +965,22 @@ mod tests {
         // They go with the account.
         db.remove_accounts(&[id]).unwrap();
         assert!(db.crashes().unwrap().is_empty());
+    }
+
+    #[test]
+    fn tracked_clients_are_replaced_wholesale() {
+        let db = Db::open_in_memory().unwrap();
+        assert!(db.tracked().unwrap().is_empty());
+        let row = |id: &str| (id.to_owned(), format!("{{\"id\":\"{id}\"}}"));
+        db.save_tracked(&[row("a"), row("b")]).unwrap();
+        let mut got = db.tracked().unwrap();
+        got.sort();
+        assert_eq!(got, [row("a").1, row("b").1]);
+        // "a" ended.
+        db.save_tracked(&[row("b")]).unwrap();
+        assert_eq!(db.tracked().unwrap(), [row("b").1]);
+        db.save_tracked(&[]).unwrap();
+        assert!(db.tracked().unwrap().is_empty());
     }
 
     #[test]

@@ -6,7 +6,7 @@ import { api, type AccountSummary } from "../../api";
 import { useUpdateAccount } from "../../data";
 import { Icon, type IconName } from "../../ui/Icon";
 import { toast, toastError } from "../../ui/Toast";
-import { plural } from "./shared";
+import { t } from "../../i18n";
 
 export type MenuAt = { account: AccountSummary; x: number; y: number };
 
@@ -56,21 +56,21 @@ export function AccountMenu({ at, onClose, selection, canLaunch, onLaunch, onVal
 
   const items: ([IconName, string, () => unknown, boolean?] | null)[] = a
     ? [
-        ["play", many ? `Launch ${plural(ids.length, "account")}` : "Launch", () => onLaunch(ids), !anyValid],
-        ["signin", "Open on roblox.com", () => session.mutateAsync(a.id).catch(toastError)],
-        ["external", "Open profile", () => openUrl(`https://www.roblox.com/users/${a.userId}/profile`).catch(toastError)],
+        ["play", many ? t("accounts.menu.launchMany", { count: ids.length }) : t("common.launch"), () => onLaunch(ids), !anyValid],
+        ["signin", t("accounts.menu.openSession"), () => session.mutateAsync(a.id).catch(toastError)],
+        ["external", t("accounts.menu.openProfile"), () => openUrl(`https://www.roblox.com/users/${a.userId}/profile`).catch(toastError)],
         null,
-        ["copy", "Copy username", () => clip(a.username, "Username copied")],
-        ["copy", "Copy user ID", () => clip(String(a.userId), "User ID copied")],
+        ["copy", t("accounts.menu.copyUsername"), () => clip(a.username, t("accounts.menu.usernameCopied"))],
+        ["copy", t("accounts.menu.copyUserId"), () => clip(String(a.userId), t("accounts.menu.userIdCopied"))],
         null,
-        ["star", a.favourite ? "Remove from favourites" : "Add to favourites", () => update.mutate({ id: a.id, patch: { favourite: !a.favourite } })],
+        ["star", a.favourite ? t("accounts.menu.unfavourite") : t("accounts.menu.favourite"), () => update.mutate({ id: a.id, patch: { favourite: !a.favourite } })],
         [
           "check",
-          a.allowDisconnect ? "Stop allowing disconnects" : "Allow disconnects",
+          a.allowDisconnect ? t("accounts.menu.disallowDisconnect") : t("accounts.menu.allowDisconnect"),
           () => update.mutate({ id: a.id, patch: { allowDisconnect: !a.allowDisconnect } }),
         ],
-        ["refresh", many ? `Validate ${plural(ids.length, "account")}` : "Validate", () => onValidate(ids)],
-        ["trash", many ? `Remove ${plural(ids.length, "account")}…` : "Remove…", () => onRemove(ids)],
+        ["refresh", many ? t("accounts.menu.validateMany", { count: ids.length }) : t("accounts.menu.validate"), () => onValidate(ids)],
+        ["trash", many ? t("accounts.menu.removeMany", { count: ids.length }) : t("common.removeEllipsis"), () => onRemove(ids)],
       ]
     : [];
 
@@ -79,7 +79,7 @@ export function AccountMenu({ at, onClose, selection, canLaunch, onLaunch, onVal
       ref={ref}
       popover="auto"
       role="menu"
-      aria-label={a ? `Actions for ${a.username}` : "Account actions"}
+      aria-label={a ? t("accounts.menu.actionsFor", { name: a.username }) : t("accounts.menu.actions")}
       className="menu"
       style={{ position: "fixed", positionArea: "none", inset: "auto", left: pos.left, top: pos.top, margin: 0, maxHeight: "none" }}
     >

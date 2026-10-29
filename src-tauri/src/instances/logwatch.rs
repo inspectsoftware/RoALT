@@ -8,8 +8,9 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// What a client's log has said so far.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+/// What a client's log has said so far (saved with a tracked client, `tracker::Saved`).
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct LogFacts {
     /// From `web launch, websiteBTId is <id>` or `BTID is overriden to <id>`.
     pub browser_tracker_id: Option<i64>,

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useIsFetching } from "@tanstack/react-query";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Icon, Logo } from "./Icon";
+import { t } from "../i18n";
 
 /** Custom title bar (window decorations are off). Empty space drags; double-click maximizes. */
 export function TitleBar({ dark, onToggleTheme, onLock, onRefresh }: {
@@ -27,27 +28,27 @@ export function TitleBar({ dark, onToggleTheme, onLock, onRefresh }: {
       <span className="font-bold tracking-[0.02em]">RoALT</span>
       <div className="ml-auto flex items-center">
         {onRefresh && (
-          <button className="wc" aria-label="Refresh" title="Refresh (F5)" onClick={onRefresh}>
+          <button className="wc" aria-label={t("ui.refresh")} title={t("ui.refreshKey", { key: "F5" })} onClick={onRefresh}>
             <Icon name="refresh" className={fetching ? "spin" : ""} />
           </button>
         )}
         {onToggleTheme && (
-          <button className="wc" aria-label={dark ? "Switch to light theme" : "Switch to dark theme"} title="Theme" onClick={onToggleTheme}>
+          <button className="wc" aria-label={dark ? t("ui.lightTheme") : t("ui.darkTheme")} title={t("ui.theme")} onClick={onToggleTheme}>
             <span key={dark ? "d" : "l"} className="pop grid">
               <Icon name={dark ? "sun" : "moon"} />
             </span>
           </button>
         )}
         {onLock && (
-          <button className="wc" aria-label="Lock vault" title="Lock vault (Ctrl+L)" onClick={onLock}>
+          <button className="wc" aria-label={t("ui.lockVault")} title={t("ui.lockVaultKey", { key: "Ctrl+L" })} onClick={onLock}>
             <Icon name="lock" />
           </button>
         )}
         <span className="w-px h-5 bg-line mx-1" aria-hidden="true" />
-        <button className="wc" aria-label="Minimize window" onClick={() => win.minimize()}>
+        <button className="wc" aria-label={t("ui.minimize")} onClick={() => win.minimize()}>
           <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M0 5h10" stroke="currentColor" /></svg>
         </button>
-        <button className="wc" aria-label={maximized ? "Restore window" : "Maximize window"} onClick={() => win.toggleMaximize()}>
+        <button className="wc" aria-label={maximized ? t("ui.restore") : t("ui.maximize")} onClick={() => win.toggleMaximize()}>
           {maximized ? (
             <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" aria-hidden="true">
               <rect x="0.5" y="2.5" width="7" height="7" /><path d="M2.5 2.5V0.5h7v7h-2" />
@@ -58,7 +59,7 @@ export function TitleBar({ dark, onToggleTheme, onLock, onRefresh }: {
             </svg>
           )}
         </button>
-        <button className="wc wc-close" aria-label="Close window" onClick={() => win.close()}>
+        <button className="wc wc-close" aria-label={t("ui.closeWindow")} onClick={() => win.close()}>
           <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" /></svg>
         </button>
       </div>

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, asError, type AccountSummary, type Favourite, type LaunchTarget } from "../../api";
 import { qk, useFavourites } from "../../data";
+import { t, tx } from "../../i18n";
 import { Switch } from "../../ui/controls";
 import { ConfirmDialog, Dialog } from "../../ui/Dialog";
 import { Icon } from "../../ui/Icon";
@@ -26,7 +27,7 @@ export function FavouritesNav({ accounts, active, onPick }: {
     mutationFn: (f: Favourite) => api.favouriteRemove(f.id),
     onSuccess: (_, f) => {
       qc.setQueryData<Favourite[]>(qk.favourites, (list) => list?.filter((x) => x.id !== f.id));
-      toast(`Deleted ${f.name}`);
+      toast(t("launch.fav.deleted", { name: f.name }));
     },
     onSettled: () => setDeleting(null),
   });
@@ -40,10 +41,10 @@ export function FavouritesNav({ accounts, active, onPick }: {
   return (
     <div className="flex flex-col gap-0.5">
       <div className="flex items-center h-7 pl-3 mt-5 mb-1.5">
-        <span className="label">Favourites</span>
+        <span className="label">{t("launch.fav.title")}</span>
       </div>
-      {favs.isError && <span className="px-3 text-xs text-dim">Couldn't load favourites.</span>}
-      {favs.data?.length === 0 && <span className="px-3 text-xs text-dim">Star a target in Launch to keep it here.</span>}
+      {favs.isError && <span className="px-3 text-xs text-dim">{t("launch.fav.loadFailed")}</span>}
+      {favs.data?.length === 0 && <span className="px-3 text-xs text-dim">{t("launch.fav.empty")}</span>}
       {favs.data?.map((f) => (
         <div
           key={f.id}
@@ -60,8 +61,8 @@ export function FavouritesNav({ accounts, active, onPick }: {
           </button>
           <button
             className="wc w-8 h-8 absolute right-0.5 top-0.5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-            aria-label={`Rename or delete ${f.name}`}
-            title="Rename or delete"
+            aria-label={t("launch.fav.renameOrDeleteName", { name: f.name })}
+            title={t("launch.fav.renameOrDelete")}
             onClick={() => openMenu(f)}
           >
             <Icon name="pencil" size={12} />
@@ -80,7 +81,7 @@ export function FavouritesNav({ accounts, active, onPick }: {
           }}
         >
           <Icon name="pencil" size={12} />
-          Rename…
+          {t("launch.fav.rename")}
         </button>
         <button
           className="menu-item text-orange"
@@ -90,7 +91,7 @@ export function FavouritesNav({ accounts, active, onPick }: {
           onClick={() => setDeleting(menuFor)}
         >
           <Icon name="trash" size={12} />
-          Delete
+          {t("launch.fav.delete")}
         </button>
       </div>
 
@@ -99,13 +100,11 @@ export function FavouritesNav({ accounts, active, onPick }: {
         onClose={() => setDeleting(null)}
         onConfirm={() => deleting && remove.mutate(deleting)}
         busy={remove.isPending}
-        title="Delete favourite?"
+        title={t("launch.fav.deleteTitle")}
         text={
-          <>
-            <span className="text-text font-medium">{deleting?.name}</span> and its saved link are deleted.
-          </>
+          tx("launch.fav.deleteText", { name: <span className="text-text font-medium">{deleting?.name}</span> })
         }
-        confirmLabel="Delete favourite"
+        confirmLabel={t("launch.fav.deleteConfirm")}
       />
 
       {editing && (
@@ -151,14 +150,14 @@ export function FavouriteDialog({ open, onClose, accounts, initial, resolve, onS
     e.preventDefault();
     if (busy) return;
     const n = name.trim();
-    if (!n) return setError("Give it a name.");
+    if (!n) return setError(t("launch.fav.needName"));
     setBusy(true);
     try {
       const target = await resolve();
       const accountIds = accounts.filter((a) => ids.includes(a.id)).map((a) => a.id);
       const f = await api.favouriteSave({ id: initial.id, name: n, target, accountIds, inTray: tray });
       qc.invalidateQueries({ queryKey: qk.favourites });
-      toast(initial.id ? `Saved ${f.name}` : `Added ${f.name} to favourites`);
+      toast(initial.id ? t("launch.fav.saved", { name: f.name }) : t("launch.fav.added", { name: f.name }));
       onSaved?.(f);
       onClose();
     } catch (err) {
@@ -169,10 +168,10 @@ export function FavouriteDialog({ open, onClose, accounts, initial, resolve, onS
   }
 
   return (
-    <Dialog open={open} onClose={() => !busy && onClose()} title={initial.id ? "Edit favourite" : "Save as favourite"} width={440}>
+    <Dialog open={open} onClose={() => !busy && onClose()} title={initial.id ? t("launch.editFavourite") : t("launch.saveAsFavourite")} width={440}>
       <form onSubmit={submit} className="flex flex-col gap-4 p-5">
         <label className="flex flex-col gap-1.5">
-          <span className="label">Name</span>
+          <span className="label">{t("launch.fav.name")}</span>
           <input
             className="field"
             maxLength={60}
@@ -185,9 +184,9 @@ export function FavouriteDialog({ open, onClose, accounts, initial, resolve, onS
           />
         </label>
         <div className="flex flex-col gap-1.5">
-          <span className="label" id="fav-accounts-label">Default accounts</span>
+          <span className="label" id="fav-accounts-label">{t("launch.fav.defaultAccounts")}</span>
           <div role="group" aria-labelledby="fav-accounts-label" className="scroll max-h-[208px] border border-line">
-            {accounts.length === 0 && <p className="p-3 text-dim">No accounts yet.</p>}
+            {accounts.length === 0 && <p className="p-3 text-dim">{t("launch.fav.noAccounts")}</p>}
             {accounts.map((a) => (
               <label key={a.id} className="flex items-center gap-2.5 h-[38px] px-3 border-b border-line last:border-b-0 cursor-pointer hover:bg-hover has-[:checked]:bg-sel">
                 <input type="checkbox" className="cb" checked={ids.includes(a.id)} onChange={() => toggle(a.id)} />
@@ -199,18 +198,18 @@ export function FavouriteDialog({ open, onClose, accounts, initial, resolve, onS
               </label>
             ))}
           </div>
-          <span className="text-xs text-dim">Picking the favourite selects the first valid one.</span>
+          <span className="text-xs text-dim">{t("launch.fav.picksFirst")}</span>
         </div>
         <div className="flex items-center justify-between gap-2">
-          <span>Show in tray</span>
-          <Switch label="Show in tray" checked={tray} onChange={setTray} />
+          <span>{t("launch.fav.showInTray")}</span>
+          <Switch label={t("launch.fav.showInTray")} checked={tray} onChange={setTray} />
         </div>
         {error && <div role="alert" className="alert">{error}</div>}
         <div className="flex justify-end gap-2">
-          <button type="button" className="btn" onClick={onClose} disabled={busy}>Cancel</button>
+          <button type="button" className="btn" onClick={onClose} disabled={busy}>{t("common.cancel")}</button>
           <button type="submit" className="btn btn-primary" disabled={busy}>
             <Icon name="star" size={12} fill />
-            {initial.id ? "Save" : "Save favourite"}
+            {initial.id ? t("common.save") : t("launch.fav.saveFavourite")}
           </button>
         </div>
       </form>

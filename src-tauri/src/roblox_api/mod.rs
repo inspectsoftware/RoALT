@@ -50,8 +50,6 @@ const HEADSHOT_STEP: Duration = Duration::from_millis(1);
 /// 2-step `mediaType` names by enum value.
 const MEDIA_TYPES: [&str; 8] =
     ["Email", "SMS", "Authenticator", "RecoveryCode", "SecurityKey", "CrossDevice", "Password", "Passkey"];
-const SIGNED_IN_ONLY: &str =
-    "Pick an account to sort by Recommended or Best latency: Roblox only does that for a signed-in account.";
 
 /// Headers, body and the rotated cookie (if any) of a 2xx answer.
 type Reply = (HeaderMap, Vec<u8>, Option<Secret>);
@@ -287,7 +285,7 @@ impl Client {
     ) -> Result<crate::model::ServerPage> {
         use crate::model::{GameServer, ServerOrder, ServerPage};
         if ![10, 25, 50, 100].contains(&limit) {
-            return Err(AppError::Invalid("A server page holds 10, 25, 50 or 100 servers.".into()));
+            return Err(AppError::Invalid(tr!("A server page holds 10, 25, 50 or 100 servers.")));
         }
         let order_by = match order {
             ServerOrder::OccupancyDesc => "OccupancyDesc",
@@ -419,7 +417,7 @@ impl Client {
     /// `max` bytes (by `Content-Length` before, or while reading). `progress(received, total)`
     /// after each chunk.
     pub async fn download(&self, url: &str, max: u64, mut progress: impl FnMut(u64, Option<u64>)) -> Result<Vec<u8>> {
-        let http = self.http.as_ref().map_err(|e| AppError::Internal(format!("HTTP client unavailable: {e}")))?;
+        let http = self.http.as_ref().map_err(|e| AppError::Internal(tr!("HTTP client unavailable: {why}", why = e)))?;
         let (url, _) = self.target(url)?;
         let mut resp = http.get(url).timeout(Duration::from_secs(300)).send().await.map_err(network)?;
         if !resp.status().is_success() {
@@ -454,7 +452,7 @@ impl Client {
         cookie: Option<&Secret>,
     ) -> Result<Reply> {
         let account_id = if cookie.is_some() { account_id } else { 0 };
-        let http = self.http.as_ref().map_err(|e| AppError::Internal(format!("HTTP client unavailable: {e}")))?;
+        let http = self.http.as_ref().map_err(|e| AppError::Internal(tr!("HTTP client unavailable: {why}", why = e)))?;
         let (url, web) = self.target(url)?;
         let (mut rotated, mut csrf_retried, mut attempts) = (None::<Secret>, false, 0);
         loop {
@@ -517,7 +515,9 @@ impl Client {
             }
             // The server list's "Guest users are not allowed." (Recommended / BestLatency).
             if route == endpoints::SERVERS_PUBLIC && status == StatusCode::BAD_REQUEST && error_code(&bytes) == Some((7, 0)) {
-                return Err(AppError::Invalid(SIGNED_IN_ONLY.into()));
+                return Err(AppError::Invalid(tr!(
+                    "Pick an account to sort by Recommended or Best latency: Roblox only does that for a signed-in account."
+                )));
             }
             return Err(classify(status, &headers, &bytes));
         }
@@ -640,15 +640,15 @@ fn error_code(body: &[u8]) -> Option<(i64, i64)> {
 /// A transport error, named by host only (no path or query).
 fn network(e: reqwest::Error) -> AppError {
     let what = if e.is_timeout() {
-        "timed out"
+        tr!("timed out")
     } else if e.is_connect() {
-        "could not connect"
+        tr!("could not connect")
     } else {
-        "connection failed"
+        tr!("connection failed")
     };
     match e.url().and_then(Url::host_str) {
         Some(host) => AppError::Network(format!("{what} ({host})")),
-        None => AppError::Network(what.into()),
+        None => AppError::Network(what),
     }
 }
 

@@ -90,20 +90,49 @@ async fn rejoin(app: &AppHandle, r: Rejoin, user_id: Option<i64>) {
         return;
     }
     let account = s.db.account(r.account_id).ok().filter(|a| Some(a.user_id) == user_id);
-    let name = account.as_ref().map_or_else(|| "An account".to_owned(), name_of);
-    let (done, again) = if r.cause == CrashKind::Disconnect { ("rejoined", "rejoins") } else { ("restarted", "restarts") };
+    let name = account.as_ref().map_or_else(|| tr!("An account"), name_of);
+    let rejoin = r.cause == CrashKind::Disconnect;
+    let again = if rejoin { "rejoins" } else { "restarts" };
     let kills = s.bulk.kills();
     if let Some(why) = skip_reason(&s, &r, account.as_ref(), busy.is_none()) {
         log::info!("auto-{again} of instance {} skipped: {why}", r.from);
-        notice(app, false, format!("{name} wasn't {done}: {why}."));
+        let text = if rejoin {
+            tr!("{name} wasn't rejoined: {why}.", name = name, why = why)
+        } else {
+            tr!("{name} wasn't restarted: {why}.", name = name, why = why)
+        };
+        notice(app, false, text);
         return;
     }
     let n = with_recent(r.account_id, |t| recent(t, Instant::now(), window));
     if n >= v.breaker_max {
         log::info!("instance {}: crash breaker tripped ({n} relaunches in {} min)", r.from, v.breaker_window_min);
-        s.tracker.give_up(&r.from, format!("Gave up after {n} {again}"));
+        let (note, text) = if rejoin {
+            (
+                trn!(n, "Gave up after {n} rejoin", "Gave up after {n} rejoins"),
+                trn!(
+                    n,
+                    "{name} wasn't rejoined: it needed {n} rejoin in {minutes} minutes, so RoALT gave up.",
+                    "{name} wasn't rejoined: it needed {n} rejoins in {minutes} minutes, so RoALT gave up.",
+                    name = name,
+                    minutes = v.breaker_window_min
+                ),
+            )
+        } else {
+            (
+                trn!(n, "Gave up after {n} restart", "Gave up after {n} restarts"),
+                trn!(
+                    n,
+                    "{name} wasn't restarted: it needed {n} restart in {minutes} minutes, so RoALT gave up.",
+                    "{name} wasn't restarted: it needed {n} restarts in {minutes} minutes, so RoALT gave up.",
+                    name = name,
+                    minutes = v.breaker_window_min
+                ),
+            )
+        };
+        s.tracker.give_up(&r.from, note);
         commands::instances_changed(app);
-        notice(app, true, format!("{name} wasn't {done}: it needed {n} {again} in {} minutes, so RoALT gave up.", v.breaker_window_min));
+        notice(app, true, text);
         if !account.as_ref().is_some_and(|a| a.discord_muted) {
             let name = crate::discord::name_of(account.as_ref(), r.account_id);
             crate::discord::notify(app, crate::discord::Event::Breaker { name, count: n, window_min: v.breaker_window_min });
@@ -119,7 +148,12 @@ async fn rejoin(app: &AppHandle, r: Rejoin, user_id: Option<i64>) {
         if let Ok(Err(e)) | Err(e) = closed.map_err(|e| crate::error::AppError::Internal(e.to_string())) {
             log::warn!("auto-{again}: closing instance {} failed: {e}", r.from);
             s.tracker.clear_closing(&r.from);
-            notice(app, true, format!("{name} couldn't be {done}: its old client didn't close."));
+            let text = if rejoin {
+                tr!("{name} couldn't be rejoined: its old client didn't close.", name = name)
+            } else {
+                tr!("{name} couldn't be restarted: its old client didn't close.", name = name)
+            };
+            notice(app, true, text);
             return;
         }
         // A hung client is still live in the tracker until the next poll ends it; launching
@@ -147,7 +181,12 @@ async fn rejoin(app: &AppHandle, r: Rejoin, user_id: Option<i64>) {
         }
         Err(e) => {
             log::warn!("auto-{again} of instance {} failed: {e}", r.from);
-            notice(app, true, format!("{name} couldn't be {done}: {e}"));
+            let text = if rejoin {
+                tr!("{name} couldn't be rejoined: {why}", name = name, why = e.message())
+            } else {
+                tr!("{name} couldn't be restarted: {why}", name = name, why = e.message())
+            };
+            notice(app, true, text);
         }
     }
 }
@@ -181,7 +220,7 @@ fn backoff(delay_ms: u32, recent: u32) -> u32 {
 
 /// Why the rejoin can't go ahead now (None: launch it). `account` is None when it was removed
 /// or its id now belongs to another user; `batch`: a batch is running.
-fn skip_reason(s: &App, r: &Rejoin, account: Option<&AccountSummary>, batch: bool) -> Option<&'static str> {
+fn skip_reason(s: &App, r: &Rejoin, account: Option<&AccountSummary>, batch: bool) -> Option<String> {
     let busy = |i: &Instance| {
         i.id != r.from
             && i.account_id == r.account_id
@@ -190,25 +229,25 @@ fn skip_reason(s: &App, r: &Rejoin, account: Option<&AccountSummary>, batch: boo
     let others = |i: &Instance| i.id != r.from && i.state != InstanceState::Exited;
     if !s.db.settings().is_ok_and(|v| enabled(&v, r.cause)) {
         Some(match r.cause {
-            CrashKind::Disconnect => "auto-rejoin was turned off",
-            CrashKind::Mem => "the memory restart was turned off",
-            _ => "auto-restart was turned off",
+            CrashKind::Disconnect => tr!("auto-rejoin was turned off"),
+            CrashKind::Mem => tr!("the memory restart was turned off"),
+            _ => tr!("auto-restart was turned off"),
         })
     } else if s.vault.is_locked() {
-        Some("the vault is locked")
+        Some(tr!("the vault is locked"))
     } else if batch {
-        Some("a batch is running")
+        Some(tr!("a batch is running"))
     } else if account.is_none() {
-        Some("it was removed")
+        Some(tr!("it was removed"))
     } else if account.is_some_and(|a| a.allow_disconnect) {
-        Some("it is set to allow disconnects")
+        Some(tr!("it is set to allow disconnects"))
     } else if account.is_some_and(|a| a.status != AccountStatus::Valid) {
-        Some("its cookie isn't valid. Sign in to it again")
+        Some(tr!("its cookie isn't valid. Sign in to it again"))
     } else if s.tracker.list().iter().any(busy) {
-        Some("it already has a client running")
+        Some(tr!("it already has a client running"))
     } else if !s.multi.is_active() && s.tracker.list().iter().any(others) {
         // Without the multi-instance lock the new client would replace the running one.
-        Some("another client is running and multi-instance is off")
+        Some(tr!("another client is running and multi-instance is off"))
     } else {
         None
     }

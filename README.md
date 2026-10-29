@@ -12,7 +12,7 @@ Your cookies stay encrypted on your PC. Nothing is sent anywhere except Roblox.
 [![Latest release](https://img.shields.io/github/v/release/inspectsoftware/RoALT?style=for-the-badge&color=b4f000&labelColor=1a1a1a&label=release)](https://github.com/inspectsoftware/RoALT/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/inspectsoftware/RoALT/total?style=for-the-badge&color=2b2b2b&labelColor=1a1a1a)](https://github.com/inspectsoftware/RoALT/releases)
 [![Windows 10 | 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?style=for-the-badge&logo=windows&labelColor=1a1a1a)](#-install)
-[![Discord](https://img.shields.io/badge/Discord-join-5865f2?style=for-the-badge&logo=discord&logoColor=white&labelColor=1a1a1a)](https://discord.gg/Q2vrgDKb3)
+[![Discord](https://img.shields.io/badge/Discord-join-5865f2?style=for-the-badge&logo=discord&logoColor=white&labelColor=1a1a1a)](https://discord.gg/qcj68tHKCX)
 
 [![CI](https://img.shields.io/github/actions/workflow/status/inspectsoftware/RoALT/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/inspectsoftware/RoALT/actions/workflows/ci.yml)
 ![Tauri 2](https://img.shields.io/badge/Tauri-2-24c8db?style=flat-square&logo=tauri&logoColor=white)
@@ -23,7 +23,7 @@ Your cookies stay encrypted on your PC. Nothing is sent anywhere except Roblox.
 <br>
 
 [**⬇ Download**](https://github.com/inspectsoftware/RoALT/releases/latest) &nbsp;·&nbsp;
-[**💬 Discord**](https://discord.gg/Q2vrgDKb3) &nbsp;·&nbsp;
+[**💬 Discord**](https://discord.gg/qcj68tHKCX) &nbsp;·&nbsp;
 [Quick start](#-quick-start) &nbsp;·&nbsp;
 [Privacy](#-safety-and-privacy) &nbsp;·&nbsp;
 [For developers](#-for-developers)
@@ -334,7 +334,8 @@ In **Settings → Launching**, turn on **Auto-rejoin** (and, if you like, **Auto
   `github.com` (GitHub's own download hosts only), and the installer runs only if its ECDSA P-256 signature checks out
   against the public key built into RoALT. The signature covers the version too, so the release must be newer than
   the RoALT you run and the installer must be the one signed for that version. It installs silently, and RoALT starts again.
-  Roblox clients keep running through it, but the restarted RoALT doesn't track them.
+  Roblox clients keep running through it, and the restarted RoALT follows them again (also after you close and reopen
+  RoALT). Their limits are lifted while RoALT is closed and set again when it starts.
 - **Multi-instance** works by creating one named Windows object before Roblox starts. RoALT also holds Roblox's shared
   sign-in files while its clients run, so clients can't sign each other out.
 - **Limits** go through Windows itself (job objects, priority, affinity). RoALT only ever opens a client with the
@@ -430,7 +431,7 @@ In `%LOCALAPPDATA%\RoALT`. **Settings → Data** opens it or moves it to another
 
 ## 💬 Community
 
-Questions, ideas or bug reports? Join the **[Discord server](https://discord.gg/Q2vrgDKb3)** or
+Questions, ideas or bug reports? Join the **[Discord server](https://discord.gg/qcj68tHKCX)** or
 [open an issue](https://github.com/inspectsoftware/RoALT/issues).
 
 <br>
@@ -592,7 +593,7 @@ round-trips, and response parsing from recorded fixtures. They never use real co
 
 Bug reports, ideas and pull requests are welcome.
 
-1. Open an [issue](https://github.com/inspectsoftware/RoALT/issues) or ask on [Discord](https://discord.gg/Q2vrgDKb3) first for anything big.
+1. Open an [issue](https://github.com/inspectsoftware/RoALT/issues) or ask on [Discord](https://discord.gg/qcj68tHKCX) first for anything big.
 2. Keep changes small and focused, and match the surrounding code.
 3. Run the [tests](#-testing) and `npm run bindings` if you changed a shared type.
 4. Never commit a real cookie, ticket or webhook, including in fixtures or screenshots.
@@ -623,5 +624,5 @@ change how its client behaves at any time.
 
 <div align="center">
 <br>
-<sub>Made for people with too many alts. &nbsp;·&nbsp; <a href="https://discord.gg/Q2vrgDKb3">Discord</a> &nbsp;·&nbsp; <a href="https://github.com/inspectsoftware/RoALT/releases/latest">Download</a></sub>
+<sub>Made for people with too many alts. &nbsp;·&nbsp; <a href="https://discord.gg/qcj68tHKCX">Discord</a> &nbsp;·&nbsp; <a href="https://github.com/inspectsoftware/RoALT/releases/latest">Download</a></sub>
 </div>

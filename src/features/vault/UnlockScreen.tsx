@@ -4,7 +4,7 @@ import { api, asError, type VaultStatus } from "../../api";
 import { qk } from "../../data";
 import { Icon } from "../../ui/Icon";
 import { friendly } from "../../ui/Toast";
-import { plural } from "../accounts/shared";
+import { t } from "../../i18n";
 
 export type LockReason = "start" | "manual" | "idle";
 
@@ -28,7 +28,7 @@ export function UnlockScreen({ status, reason }: { status: VaultStatus; reason: 
       qc.invalidateQueries();
     } catch (err) {
       const e2 = asError(err);
-      setError(e2.kind === "wrongPassword" ? "Wrong password." : friendly(e2));
+      setError(e2.kind === "wrongPassword" ? t("ui.error.wrongPassword") : friendly(e2));
       setShakes((n) => n + 1);
       input.current?.select();
     } finally {
@@ -36,7 +36,7 @@ export function UnlockScreen({ status, reason }: { status: VaultStatus; reason: 
     }
   }
 
-  const lead = reason === "idle" ? `Locked after ${status.autoLockMinutes} minutes idle. ` : reason === "manual" ? "Locked. " : "";
+  const lead = reason === "idle" ? t("vault.lockedIdle", { count: status.autoLockMinutes }) : reason === "manual" ? t("vault.lockedManual") : "";
 
   return (
     <main className="gridbg flex-1 grid place-items-center px-4 py-10 overflow-auto">
@@ -50,14 +50,15 @@ export function UnlockScreen({ status, reason }: { status: VaultStatus; reason: 
             <path d="M11 15V5h14v10" fill="none" stroke="currentColor" strokeWidth="2" />
             <rect x="16" y="21" width="4" height="5" fill="var(--accent)" />
           </svg>
-          <h1 className="text-[22px] font-semibold tracking-[-0.01em]">Vault locked</h1>
+          <h1 className="text-[22px] font-semibold tracking-[-0.01em]">{t("vault.title")}</h1>
           <p className="text-dim">
-            {lead}Enter your master password to reach your {plural(status.accounts, "account")}.
+            {lead && `${lead} `}
+            {t("vault.prompt", { count: status.accounts })}
           </p>
         </div>
 
         <div className="flex flex-col gap-2">
-          <label className="label" htmlFor="unlock-pw">Master password</label>
+          <label className="label" htmlFor="unlock-pw">{t("settings.masterPassword")}</label>
           <div className="flex border bg-bg" style={{ borderColor: error ? "var(--orange)" : "var(--line-strong)" }}>
             <input
               ref={input}
@@ -78,7 +79,7 @@ export function UnlockScreen({ status, reason }: { status: VaultStatus; reason: 
             <button
               type="button"
               className="wc h-10 w-11"
-              aria-label={peek ? "Hide password" : "Show password"}
+              aria-label={peek ? t("vault.hidePassword") : t("vault.showPassword")}
               aria-pressed={peek}
               onClick={() => setPeek(!peek)}
             >
@@ -89,12 +90,12 @@ export function UnlockScreen({ status, reason }: { status: VaultStatus; reason: 
         </div>
 
         <button type="submit" className="btn btn-primary h-10" disabled={busy}>
-          {busy ? "Unlocking…" : "Unlock"}
+          {busy ? t("vault.unlocking") : t("vault.unlock")}
         </button>
 
         <div className="mono flex flex-col gap-1 pt-4 border-t border-line text-[11px] text-dim">
-          <span>AES-256-GCM · key from Argon2id</span>
-          <span>Nothing leaves this PC.</span>
+          <span>{t("vault.cipher")}</span>
+          <span>{t("vault.local")}</span>
         </div>
       </form>
     </main>

@@ -32,7 +32,7 @@ pub fn script(kbps: u32) -> Result<String> {
         return Ok(remove);
     }
     if !(MIN_KBPS..=MAX_KBPS).contains(&kbps) {
-        return Err(AppError::Invalid(format!("The bandwidth limit must be 0 (none) or {MIN_KBPS} to {MAX_KBPS} kbit/s.")));
+        return Err(AppError::Invalid(tr!("The bandwidth limit must be 0 (none) or {min} to {max} kbit/s.", min = MIN_KBPS, max = MAX_KBPS)));
     }
     let bits = u64::from(kbps) * 1000;
     Ok(format!(
@@ -62,13 +62,13 @@ pub fn apply(kbps: u32) -> Result<()> {
     // SAFETY: `info` is a local with its size set; the strings it points at outlive the call.
     if let Err(e) = unsafe { ShellExecuteExW(&mut info) } {
         return Err(if e.code() == ERROR_CANCELLED.to_hresult() {
-            AppError::Invalid("The bandwidth limit needs admin rights; the prompt was declined.".into())
+            AppError::Invalid(tr!("The bandwidth limit needs admin rights; the prompt was declined."))
         } else {
-            AppError::Internal(format!("Could not start PowerShell: {}", e.message()))
+            AppError::Internal(tr!("Could not start PowerShell: {why}", why = e.message()))
         });
     }
     if info.hProcess.is_invalid() {
-        return Err(AppError::Internal("PowerShell didn't start.".into()));
+        return Err(AppError::Internal(tr!("PowerShell didn't start.")));
     }
     // SAFETY: SEE_MASK_NOCLOSEPROCESS hands us the process handle; Owned closes it.
     let h = unsafe { Owned::new(info.hProcess) };
@@ -77,13 +77,13 @@ pub fn apply(kbps: u32) -> Result<()> {
     unsafe {
         if WaitForSingleObject(*h, TIMEOUT.as_millis() as u32) != WAIT_OBJECT_0 {
             return Err(AppError::Internal(
-                "Windows didn't answer in time; the limit may or may not be set. Apply again to be sure.".into(),
+                tr!("Windows didn't answer in time; the limit may or may not be set. Apply again to be sure."),
             ));
         }
         GetExitCodeProcess(*h, &mut code).map_err(|e| AppError::Internal(e.message()))?;
     }
     if code != 0 {
-        return Err(AppError::Internal(format!("Windows refused the bandwidth limit (PowerShell exit code {code}).")));
+        return Err(AppError::Internal(tr!("Windows refused the bandwidth limit (PowerShell exit code {code}).", code = code)));
     }
     log::info!("bandwidth limit set to {kbps} kbit/s");
     Ok(())

@@ -65,7 +65,7 @@ pub fn write(path: &Path, password: &str, payload: &BackupPayload) -> Result<()>
     }
     out.extend_from_slice(&kdf.salt);
     let json = Zeroizing::new(
-        serde_json::to_vec(payload).map_err(|_| AppError::Internal("Could not encode the backup.".into()))?,
+        serde_json::to_vec(payload).map_err(|_| AppError::Internal(tr!("Could not encode the backup.")))?,
     );
     let key = master::derive_key(password, &kdf)?;
     let sealed = master::seal(&key, &out, &json)?;
@@ -77,7 +77,7 @@ pub fn write(path: &Path, password: &str, payload: &BackupPayload) -> Result<()>
 /// `Invalid("This isn't a RoALT backup.")` on a bad magic / truncated file.
 pub fn read(path: &Path, password: &str) -> Result<BackupPayload> {
     let bytes = fs::read(path)?;
-    let not_backup = || AppError::Invalid("This isn't a RoALT backup.".into());
+    let not_backup = || AppError::Invalid(tr!("This isn't a RoALT backup."));
     if bytes.len() < HEADER_LEN + SEAL_OVERHEAD || !bytes.starts_with(MAGIC) {
         return Err(not_backup());
     }

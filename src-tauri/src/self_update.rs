@@ -138,7 +138,7 @@ fn allowed(url: &Url, hosts: &[&str]) -> bool {
 /// The update in a releases/latest answer for a build at `current`: None when there is nothing
 /// newer; Err when there is, but without its installer and signature on github.com.
 pub fn pick(body: &[u8], current: &str) -> Result<Option<Release>> {
-    let l: Latest = serde_json::from_slice(body).map_err(|_| failed("GitHub's answer couldn't be read"))?;
+    let l: Latest = serde_json::from_slice(body).map_err(|_| failed(tr!("GitHub's answer couldn't be read.")))?;
     let Some(version) = newer(current, &l.tag_name).filter(|_| !l.draft && !l.prerelease) else {
         return Ok(None);
     };
@@ -151,7 +151,7 @@ pub fn pick(body: &[u8], current: &str) -> Result<Option<Release>> {
     };
     match (url(format!("RoALT-Setup-{version}.exe")), url(format!("RoALT-Setup-{version}.exe.sig"))) {
         (Some(exe), Some(sig)) => Ok(Some(Release { version, exe, sig })),
-        _ => Err(failed(format!("RoALT {version} is out, but without a signed installer. Get it from GitHub Releases"))),
+        _ => Err(failed(tr!("RoALT {version} is out, but without a signed installer. Get it from GitHub Releases.", version = version))),
     }
 }
 
@@ -244,25 +244,25 @@ fn write_verified(path: &Path, version: &str, bytes: &[u8], sig: &[u8], key: &[u
     signed.reserve(bytes.len());
     pinned.read_to_end(&mut signed)?;
     if !verify(key, &signed, sig) {
-        return Err(AppError::Invalid("The downloaded RoALT installer was not run: its signature didn't check out.".into()));
+        return Err(AppError::Invalid(tr!("The downloaded RoALT installer was not run: its signature didn't check out.")));
     }
     Ok(pinned)
 }
 
-fn failed(why: impl std::fmt::Display) -> AppError {
-    AppError::Internal(format!("{why}."))
+fn failed(why: String) -> AppError {
+    AppError::Internal(why)
 }
 
 /// No path or query (asset URLs carry signed tokens): what went wrong, with the host.
 fn network(e: reqwest::Error) -> AppError {
     let what = if e.is_timeout() {
-        "timed out"
+        tr!("timed out")
     } else if e.is_connect() {
-        "could not connect"
+        tr!("could not connect")
     } else {
-        "connection failed"
+        tr!("connection failed")
     };
-    failed(format!("Couldn't reach GitHub ({what})"))
+    failed(tr!("Couldn't reach GitHub ({what}).", what = what))
 }
 
 fn http() -> Result<reqwest::Client> {
@@ -280,16 +280,16 @@ fn http() -> Result<reqwest::Client> {
         }))
         .connect_timeout(Duration::from_secs(10))
         .build()
-        .map_err(|_| failed("RoALT's HTTP client couldn't start"))
+        .map_err(|_| failed(tr!("RoALT's HTTP client couldn't start.")))
 }
 
 /// GETs `url` within `timeout`; refused over `max` bytes (by `Content-Length`, or while reading).
 async fn get(http: &reqwest::Client, url: &str, accept: &'static str, max: u64, timeout: Duration) -> Result<Vec<u8>> {
     let mut resp = http.get(url).header(ACCEPT, accept).timeout(timeout).send().await.map_err(network)?;
     if !resp.status().is_success() {
-        return Err(failed(format!("GitHub answered HTTP {}", resp.status().as_u16())));
+        return Err(failed(tr!("GitHub answered HTTP {status}.", status = resp.status().as_u16())));
     }
-    let too_big = || failed(format!("GitHub sent more than {} KB", max / 1_000));
+    let too_big = || failed(tr!("GitHub sent more than {kb} KB.", kb = max / 1_000));
     if resp.content_length().is_some_and(|t| t > max) {
         return Err(too_big());
     }
@@ -377,7 +377,7 @@ pub async fn install(app: &AppHandle) -> Result<()> {
     s.self_update
         .installing
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .map_err(|_| AppError::Invalid("RoALT is already being updated.".into()))?;
+        .map_err(|_| AppError::Invalid(tr!("RoALT is already being updated.")))?;
     let result = run_install(&s).await;
     match &result {
         Ok(()) => app.exit(0),
@@ -392,10 +392,10 @@ pub async fn install(app: &AppHandle) -> Result<()> {
 /// Refused while a launch, batch, auto-rejoin or Roblox install runs: RoALT quits for the installer.
 fn idle(s: &App) -> Result<()> {
     if s.bulk.any_busy() {
-        return Err(AppError::Invalid("Wait for the running launch, batch or auto-rejoin to finish, then update RoALT.".into()));
+        return Err(AppError::Invalid(tr!("Wait for the running launch, batch or auto-rejoin to finish, then update RoALT.")));
     }
     if s.update.installing() {
-        return Err(AppError::Invalid("Wait for Roblox's installer to finish, then update RoALT.".into()));
+        return Err(AppError::Invalid(tr!("Wait for Roblox's installer to finish, then update RoALT.")));
     }
     Ok(())
 }
@@ -403,9 +403,9 @@ fn idle(s: &App) -> Result<()> {
 async fn run_install(s: &App) -> Result<()> {
     idle(s)?;
     let http = http()?;
-    let release = latest(&http).await?.ok_or_else(|| AppError::Invalid("RoALT is up to date.".into()))?;
+    let release = latest(&http).await?.ok_or_else(|| AppError::Invalid(tr!("RoALT is up to date.")))?;
     *lock(&s.self_update.available) = Some(release.version.clone());
-    let refused = || AppError::Invalid("The downloaded RoALT installer was not run: its signature file is malformed.".into());
+    let refused = || AppError::Invalid(tr!("The downloaded RoALT installer was not run: its signature file is malformed."));
     let sig = get(&http, &release.sig, "application/octet-stream", MAX_SIG, Duration::from_secs(30)).await?;
     let sig = std::str::from_utf8(&sig).ok().and_then(base64).filter(|s| s.len() == 64).ok_or_else(refused)?;
     let bytes = get(&http, &release.exe, "application/octet-stream", MAX_INSTALLER, Duration::from_secs(600)).await?;
@@ -424,7 +424,7 @@ async fn run_install(s: &App) -> Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| AppError::Internal(format!("Could not start RoALT's installer: {e}")))?;
+        .map_err(|e| AppError::Internal(tr!("Could not start RoALT's installer: {why}", why = e)))?;
     // The installer runs from the folder: kept (write-locked until RoALT exits) for the next start
     // to delete.
     std::mem::forget((pinned, dir));

@@ -23,6 +23,8 @@ struct View {
     locked: bool,
     master: bool,
     running: bool,
+    /// The menu's language (`i18n::current`).
+    lang: &'static str,
 }
 
 /// The view the current menu was built from. Only touched on the main thread.
@@ -94,16 +96,17 @@ fn view(app: &AppHandle) -> View {
         locked: s.vault.is_locked(),
         master: s.vault.mode() == VaultMode::Master,
         running: s.tracker.any_running(),
+        lang: crate::i18n::current(),
     }
 }
 
 fn menu(app: &AppHandle, v: &View) -> tauri::Result<Menu<Wry>> {
     let item = |id: &str, text: &str, enabled: bool| MenuItem::with_id(app, id, text, enabled, None::<&str>);
-    let favourites = Submenu::new(app, "Favourites", true)?;
+    let favourites = Submenu::new(app, tr!("Favourites"), true)?;
     if v.favourites.is_empty() {
-        favourites.append(&MenuItem::new(app, "No favourites", false, None::<&str>)?)?;
+        favourites.append(&MenuItem::new(app, tr!("No favourites"), false, None::<&str>)?)?;
     } else if v.locked {
-        favourites.append(&MenuItem::new(app, "Unlock RoALT to launch", false, None::<&str>)?)?;
+        favourites.append(&MenuItem::new(app, tr!("Unlock RoALT to launch"), false, None::<&str>)?)?;
     } else {
         for (id, name) in &v.favourites {
             // A single `&` would mark a shortcut key in a Windows menu.
@@ -113,17 +116,17 @@ fn menu(app: &AppHandle, v: &View) -> tauri::Result<Menu<Wry>> {
     let menu = Menu::with_items(
         app,
         &[
-            &item("show", "Show RoALT", true)?,
+            &item("show", &tr!("Show RoALT"), true)?,
             &favourites,
-            &item("close-all", "Close all clients", v.running)?,
-            &item("kill-all", "Kill all Roblox", true)?,
+            &item("close-all", &tr!("Close all clients"), v.running)?,
+            &item("kill-all", &tr!("Kill all Roblox"), true)?,
         ],
     )?;
     if v.master {
-        menu.append(&item("lock", "Lock vault", !v.locked)?)?;
+        menu.append(&item("lock", &tr!("Lock vault"), !v.locked)?)?;
     }
     menu.append(&PredefinedMenuItem::separator(app)?)?;
-    menu.append(&item("quit", "Quit RoALT", true)?)?;
+    menu.append(&item("quit", &tr!("Quit RoALT"), true)?)?;
     Ok(menu)
 }
 
@@ -147,7 +150,7 @@ fn on_menu(app: &AppHandle, id: &str) {
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = commands::close_running(&app.state::<App>(), false).await {
-                    notice(&app, true, format!("Couldn't close the clients: {e}"));
+                    notice(&app, true, tr!("Couldn't close the clients: {why}", why = e.message()));
                 }
             });
         }
@@ -167,7 +170,7 @@ pub fn kill_all(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(e) = commands::kill_all(&app.state::<App>()).await {
-            notice(&app, true, format!("Couldn't kill every Roblox client: {e}"));
+            notice(&app, true, tr!("Couldn't kill every Roblox client: {why}", why = e.message()));
         }
     });
 }
@@ -181,7 +184,7 @@ fn launch_favourite(app: &AppHandle, id: i64) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(e) = launch(&app, id).await {
-            notice(&app, true, format!("Couldn't launch that favourite: {e}"));
+            notice(&app, true, tr!("Couldn't launch that favourite: {why}", why = e.message()));
         }
     });
 }
@@ -195,7 +198,7 @@ async fn launch(app: &AppHandle, id: i64) -> Result<()> {
     match ids.len() {
         0 => {
             show_main(app);
-            notice(app, false, format!("No account of \"{}\" can launch. Pick accounts for it in RoALT.", fav.name));
+            notice(app, false, tr!("No account of \"{name}\" can launch. Pick accounts for it in RoALT.", name = fav.name));
         }
         1 => {
             let _single = s.bulk.begin_single_launch()?;

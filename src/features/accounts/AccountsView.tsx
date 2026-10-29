@@ -8,20 +8,21 @@ import { Icon } from "../../ui/Icon";
 import { toast } from "../../ui/Toast";
 import { AccountMenu, type MenuAt } from "./AccountMenu";
 import { DetailPanel } from "./DetailPanel";
-import { accountName, ago, Avatar, plural, Status } from "./shared";
+import { accountName, ago, Avatar, Status } from "./shared";
+import { t, tx, type Key } from "../../i18n";
 import { Divider, usePanelWidth } from "../../ui/Resizer";
 
 type Filter = "all" | "inGame" | "online" | "offline" | Exclude<AccountStatus, "valid"> | "fav";
 // The chips match what the Status column shows.
-const FILTERS: { key: Filter; label: string }[] = [
-  { key: "all", label: "All" },
-  { key: "inGame", label: "In game" },
-  { key: "online", label: "Online" },
-  { key: "offline", label: "Offline" },
-  { key: "invalid", label: "Cookie expired" },
-  { key: "challenged", label: "Needs a check" },
-  { key: "unknown", label: "Not checked" },
-  { key: "fav", label: "Favourites" },
+const FILTERS: { key: Filter; label: Key }[] = [
+  { key: "all", label: "accounts.filter.all" },
+  { key: "inGame", label: "accounts.presence.inGame" },
+  { key: "online", label: "accounts.presence.online" },
+  { key: "offline", label: "accounts.presence.offline" },
+  { key: "invalid", label: "accounts.status.invalid" },
+  { key: "challenged", label: "accounts.status.challenged" },
+  { key: "unknown", label: "accounts.status.unknown" },
+  { key: "fav", label: "accounts.filter.fav" },
 ];
 
 /** What the Status cell shows: presence for a valid cookie (Studio counts as online), else the cookie status. */
@@ -32,9 +33,9 @@ const shownKey = (a: AccountSummary, p?: Presence): Filter | "valid" => {
 };
 const inFilter = (a: AccountSummary, f: Filter, p?: Presence) =>
   f === "all" || (f === "fav" ? a.favourite : shownKey(a, p) === f);
-const isTyping = (t: EventTarget | null) =>
-  t instanceof HTMLElement &&
-  (t.matches("textarea, select, input:not([type=checkbox]):not([type=radio])") || t.isContentEditable);
+const isTyping = (el: EventTarget | null) =>
+  el instanceof HTMLElement &&
+  (el.matches("textarea, select, input:not([type=checkbox]):not([type=radio])") || el.isContentEditable);
 // Cookies are checked once per app session, when the list first shows (after unlock in master mode).
 let validatedThisSession = false;
 const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -73,8 +74,8 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
   const compact = density === "compact";
 
   useEffect(() => {
-    const t = setInterval(tick, 60_000);
-    return () => clearInterval(t);
+    const timer = setInterval(tick, 60_000);
+    return () => clearInterval(timer);
   }, []);
   // A local order bridges the gap until the optimistic cache update arrives.
   useEffect(() => setOrder(null), [accounts]);
@@ -115,10 +116,10 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
       const ch = done.filter((a) => a.status === "challenged").length;
       toast(
         [
-          `Checked ${plural(done.length, "account")}`,
-          missed && `${missed} couldn't be checked`,
-          bad && `${bad} need${bad === 1 ? "s" : ""} sign-in`,
-          ch && `${ch} challenged`,
+          t("accounts.toast.checked", { count: done.length }),
+          missed && t("accounts.toast.missed", { count: missed }),
+          bad && t("accounts.toast.needSignIn", { count: bad }),
+          ch && t("accounts.toast.challenged", { count: ch }),
         ]
           .filter(Boolean)
           .join(" · "),
@@ -141,7 +142,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
       for (const id of ids) qc.removeQueries({ queryKey: qk.info(id) });
       setChecked(new Set());
       setRemoveOpen(false);
-      toast(`Removed ${plural(ids.length, "account")}`);
+      toast(t("accounts.toast.removed", { count: ids.length }));
     },
   });
 
@@ -315,7 +316,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
     const targets = checkedIds.flatMap((id) => byId.get(id) ?? []).filter((a) => !a.groupIds.includes(g.id));
     try {
       for (const a of targets) await update.mutateAsync({ id: a.id, patch: { groupIds: [...a.groupIds, g.id] } });
-      toast(`Added ${plural(checkedIds.length, "account")} to ${g.name}`);
+      toast(t("accounts.toast.addedToGroup", { count: checkedIds.length, group: g.name }));
     } catch {
       // The mutation cache already showed the error.
     }
@@ -327,25 +328,25 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
     <>
       <main className={`@container flex-1 min-w-0 flex flex-col ${compact ? "compact" : ""}`}>
         <div className="flex flex-wrap items-center gap-3 px-5 pt-[18px] pb-3">
-          <h1 className="text-xl font-semibold tracking-[-0.01em]">Accounts</h1>
+          <h1 className="text-xl font-semibold tracking-[-0.01em]">{t("accounts.title")}</h1>
           <span className="mono text-dim">
-            {accounts.length} total
-            {needsSignIn > 0 && <> · <span className="text-orange">{needsSignIn} need{needsSignIn === 1 ? "s" : ""} sign-in</span></>}
+            {t("accounts.total", { count: accounts.length })}
+            {needsSignIn > 0 && <> · <span className="text-orange">{t("accounts.toast.needSignIn", { count: needsSignIn })}</span></>}
           </span>
           <div className="ml-auto flex flex-wrap gap-2">
-            <button className="btn" onClick={() => !validate.isPending && validate.mutate(undefined)} disabled={validate.isPending || !accounts.length} title="Validate all (Ctrl+R)">
+            <button className="btn" onClick={() => !validate.isPending && validate.mutate(undefined)} disabled={validate.isPending || !accounts.length} title={t("accounts.validateAllHint", { keys: "Ctrl+R" })}>
               <Icon name="refresh" size={14} className={validate.isPending ? "spin" : ""} />
-              {validate.isPending ? "Validating…" : "Validate all"}
+              {validate.isPending ? t("accounts.validating") : t("accounts.validateAll")}
             </button>
             <Segmented
-              label="Density"
+              label={t("accounts.density")}
               value={density}
-              options={[{ value: "detailed", label: "Detailed" }, { value: "compact", label: "Compact" }]}
+              options={[{ value: "detailed", label: t("accounts.densityDetailed") }, { value: "compact", label: t("accounts.densityCompact") }]}
               onChange={(d) => setSettings.mutate({ density: d })}
             />
-            <button className="btn btn-primary" onClick={onAdd} title="Add account (Ctrl+N)">
+            <button className="btn btn-primary" onClick={onAdd} title={t("accounts.addHint", { keys: "Ctrl+N" })}>
               <Icon name="plus" size={14} />
-              Add account
+              {t("accounts.add.title")}
             </button>
           </div>
         </div>
@@ -357,7 +358,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
             <div className="flex flex-wrap items-center gap-2 px-5 pb-3.5">
               <label className="flex items-center gap-2 flex-[0_1_260px] h-[30px] px-2.5 border border-line bg-panel text-dim focus-within:border-[var(--focus)]">
                 <Icon name="search" size={14} />
-                <span className="sr-only">Filter accounts</span>
+                <span className="sr-only">{t("accounts.filterLabel")}</span>
                 <input
                   id="account-filter"
                   value={q}
@@ -368,7 +369,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
                       setQ("");
                     }
                   }}
-                  placeholder="Filter by name, @user, id"
+                  placeholder={t("accounts.filterPlaceholder")}
                   spellCheck={false}
                   className="flex-1 min-w-0 bg-transparent outline-none text-text"
                 />
@@ -376,12 +377,12 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
               {FILTERS.map((f) => (
                 <button key={f.key} className="chip" aria-pressed={filter === f.key} onClick={() => setFilter(f.key)}>
                   {f.key === "fav" && <Icon name="star" size={12} fill={filter === "fav"} />}
-                  {f.label}
+                  {t(f.label)}
                   <span className="mono text-[11px] opacity-80">{counts(f.key)}</span>
                 </button>
               ))}
               {activeGroup && (
-                <button className="chip" aria-pressed="true" onClick={() => setGroup(null)} aria-label={`Clear group filter ${activeGroup.name}`}>
+                <button className="chip" aria-pressed="true" onClick={() => setGroup(null)} aria-label={t("accounts.clearGroupFilter", { name: activeGroup.name })}>
                   <span aria-hidden="true" className="w-2 h-2" style={{ background: groupColor(activeGroup) }} />
                   {activeGroup.name}
                   <Icon name="x" size={12} />
@@ -397,7 +398,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
                       <input
                         type="checkbox"
                         className="cb"
-                        aria-label="Select all shown"
+                        aria-label={t("accounts.selectAll")}
                         checked={allShown}
                         ref={(el) => {
                           if (el) el.indeterminate = shownChecked > 0 && !allShown;
@@ -405,10 +406,10 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
                         onChange={toggleAll}
                       />
                     </th>
-                    <th className="label">Account</th>
-                    <th className="label w-[34%]">Status</th>
-                    <th className="label w-[24%] hidden @2xl:table-cell">Groups</th>
-                    <th className="w-12"><span className="sr-only">Favourite</span></th>
+                    <th className="label">{t("accounts.colAccount")}</th>
+                    <th className="label w-[34%]">{t("accounts.colStatus")}</th>
+                    <th className="label w-[24%] hidden @2xl:table-cell">{t("accounts.groups.title")}</th>
+                    <th className="w-12"><span className="sr-only">{t("accounts.detail.favourite")}</span></th>
                   </tr>
                 </thead>
                 <tbody ref={tbody}>
@@ -439,7 +440,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
                               type="button"
                               className="grip"
                               data-grip={a.id}
-                              aria-label={`Reorder ${name}; arrow keys move it`}
+                              aria-label={t("accounts.reorder", { name })}
                               onPointerDown={(e) => gripDown(e, a.id)}
                               onPointerMove={gripMove}
                               onPointerUp={() => gripEnd(false)}
@@ -452,7 +453,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
                             <input
                               type="checkbox"
                               className="cb"
-                              aria-label={`Select ${name}`}
+                              aria-label={t("accounts.select", { name })}
                               checked={checked.has(a.id)}
                               onChange={() => toggle(a.id)}
                               onClick={(e) => e.stopPropagation()}
@@ -493,7 +494,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
                             type="button"
                             className="wc w-9 h-9"
                             style={a.favourite ? { color: "var(--accent-text)" } : undefined}
-                            aria-label={`Favourite ${name}`}
+                            aria-label={t("accounts.favouriteName", { name })}
                             aria-pressed={a.favourite}
                             onClick={(e) => {
                               e.stopPropagation();
@@ -510,7 +511,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
               </table>
               {shown.length === 0 && (
                 <div className="enter flex flex-col items-center gap-3 py-16 text-dim">
-                  No accounts match.
+                  {t("accounts.noMatch")}
                   <button
                     className="btn btn-sm"
                     onClick={() => {
@@ -519,7 +520,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
                       setGroup(null);
                     }}
                   >
-                    Clear filters
+                    {t("accounts.clearFilters")}
                   </button>
                 </div>
               )}
@@ -529,27 +530,27 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
 
         {checkedIds.length > 0 && (
           <div className="enter flex flex-wrap items-center gap-2.5 px-5 py-2.5 border-t border-line-strong bg-raised">
-            <span className="mono font-medium">{checkedIds.length} selected</span>
+            <span className="mono font-medium">{t("accounts.selected", { count: checkedIds.length })}</span>
             <span className="w-px h-5 bg-line" aria-hidden="true" />
             <button
               className="btn btn-primary"
               onClick={() => onLaunch(checkedIds)}
               disabled={checkedValid === 0}
-              title={checkedValid < checkedIds.length ? `${plural(checkedIds.length - checkedValid, "account")} can't launch and will be left out` : undefined}
+              title={checkedValid < checkedIds.length ? t("accounts.cantLaunch", { count: checkedIds.length - checkedValid }) : undefined}
             >
               <Icon name="play" size={12} />
-              Launch {checkedValid}
+              {t("accounts.launchCount", { count: checkedValid })}
             </button>
             <button className="btn" onClick={() => validate.mutate(checkedIds)} disabled={validate.isPending}>
               <Icon name="refresh" size={14} />
-              Validate
+              {t("accounts.menu.validate")}
             </button>
             <button className="btn" popoverTarget="bulk-groups" style={{ anchorName: "--bulk-groups" }}>
-              Add to group
+              {t("accounts.addToGroup")}
               <Icon name="chevron" size={12} />
             </button>
             <div id="bulk-groups" popover="auto" className="menu" style={{ positionAnchor: "--bulk-groups" }}>
-              {groups.length === 0 && <div className="px-2.5 py-2 text-dim">No groups yet. Create one in the sidebar.</div>}
+              {groups.length === 0 && <div className="px-2.5 py-2 text-dim">{t("accounts.noGroupsMenu")}</div>}
               {groups.map((g) => (
                 <button
                   key={g.id}
@@ -565,14 +566,14 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
             </div>
             <button className="btn btn-danger" onClick={() => askRemove(checkedIds)}>
               <Icon name="trash" size={14} />
-              Remove
+              {t("common.remove")}
             </button>
-            <button className="btn ml-auto" onClick={() => setChecked(new Set())}>Clear</button>
+            <button className="btn ml-auto" onClick={() => setChecked(new Set())}>{t("accounts.clear")}</button>
           </div>
         )}
 
         <footer className="mono h-7 flex-none flex items-center gap-4 px-5 border-t border-line text-[11px] text-dim">
-          <span>{lastChecked ? `validated ${ago(lastChecked, now)}` : "not validated yet"}</span>
+          <span>{lastChecked ? t("accounts.validatedAgo", { when: ago(lastChecked, now) }) : t("accounts.notValidated")}</span>
           <span className="ml-auto">v{import.meta.env.APP_VERSION}</span>
         </footer>
       </main>
@@ -586,14 +587,14 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
         onValidate={(ids) => validate.mutate(ids)}
         onRemove={askRemove}
       />
-      {current && <Divider panel={detail} side="right" label="Details width" />}
+      {current && <Divider panel={detail} side="right" label={t("accounts.detailsWidth")} />}
       {current && (
         <aside
           key={current.id}
           // Pin the panel to this account once it is used, so an edit that drops it from the
           // filtered list can't swap the panel to another account under the next click.
           onFocusCapture={() => setSelected(current.id)}
-          aria-label="Account details"
+          aria-label={t("accounts.details")}
           style={{ width: detail.width }}
           className="scroll flex-none bg-panel border-l border-line">
           <DetailPanel
@@ -614,20 +615,19 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
         onClose={() => setRemoveOpen(false)}
         onConfirm={() => remove.mutate(removeIds)}
         busy={remove.isPending}
-        title={removeIds.length === 1 ? "Remove account?" : `Remove ${removeIds.length} accounts?`}
+        title={t("accounts.removeTitle", { count: removeIds.length })}
         text={
-          <>
-            {removeIds.length === 1 ? (
-              <>
-                <span className="text-text font-medium">{byId.has(removeIds[0]) ? accountName(byId.get(removeIds[0])!) : "This account"}</span> and its saved cookie
-              </>
-            ) : (
-              "These accounts and their saved cookies"
-            )}{" "}
-            are deleted from this PC. The Roblox accounts themselves are not touched.
-          </>
+          removeIds.length === 1
+            ? tx("accounts.removeOneText", {
+                name: (
+                  <span className="text-text font-medium">
+                    {byId.has(removeIds[0]) ? accountName(byId.get(removeIds[0])!) : t("accounts.thisAccount")}
+                  </span>
+                ),
+              })
+            : t("accounts.removeManyText", { count: removeIds.length })
         }
-        confirmLabel="Remove"
+        confirmLabel={t("common.remove")}
       />
     </>
   );
@@ -640,13 +640,13 @@ function Empty({ onAdd }: { onAdd: () => void }) {
         <span className="w-12 h-12 grid place-content-center border border-line-strong text-dim">
           <Icon name="accounts" size={20} />
         </span>
-        <h2 className="text-[15px] font-semibold">No accounts yet</h2>
+        <h2 className="text-[15px] font-semibold">{t("accounts.emptyTitle")}</h2>
         <p className="text-dim">
-          Sign in through Roblox's own page or paste a .ROBLOSECURITY cookie. Cookies are encrypted and stay on this PC.
+          {t("accounts.emptyText")}
         </p>
         <button className="btn btn-primary" onClick={onAdd}>
           <Icon name="plus" size={14} />
-          Add account
+          {t("accounts.add.title")}
         </button>
       </div>
     </div>

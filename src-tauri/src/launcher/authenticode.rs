@@ -34,15 +34,15 @@ pub const ROBLOX: &str = "Roblox Corporation";
 /// Ok only when `path` has a valid, trusted embedded Authenticode signature whose signer is
 /// exactly `signer` (see the module notes).
 pub fn verify(path: &Path, signer: &str) -> Result<()> {
-    let refused = |why: String| AppError::Invalid(format!("The downloaded installer was not run: {why}."));
+    let refused = |why: String| AppError::Invalid(tr!("The downloaded installer was not run: {why}.", why = why));
     let (status, name) = trust(path);
     if status != 0 {
-        return Err(refused(format!("its signature didn't check out (0x{:08X})", status as u32)));
+        return Err(refused(tr!("its signature didn't check out ({status})", status = format!("0x{:08X}", status as u32))));
     }
     match name {
         Some(name) if name == signer => Ok(()),
-        Some(name) => Err(refused(format!("it is signed by \"{name}\", not {signer}"))),
-        None => Err(refused("its signer couldn't be read".into())),
+        Some(name) => Err(refused(tr!("it is signed by \"{name}\", not {signer}", name = name, signer = signer))),
+        None => Err(refused(tr!("its signer couldn't be read"))),
     }
 }
 

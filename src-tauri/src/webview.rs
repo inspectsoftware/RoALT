@@ -49,7 +49,7 @@ pub async fn capture_login(app: &AppHandle, data_dir: &Path) -> Result<Secret> {
     let label = format!("login-{id}");
     let profile = data_dir.join(TMP_DIR).join(id.to_string());
     let built = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(parse_url(endpoints::LOGIN_PAGE)?))
-        .title("Sign in to Roblox — RoALT")
+        .title(tr!("Sign in to Roblox — RoALT"))
         .inner_size(480.0, 760.0)
         .center()
         .data_directory(profile.clone())
@@ -176,7 +176,7 @@ impl LoginSlot {
             let _ = w.unminimize();
             let _ = w.set_focus();
         }
-        Err(AppError::Invalid("Finish the Roblox sign-in window that's already open.".into()))
+        Err(AppError::Invalid(tr!("Finish the Roblox sign-in window that's already open.")))
     }
 }
 
@@ -191,7 +191,7 @@ impl Drop for LoginSlot {
 async fn harden(window: &WebviewWindow, cookie: Option<Secret>) -> Result<u32> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     window.with_webview(move |pv| {
-        let r = harden_webview(&pv, cookie.as_ref()).map_err(|e| AppError::Internal(format!("WebView2 setup failed: {e}")));
+        let r = harden_webview(&pv, cookie.as_ref()).map_err(|e| AppError::Internal(tr!("WebView2 setup failed: {why}", why = e)));
         let _ = tx.send(r);
     })?;
     // The closure is dropped unrun if the window is already gone.
@@ -294,7 +294,7 @@ fn poll_cookie(app: &AppHandle, label: &str) -> Result<Secret> {
         }
         std::thread::sleep(POLL);
     }
-    Err(AppError::Invalid("The Roblox sign-in window timed out after 15 minutes. Try again.".into()))
+    Err(AppError::Invalid(tr!("The Roblox sign-in window timed out after 15 minutes. Try again.")))
 }
 
 /// The first non-empty `.ROBLOSECURITY` from roblox.com (Tauri strips the leading dot).

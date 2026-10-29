@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { asError, type ErrorPayload } from "../api";
 import { Icon } from "./Icon";
+import { t, type Key } from "../i18n";
 
 type Tone = "ok" | "error";
 type Item = { id: number; text: string; tone: Tone; leaving?: boolean };
@@ -30,18 +31,19 @@ export function toast(text: string, tone: Tone = "ok", sticky = false) {
   if (!sticky) setTimeout(() => dismiss(id), tone === "error" ? 7000 : 4000);
 }
 
-const FRIENDLY: Record<string, string> = {
-  locked: "The vault is locked. Unlock it and try again.",
-  wrongPassword: "Wrong password.",
-  network: "Couldn't reach Roblox. Check your connection and try again.",
-  notFound: "That account or group no longer exists.",
-  crypto: "Couldn't decrypt the data. The password is wrong or the file is damaged.",
-  storage: "Couldn't save to RoALT's local database.",
+const FRIENDLY: Record<string, Key> = {
+  locked: "ui.error.locked",
+  wrongPassword: "ui.error.wrongPassword",
+  network: "ui.error.network",
+  notFound: "ui.error.notFound",
+  crypto: "ui.error.crypto",
+  storage: "ui.error.storage",
 };
 
 /** User-facing text for an IPC error. Backend messages are already safe and user-facing. */
 export function friendly(e: ErrorPayload): string {
-  return FRIENDLY[e.kind] ?? (e.message || "Something went wrong.");
+  const k = FRIENDLY[e.kind];
+  return k ? t(k) : e.message || t("ui.error.generic");
 }
 
 /** Error toast; a cancelled action (closed window, dismissed Windows Hello) stays quiet. */
@@ -54,14 +56,14 @@ export function Toaster() {
   const list = useSyncExternalStore(subscribe, () => items);
   return (
     <div className="fixed right-4 bottom-4 z-50 flex flex-col items-end gap-2 pointer-events-none" aria-live="polite">
-      {list.map((t) => (
+      {list.map((item) => (
         <div
-          key={t.id}
-          role={t.tone === "error" ? "alert" : "status"}
-          className={`toast enter ${t.tone === "error" ? "toast-error" : ""} ${t.leaving ? "toast-leave" : ""}`}
+          key={item.id}
+          role={item.tone === "error" ? "alert" : "status"}
+          className={`toast enter ${item.tone === "error" ? "toast-error" : ""} ${item.leaving ? "toast-leave" : ""}`}
         >
-          <span className="flex-1 min-w-0 pt-0.5 break-words">{t.text}</span>
-          <button className="wc w-6 h-6" aria-label="Dismiss" onClick={() => dismiss(t.id)}>
+          <span className="flex-1 min-w-0 pt-0.5 break-words">{item.text}</span>
+          <button className="wc w-6 h-6" aria-label={t("common.dismiss")} onClick={() => dismiss(item.id)}>
             <Icon name="x" size={12} />
           </button>
         </div>

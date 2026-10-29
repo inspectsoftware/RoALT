@@ -5,7 +5,8 @@ import { qk, queryClient, useInstances, useMetrics, useSettings } from "../../da
 import { Segmented } from "../../ui/controls";
 import { Icon, type IconName } from "../../ui/Icon";
 import { toast, toastError } from "../../ui/Toast";
-import { accountName, Avatar, plural } from "../accounts/shared";
+import { t } from "../../i18n";
+import { accountName, Avatar } from "../accounts/shared";
 import { isRunning, KillAllButton, STATES, uptime, useNow } from "../launch/Running";
 import { mb, pct } from "../monitor/MonitorView";
 
@@ -76,7 +77,7 @@ type MenuAt = { inst: Instance; shown: boolean | null; x: number; y: number; fro
 /** The game's name for a card, from the shared game cache. */
 function GameName({ placeId }: { placeId: number | null }) {
   const g = useQuery({ queryKey: qk.game(placeId), queryFn: () => api.gameInfo(placeId!), enabled: placeId !== null }).data;
-  return <span className="truncate">{placeId === null ? "No game yet" : g?.name ?? `Place ${placeId}`}</span>;
+  return <span className="truncate">{placeId === null ? t("dashboard.noGameYet") : g?.name ?? t("dashboard.place", { id: placeId })}</span>;
 }
 
 /** One running client: its live picture, who, where, how long and what it uses. */
@@ -91,24 +92,25 @@ function ClientCard({ inst: i, account: a, metrics: m, now, afkOn, fps, onMenu }
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const shown = useThumbnail(i.id, canvas, fps);
-  const name = a ? accountName(a) : `Account ${i.accountId}`;
+  const name = a ? accountName(a) : t("dashboard.account", { id: i.accountId });
   const [label, color] = STATES[i.state];
   const focus = () => api.instanceShow(i.id, "focus").catch(toastError);
+  const throttled = t("dashboard.throttled");
   const badges: [string, string?][] = [
-    ...(i.throttled ? [["Throttled", "Over the memory limit: held to the throttle's CPU limit"] as [string, string]] : []),
-    ...(i.limits.cpuCap !== null ? [[`CPU ${i.limits.cpuCap}%`] as [string]] : []),
-    ...(i.limits.eco ? [["Efficiency"] as [string]] : []),
-    ...(afkOn && i.antiAfk ? [["Anti-AFK", i.afkAt !== null ? `Last key press ${uptime(i.afkAt, now)} ago` : "No key press yet"] as [string, string]] : []),
-    ...(i.micro ? [["Micro"] as [string]] : []),
-    ...(i.fpsCap ? [[`${i.fpsCap} FPS`, "This launch's FPS cap, set when its client started"] as [string, string]]
-      : a?.fpsCap ? [[`${a.fpsCap} FPS`, "This account's FPS cap, set when its client starts"] as [string, string]] : []),
+    ...(i.throttled ? [[throttled, t("dashboard.throttledHint")] as [string, string]] : []),
+    ...(i.limits.cpuCap !== null ? [[t("dashboard.cpuPct", { pct: i.limits.cpuCap })] as [string]] : []),
+    ...(i.limits.eco ? [[t("dashboard.efficiency")] as [string]] : []),
+    ...(afkOn && i.antiAfk ? [[t("dashboard.antiAfk"), i.afkAt !== null ? t("dashboard.lastKeyPress", { time: uptime(i.afkAt, now) }) : t("dashboard.noKeyPress")] as [string, string]] : []),
+    ...(i.micro ? [[t("dashboard.micro")] as [string]] : []),
+    ...(i.fpsCap ? [[t("dashboard.fps", { fps: i.fpsCap }), t("dashboard.launchFpsCap")] as [string, string]]
+      : a?.fpsCap ? [[t("dashboard.fps", { fps: a.fpsCap }), t("dashboard.accountFpsCap")] as [string, string]] : []),
 
   ];
   return (
     <div
       role="group"
       tabIndex={0}
-      aria-label={`${name}'s client, ${label}. Enter brings it to the front; the context menu key opens its actions.`}
+      aria-label={t("dashboard.cardLabel", { name, state: label })}
       className="enter flex flex-col min-w-0 border border-line bg-panel outline-offset-2"
       title={`PID ${i.pid}`}
       onDoubleClick={focus}
@@ -132,7 +134,7 @@ function ClientCard({ inst: i, account: a, metrics: m, now, afkOn, fps, onMenu }
         <canvas ref={canvas} aria-hidden="true" className={`w-full h-full object-contain ${shown ? "" : "invisible"}`} />
         {!shown && (
           <span className="mono absolute inset-0 grid place-items-center text-xs text-dim">
-            {shown === false ? (i.state === "starting" ? "Starting…" : "Minimized") : ""}
+            {shown === false ? (i.state === "starting" ? t("dashboard.starting") : t("dashboard.minimized")) : ""}
           </span>
         )}
       </div>
@@ -155,8 +157,8 @@ function ClientCard({ inst: i, account: a, metrics: m, now, afkOn, fps, onMenu }
         </span>
         {badges.length > 0 && (
           <span className="flex flex-wrap gap-1">
-            {badges.map(([b, t]) => (
-              <span key={b} className={`tag ${b === "Throttled" ? "text-orange" : ""}`} title={t}>{b}</span>
+            {badges.map(([b, tip]) => (
+              <span key={b} className={`tag ${b === throttled ? "text-orange" : ""}`} title={tip}>{b}</span>
             ))}
           </span>
         )}
@@ -206,24 +208,24 @@ function ClientMenu({ at, onClose, afkOn }: { at: MenuAt | null; onClose: () => 
   const micro = () =>
     i &&
     api.instanceMicro(i.id, !i.micro).then(([w, h]) => {
-      if (!i.micro && (w > 320 || h > 240)) toast(`Roblox kept this window at ${w} × ${h}; that is as small as it goes.`);
+      if (!i.micro && (w > 320 || h > 240)) toast(t("dashboard.microKept", { w, h }));
     }, toastError);
-  const trim = () => i && api.instanceTrim(i.id).then(() => toast("Trimmed its memory. Windows pages it back in as the client needs it."), toastError);
+  const trim = () => i && api.instanceTrim(i.id).then(() => toast(t("dashboard.trimmed")), toastError);
   const close = (force: boolean) => i && api.instanceClose(i.id, force).catch(toastError);
 
   const items: Item[] = i
     ? [
-        { icon: "external", label: "Focus", run: () => show("focus") },
-        at.shown === false ? { label: "Restore", run: () => show("restore") } : { label: "Minimize", run: () => show("minimize") },
-        { icon: "grid", label: i.micro ? "Normal size" : "Micro window (320 × 240)", run: micro },
+        { icon: "external", label: t("dashboard.focus"), run: () => show("focus") },
+        at.shown === false ? { label: t("dashboard.restore"), run: () => show("restore") } : { label: t("dashboard.minimize"), run: () => show("minimize") },
+        { icon: "grid", label: i.micro ? t("dashboard.normalSize") : t("dashboard.microWindow"), run: micro },
         null,
-        { icon: "refresh", label: "Trim memory", run: trim },
+        { icon: "refresh", label: t("dashboard.trimMemory"), run: trim },
         { caps: true },
-        { label: "Efficiency mode", checked: i.limits.eco, run: () => limits({ eco: !i.limits.eco }) },
-        { label: afkOn ? "Anti-AFK" : "Anti-AFK (off in Settings)", checked: i.antiAfk, run: () => api.instanceSetAntiAfk(i.id, !i.antiAfk).catch(toastError) },
+        { label: t("dashboard.efficiencyMode"), checked: i.limits.eco, run: () => limits({ eco: !i.limits.eco }) },
+        { label: afkOn ? t("dashboard.antiAfk") : t("dashboard.antiAfkOff"), checked: i.antiAfk, run: () => api.instanceSetAntiAfk(i.id, !i.antiAfk).catch(toastError) },
         null,
-        { icon: "x", label: "Close", run: () => close(false) },
-        { icon: "x", label: "Force close", run: () => close(true), danger: true },
+        { icon: "x", label: t("common.close"), run: () => close(false) },
+        { icon: "x", label: t("dashboard.forceClose"), run: () => close(true), danger: true },
       ]
     : [];
 
@@ -241,7 +243,7 @@ function ClientMenu({ at, onClose, afkOn }: { at: MenuAt | null; onClose: () => 
       ref={ref}
       popover="auto"
       role="menu"
-      aria-label="Client actions"
+      aria-label={t("dashboard.clientActions")}
       className="menu"
       onKeyDown={arrows}
       style={{ position: "fixed", positionArea: "none", inset: "auto", left: pos.left, top: pos.top, margin: 0, maxHeight: "calc(100vh - 8px)" }}
@@ -250,18 +252,18 @@ function ClientMenu({ at, onClose, afkOn }: { at: MenuAt | null; onClose: () => 
         it === null ? (
           <div key={n} role="separator" className="h-px my-1 bg-line" />
         ) : "caps" in it ? (
-          <div key="caps" role="group" aria-label="CPU limit" className="flex items-center gap-1 h-8 px-2.5">
-            <span className="flex-1 text-dim">CPU limit</span>
+          <div key="caps" role="group" aria-label={t("dashboard.cpuLimit")} className="flex items-center gap-1 h-8 px-2.5">
+            <span className="flex-1 text-dim">{t("dashboard.cpuLimit")}</span>
             {CAPS.map((c) => (
               <button
                 key={c}
                 role="menuitemradio"
                 aria-checked={(i?.limits.cpuCap ?? 0) === c}
                 className="seg mono h-6 px-1.5 text-xs"
-                aria-label={c ? `CPU limit ${c}%` : "No CPU limit"}
+                aria-label={c ? t("dashboard.cpuLimitPct", { pct: c }) : t("dashboard.noCpuLimit")}
                 onClick={run(() => limits({ cpuCap: c || null }))}
               >
-                {c ? `${c}` : "Off"}
+                {c ? `${c}` : t("common.off")}
               </button>
             ))}
           </div>
@@ -319,57 +321,57 @@ export function DashboardView({ accounts, onLaunch }: { accounts: AccountSummary
   const tile = (micro: boolean) =>
     act(() =>
       api.instancesTile(micro).then((n) => {
-        if (n < running.length) toast(`Laid out ${plural(n, "client")}. Minimized ones and ones without a window yet were left as they are.`);
+        if (n < running.length) toast(t("dashboard.laidOut", { count: n }));
       }),
     );
 
   return (
     <main className="scroll flex-1 min-w-0 px-10 pt-6 pb-12">
       <div className="enter flex flex-col">
-        <h1 className="text-xl font-semibold tracking-[-0.01em]">Dashboard</h1>
-        <p className="text-dim mt-1">Every client RoALT runs. Double-click one to bring it to the front; right-click for more.</p>
+        <h1 className="text-xl font-semibold tracking-[-0.01em]">{t("dashboard.title")}</h1>
+        <p className="text-dim mt-1">{t("dashboard.intro")}</p>
 
         <div className="flex flex-wrap items-center gap-2 mt-5">
-          <button className="btn btn-sm" disabled={busy || !running.length} onClick={tile(false)} title="Lay every client out on this monitor so all fit">
+          <button className="btn btn-sm" disabled={busy || !running.length} onClick={tile(false)} title={t("dashboard.tileHint")}>
             <Icon name="grid" size={12} />
-            Tile
+            {t("dashboard.tile")}
           </button>
-          <button className="btn btn-sm" disabled={busy || !running.length} onClick={tile(true)} title="Make every client 320 × 240 and lay them out on this monitor">
-            Tile micro
+          <button className="btn btn-sm" disabled={busy || !running.length} onClick={tile(true)} title={t("dashboard.tileMicroHint")}>
+            {t("dashboard.tileMicro")}
           </button>
           <button className="btn btn-sm" disabled={busy || !running.length} onClick={act(() => api.instancesShowAll("minimize"))}>
-            Minimize all
+            {t("dashboard.minimizeAll")}
           </button>
           <button className="btn btn-sm" disabled={busy || !running.length} onClick={act(() => api.instancesShowAll("restore"))}>
-            Restore all
+            {t("dashboard.restoreAll")}
           </button>
           <div className="w-40">
             <KillAllButton />
           </div>
           <button
             className="btn btn-sm"
-            title="Ask again which clients run"
+            title={t("dashboard.refreshHint")}
             onClick={() => {
               for (const queryKey of [qk.instances, qk.metrics, qk.multi]) void queryClient.invalidateQueries({ queryKey });
             }}
           >
             <Icon name="refresh" size={12} />
-            Refresh
+            {t("dashboard.refresh")}
           </button>
-          <span title="How often each live preview is redrawn. Higher rates use more CPU, more so with many clients.">
-            <Segmented label="Preview frame rate" mono value={fps} options={PREVIEW_FPS.map((f) => ({ value: f, label: `${f} FPS` }))} onChange={setFps} />
+          <span title={t("dashboard.previewFpsHint")}>
+            <Segmented label={t("dashboard.previewFps")} mono value={fps} options={PREVIEW_FPS.map((f) => ({ value: f, label: t("dashboard.fps", { fps: f }) }))} onChange={setFps} />
           </span>
           <span className="mono ml-auto text-xs text-dim" style={{ fontVariantNumeric: "tabular-nums" }}>
-            {running.length} running · {inGame} in game · CPU {pct(cpu)} · {mb(mem)}
+            {t("dashboard.statsRunning", { count: running.length })} · {t("dashboard.statsInGame", { count: inGame })} · {t("dashboard.statsCpu", { pct: pct(cpu) })} · {mb(mem)}
           </span>
         </div>
 
         {running.length === 0 ? (
           <div className="flex flex-col items-start gap-3 mt-8">
-            <p className="text-dim">No clients are running. Clients you launch show here with a live picture of their window.</p>
+            <p className="text-dim">{t("dashboard.empty")}</p>
             <button className="btn" onClick={onLaunch}>
               <Icon name="play" size={12} fill />
-              Go to Launch
+              {t("dashboard.goToLaunch")}
             </button>
           </div>
         ) : (
@@ -380,8 +382,7 @@ export function DashboardView({ accounts, onLaunch }: { accounts: AccountSummary
           </div>
         )}
         <p className="text-xs text-dim mt-6 max-w-[720px]">
-          Previews play live at the frame rate picked above while RoALT is on screen; a minimized client draws nothing. Micro window asks Roblox for a
-          320 × 240 window; Roblox may keep it bigger. Anti-AFK skips minimized clients.
+          {t("dashboard.footnote")}
         </p>
       </div>
       <ClientMenu at={menu} onClose={closeMenu} afkOn={afkOn} />

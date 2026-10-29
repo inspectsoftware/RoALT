@@ -189,7 +189,14 @@ CREATE TABLE settings (
 ) WITHOUT ROWID;
 ```
 
-Running instances and bulk batches live in memory only (PIDs mean nothing after a restart).
+Bulk batches live in memory only. Running instances live in memory, plus a `tracked (instance_id, data)`
+table (migration 006) holding each running client's `tracker::Saved` as JSON: instance, pid + start time,
+browser tracker id, bound log + offset, log facts. `Tracker::persist` rewrites it when a client starts,
+changes or ends (offsets alone every 10 s, and at exit). On start, before the first poll,
+`Tracker::readopt` follows again each saved client whose pid still runs as RobloxPlayerBeta.exe with the
+same start time (not multi-instance survivors then: `Multi::adopt`); the rest are deleted. Job objects
+can't be found again by a new process, so RoALT lifts the limits it set at exit (`Limiter::release_all`)
+and sets them anew after the restart.
 
 ### Core types (Rust, exported to TS)
 
@@ -370,7 +377,7 @@ doesn't retry a version that failed. Fallback: open roblox.com/download.
   (published, non-draft, non-prerelease) at start and every 6 h; a strictly newer `vX.Y.Z` tag with
   both assets is offered in a banner (Later hides it until the next start) and by Settings → Check now.
   Turning the switch off forgets the found version (the banner hides); on checks at once.
-  Update now (asks first while tracked clients run: they keep running, untracked after the restart) asks
+  Update now (asks first while tracked clients run: they keep running and are followed again after the restart) asks
   GitHub again, downloads from github.com (redirects only to GitHub's asset hosts; ≤ 200 MB, sig ≤ 4 KB)
   into a fresh temp folder, write-locks the file, verifies the release's name line + the bytes read back
   through that handle with CNG against the embedded public key (so an older signed installer can't pose

@@ -34,7 +34,9 @@ const MAX_INSTALLER: u64 = 50_000_000;
 pub const INSTALL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 /// Win32 `FILE_SHARE_READ`: others may read (and run) the file, never write or delete it.
 pub(crate) const FILE_SHARE_READ: u32 = 0x1;
-const BOOTSTRAPPER: &str = "A bootstrapper (e.g. Bloxstrap) manages this Roblox install and keeps it up to date; RoALT leaves it alone.";
+fn bootstrapper() -> String {
+    tr!("A bootstrapper (e.g. Bloxstrap) manages this Roblox install and keeps it up to date; RoALT leaves it alone.")
+}
 
 #[derive(Default)]
 pub struct Updater {
@@ -60,7 +62,7 @@ impl Updater {
     fn begin(&self) -> Result<Installing<'_>> {
         self.installing
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .map_err(|_| AppError::Invalid("Roblox is already being installed.".into()))?;
+            .map_err(|_| AppError::Invalid(tr!("Roblox is already being installed.")))?;
         Ok(Installing(&self.installing))
     }
 }
@@ -163,8 +165,15 @@ async fn check(app: &AppHandle) {
     }
     log::info!("auto-update: {:?} → {:?}", c.version, c.latest);
     match install(app).await {
-        Ok(c) => crate::commands::notice(app, false, format!("Roblox was updated to {}.", c.version.as_deref().unwrap_or("the latest version"))),
-        Err(e) => crate::commands::notice(app, true, format!("Roblox couldn't be updated: {e}")),
+        Ok(c) => crate::commands::notice(
+            app,
+            false,
+            match c.version.as_deref() {
+                Some(v) => tr!("Roblox was updated to {version}.", version = v),
+                None => tr!("Roblox was updated to the latest version."),
+            },
+        ),
+        Err(e) => crate::commands::notice(app, true, tr!("Roblox couldn't be updated: {why}", why = e.message())),
     }
 }
 
@@ -179,7 +188,7 @@ pub async fn install(app: &AppHandle) -> Result<RobloxClient> {
         INSTALL_EVENT,
         match &result {
             Ok(()) => InstallProgress::Done,
-            Err(e) => InstallProgress::Error { message: e.to_string() },
+            Err(e) => InstallProgress::Error { message: e.message() },
         },
     );
     if let Err(e) = &result {
@@ -191,13 +200,13 @@ pub async fn install(app: &AppHandle) -> Result<RobloxClient> {
 async fn run_install(app: &AppHandle, s: &App) -> Result<()> {
     // `installing` is set first: a launch from now on is refused, one already going is seen here.
     if s.bulk.any_busy() {
-        return Err(AppError::Invalid("Wait for the running launch, batch or auto-rejoin to finish, then install Roblox.".into()));
+        return Err(AppError::Invalid(tr!("Wait for the running launch, batch or auto-rejoin to finish, then install Roblox.")));
     }
     if !crate::instances::process::roblox_processes().is_empty() {
-        return Err(AppError::Invalid("Close every Roblox client first: installing Roblox ends them.".into()));
+        return Err(AppError::Invalid(tr!("Close every Roblox client first: installing Roblox ends them.")));
     }
     if client::find().is_ok_and(|e| client::managed_by_bootstrapper(&e)) {
-        return Err(AppError::Invalid(BOOTSTRAPPER.into()));
+        return Err(AppError::Invalid(bootstrapper()));
     }
     let emit = |p: InstallProgress| {
         let _ = app.emit(INSTALL_EVENT, p);
@@ -238,14 +247,14 @@ async fn run_install(app: &AppHandle, s: &App) -> Result<()> {
         Ok(e) => {
             let installed = installed_version(&e.path);
             if installed.as_deref() != Some(version.as_str()) {
-                return Err(AppError::Internal(format!(
-                    "Roblox's installer finished, but Roblox is still on {}.",
-                    installed.as_deref().unwrap_or("an unknown version")
-                )));
+                return Err(AppError::Internal(match installed.as_deref() {
+                    Some(v) => tr!("Roblox's installer finished, but Roblox is still on {version}.", version = v),
+                    None => tr!("Roblox's installer finished, but Roblox is still on an unknown version."),
+                }));
             }
             Ok(())
         }
-        Err(_) => Err(AppError::Internal("Roblox's installer finished, but Roblox wasn't found. Install it from roblox.com.".into())),
+        Err(_) => Err(AppError::Internal(tr!("Roblox's installer finished, but Roblox wasn't found. Install it from roblox.com."))),
     }
 }
 
@@ -258,7 +267,7 @@ fn run(exe: &Path, timeout: Duration) -> Result<Option<i32>> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| AppError::Internal(format!("Could not start Roblox's installer: {e}")))?;
+        .map_err(|e| AppError::Internal(tr!("Could not start Roblox's installer: {why}", why = e)))?;
     let deadline = Instant::now() + timeout;
     loop {
         if let Some(status) = child.try_wait()? {
@@ -268,7 +277,7 @@ fn run(exe: &Path, timeout: Duration) -> Result<Option<i32>> {
             // Ended, so launches aren't let in under a live installer and its folder can go.
             let _ = child.kill();
             let _ = child.wait();
-            return Err(AppError::Internal("Roblox's installer took over 10 minutes and was stopped. Try again, or install Roblox from roblox.com.".into()));
+            return Err(AppError::Internal(tr!("Roblox's installer took over 10 minutes and was stopped. Try again, or install Roblox from roblox.com.")));
         }
         std::thread::sleep(Duration::from_millis(250));
     }

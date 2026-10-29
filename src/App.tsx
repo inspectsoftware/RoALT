@@ -7,7 +7,6 @@ import { AddAccountDialog } from "./features/accounts/AddAccountDialog";
 import { DashboardView } from "./features/dashboard/DashboardView";
 import { DiscordView } from "./features/discord/DiscordView";
 import { GroupsNav } from "./features/accounts/GroupsNav";
-import { plural } from "./features/accounts/shared";
 import { FavouritesNav } from "./features/launch/Favourites";
 import { lastLaunchAccount, LaunchView } from "./features/launch/LaunchView";
 import { isRunning, KillAllButton, MultiInstanceSwitch, RunningPanel } from "./features/launch/Running";
@@ -19,6 +18,7 @@ import { Splash } from "./features/splash/Splash";
 import { UpdateBanner } from "./features/settings/UpdateBanner";
 import { PublicNetworkBanner } from "./features/settings/PublicNetworkBanner";
 import { UnlockScreen, type LockReason } from "./features/vault/UnlockScreen";
+import { setLang, t } from "./i18n";
 import { Icon } from "./ui/Icon";
 import { Divider, usePanelWidth } from "./ui/Resizer";
 import { TitleBar } from "./ui/TitleBar";
@@ -47,6 +47,8 @@ function Root() {
   const manualLockAt = useRef(0);
   const v = vault.data;
   const s = settings.data;
+  // Before any child renders, so the whole tree uses the chosen language.
+  setLang(s?.language);
   const unlocked = !!v && !v.locked;
 
   const markLocked = () => {
@@ -125,9 +127,9 @@ function Root() {
       {failed ? (
         <div className="flex-1 grid place-items-center p-8">
           <div className="flex flex-col items-start gap-3 max-w-sm">
-            <h1 className="text-[15px] font-semibold">RoALT couldn't start</h1>
+            <h1 className="text-[15px] font-semibold">{t("app.startFailed")}</h1>
             <p className="text-dim">{friendly(asError(failed))}</p>
-            <button className="btn" onClick={() => qc.invalidateQueries()}>Try again</button>
+            <button className="btn" onClick={() => qc.invalidateQueries()}>{t("common.tryAgain")}</button>
           </div>
         </div>
       ) : !v || !s ? (
@@ -218,7 +220,7 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
       <div className="flex-1 grid place-items-center p-8">
         <div className="flex flex-col items-start gap-3 max-w-sm">
           <p className="text-dim">{friendly(asError(failed))}</p>
-          <button className="btn" onClick={() => { accounts.refetch(); groups.refetch(); }}>Try again</button>
+          <button className="btn" onClick={() => { accounts.refetch(); groups.refetch(); }}>{t("common.tryAgain")}</button>
         </div>
       </div>
     );
@@ -232,7 +234,7 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
   const launchAs = (ids: number[]) => {
     const valid = ids.filter((id) => accounts.data?.some((a) => a.id === id && a.status === "valid"));
     if (!valid.length) return;
-    if (valid.length < ids.length) toast(`Left out ${plural(ids.length - valid.length, "account")} that can't launch`);
+    if (valid.length < ids.length) toast(t("app.leftOut", { count: ids.length - valid.length }));
     setPicked(valid);
     setView("launch");
   };
@@ -244,52 +246,52 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
   };
   return (
     <div className="flex-1 flex min-h-0">
-      <nav aria-label="Sections" style={{ width: nav.width }} className="flex-none flex flex-col px-2 py-3 bg-panel border-r border-line">
+      <nav aria-label={t("app.sections")} style={{ width: nav.width }} className="flex-none flex flex-col px-2 py-3 bg-panel border-r border-line">
         <div className="flex flex-col gap-0.5">
           <button className="nav-item" aria-current={view === "dashboard" ? "page" : undefined} onClick={() => setView("dashboard")}>
             <Icon name="grid" />
-            <span className="flex-1">Dashboard</span>
+            <span className="flex-1 min-w-0 truncate">{t("app.nav.dashboard")}</span>
             {running > 0 && (
-              <span className="mono text-xs text-accent-text" title={`${running} running`}>
+              <span className="mono text-xs text-accent-text" title={t("app.running", { count: running })}>
                 {running}
               </span>
             )}
           </button>
           <button className="nav-item" aria-current={view === "accounts" ? "page" : undefined} onClick={showAll}>
             <Icon name="accounts" />
-            <span className="flex-1">Accounts</span>
+            <span className="flex-1 min-w-0 truncate">{t("app.nav.accounts")}</span>
             <span className="mono text-xs text-dim">{accounts.data.length}</span>
           </button>
           <button className="nav-item" aria-current={view === "launch" ? "page" : undefined} onClick={() => setView("launch")}>
             <Icon name="play" fill />
-            <span className="flex-1">Launch</span>
+            <span className="flex-1 min-w-0 truncate">{t("app.nav.launch")}</span>
             {running > 0 && (
-              <span className="mono text-xs text-accent-text" title={`${running} running`}>
+              <span className="mono text-xs text-accent-text" title={t("app.running", { count: running })}>
                 {running}
               </span>
             )}
           </button>
           <button className="nav-item" aria-current={view === "servers" ? "page" : undefined} onClick={openServers}>
             <Icon name="servers" />
-            <span className="flex-1">Servers</span>
+            <span className="flex-1 min-w-0 truncate">{t("app.nav.servers")}</span>
           </button>
           <button className="nav-item" aria-current={view === "monitor" ? "page" : undefined} onClick={() => setView("monitor")}>
             <Icon name="monitor" />
-            <span className="flex-1">Monitor</span>
+            <span className="flex-1 min-w-0 truncate">{t("app.nav.monitor")}</span>
           </button>
           <button className="nav-item" aria-current={view === "discord" ? "page" : undefined} onClick={() => setView("discord")}>
             <Icon name="bell" />
-            <span className="flex-1">Discord</span>
+            <span className="flex-1 min-w-0 truncate">Discord</span>
           </button>
           <button className="nav-item" aria-current={view === "settings" ? "page" : undefined} onClick={() => setView("settings")}>
             <Icon name="settings" />
-            <span className="flex-1">Settings</span>
+            <span className="flex-1 min-w-0 truncate">{t("app.nav.settings")}</span>
           </button>
           {view === "settings" && (
             <div className="enter flex flex-col pl-7 pt-1">
               {SETTINGS_SECTIONS.map(([id, label]) => (
                 <button key={id} className="sub" onClick={() => document.getElementById(id)?.scrollIntoView({ block: "start" })}>
-                  {label}
+                  {t(label)}
                 </button>
               ))}
             </div>
@@ -312,11 +314,11 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
           <KillAllButton />
           <div className="mono flex items-center gap-2 text-[11px] text-dim">
             <span aria-hidden="true" className="w-1.5 h-1.5 flex-none bg-accent-text" />
-            Vault · {vault.mode === "master" ? "master password" : "DPAPI"} · unlocked
+            {vault.mode === "master" ? t("app.vaultUnlockedMaster") : t("app.vaultUnlockedDpapi")}
           </div>
         </div>
       </nav>
-      <Divider panel={nav} side="left" label="Sidebar width" />
+      <Divider panel={nav} side="left" label={t("app.sidebarWidth")} />
 
       {view === "dashboard" ? (
         <DashboardView accounts={accounts.data} onLaunch={() => setView("launch")} />

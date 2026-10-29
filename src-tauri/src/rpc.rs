@@ -80,10 +80,6 @@ fn send(pipe: &mut File, activity: &Value, nonce: u64) -> std::io::Result<()> {
     Ok(())
 }
 
-fn alts(n: usize) -> String {
-    format!("{n} alt{}", if n == 1 { "" } else { "s" })
-}
-
 /// What the profile shows (pure): `details` and `state`. Idling until a client is in a game,
 /// then the game most clients play (the first launched on a tie) and how many run.
 fn status(instances: &[Instance], game_name: impl Fn(i64) -> Option<String>) -> (String, String) {
@@ -100,15 +96,22 @@ fn status(instances: &[Instance], game_name: impl Fn(i64) -> Option<String>) -> 
         }
     }
     let Some(top) = games.iter().max_by(|a, b| a.1.cmp(&b.1).then(b.2.cmp(&a.2))) else {
-        let state = if live.is_empty() { "Managing Roblox alts".into() } else { format!("{} open", alts(live.len())) };
-        return ("Idling".into(), state);
+        let state = if live.is_empty() {
+            tr!("Managing Roblox alts")
+        } else {
+            trn!(live.len(), "{n} alt open", "{n} alts open")
+        };
+        return (tr!("Idling"), state);
     };
-    let name = game_name(top.0).unwrap_or_else(|| "a Roblox game".into());
     let state = match games.len() {
-        1 => format!("Running {}", alts(live.len())),
-        n => format!("{} · {n} games", alts(live.len())),
+        1 => trn!(live.len(), "Running {n} alt", "Running {n} alts"),
+        n => trn!(live.len(), "{n} alt · {games} games", "{n} alts · {games} games", games = n),
     };
-    (format!("Playing {name}"), state)
+    let details = match game_name(top.0) {
+        Some(name) => tr!("Playing {game}", game = name),
+        None => tr!("Playing a Roblox game"),
+    };
+    (details, state)
 }
 
 /// The full activity for `status`, with the time that status began.
@@ -117,10 +120,10 @@ fn activity((details, state): &(String, String), since_ms: i64) -> Value {
         "details": details,
         "state": state,
         "timestamps": { "start": since_ms / 1000 },
-        "assets": { "large_image": "roalt", "large_text": "RoALT · Managing Roblox alts" },
+        "assets": { "large_image": "roalt", "large_text": format!("RoALT · {}", tr!("Managing Roblox alts")) },
         "buttons": [
-            { "label": "Get RoALT", "url": DOWNLOAD },
-            { "label": "Join Discord", "url": INVITE },
+            { "label": tr!("Get RoALT"), "url": DOWNLOAD },
+            { "label": tr!("Join Discord"), "url": INVITE },
         ],
     })
 }
@@ -192,6 +195,7 @@ mod tests {
             throttled: false,
             micro: false,
             fps_cap: None,
+            sign_in_problem: false,
         }
     }
 

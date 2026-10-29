@@ -2,6 +2,7 @@
 import { MutationCache, QueryClient, queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type AccountPatch, type AccountPresence, type AccountSummary, type Group, type Settings, type SettingsPatch } from "./api";
 import { toastError } from "./ui/Toast";
+import { t } from "./i18n";
 
 export const qk = {
   vault: ["vault"],
@@ -71,9 +72,9 @@ export const useMultiStatus = () =>
 export const useNetwork = () => useQuery({ queryKey: qk.network, queryFn: api.networkStatus });
 
 /** Why launching is refused on this network (`network::blocked`), or null. */
-export function publicBlock(network: { public: string | null } | undefined, settings: { allowPublicNetworks: boolean } | undefined) {
+export function publicBlock(network: { public: boolean } | undefined, settings: { allowPublicNetworks: boolean } | undefined) {
   if (!network?.public || settings?.allowPublicNetworks !== false) return null;
-  return `You're on a public network (${network.public}). Join a private network, or allow public networks in Settings, Security.`;
+  return t("app.publicBlocked");
 }
 
 /** The Roblox client and its versions; roblox://client replaces it. */

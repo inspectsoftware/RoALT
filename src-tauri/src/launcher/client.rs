@@ -49,10 +49,9 @@ pub fn find() -> Result<ClientExe> {
         .find(|p| p.is_file() && !in_store(p))
         .or_else(|| newest(versions_dirs().iter().flat_map(|d| players_in(d)).filter(|(p, _)| !in_store(p))));
     let path = path.ok_or_else(|| {
-        AppError::Invalid(
+        AppError::Invalid(tr!(
             "Roblox isn't installed. Install it from roblox.com, then try again. (The Microsoft Store version can't be used: install the one from roblox.com.)"
-                .into(),
-        )
+        ))
     })?;
     Ok(ClientExe { bootstrapper: !is_player(&path), path })
 }
@@ -120,7 +119,7 @@ fn unquote(s: String) -> PathBuf {
 /// its start time, read while our handle still reserves the PID (0: already gone). The URI
 /// and the arguments are never logged.
 pub fn start(exe: &ClientExe, uri: &Secret, extra: &[String]) -> Result<(u32, u64)> {
-    let dir = exe.path.parent().ok_or_else(|| AppError::Internal("Roblox's folder is unknown.".into()))?;
+    let dir = exe.path.parent().ok_or_else(|| AppError::Internal(tr!("Roblox's folder is unknown.")))?;
     let mut cmd = Command::new(&exe.path);
     cmd.raw_arg(uri.expose());
     for a in extra {
@@ -132,7 +131,7 @@ pub fn start(exe: &ClientExe, uri: &Secret, extra: &[String]) -> Result<(u32, u6
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| AppError::Internal(format!("Could not start Roblox: {e}")))?;
+        .map_err(|e| AppError::Internal(tr!("Could not start Roblox: {why}", why = e)))?;
     let started = crate::instances::process::start_time(child.id()).unwrap_or(0);
     // Dropping the Child closes its process and thread handles; the process keeps running.
     Ok((child.id(), started))

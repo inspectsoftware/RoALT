@@ -76,7 +76,7 @@ let settings: Settings = {
   antiAfk: { enabled: false, intervalMin: 15, mode: "focus" },
   discord: { crash: true, hang: true, memRestart: true, disconnect: true, restart: true, breaker: true, batchDone: true, launch: false, statusEveryMin: 0 },
   autoUpdate: false, selfUpdate: true, discordPresence: true, minimizeOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0,
-  remote: { enabled: false, port: 47800 }, allowPublicNetworks: false,
+  remote: { enabled: false, port: 47800 }, allowPublicNetworks: false, language: "",
 };
 let remotePin = "48213907";
 
@@ -185,7 +185,7 @@ function track(accountId: number, pid: number, target: LaunchTarget, placeId: nu
   const i: Instance = {
     id: crypto.randomUUID(), accountId, pid, state: "starting", target, placeId, jobId: null,
     startedAt: Date.now(), endedAt: null, viaBootstrapper, note: null, rejoins, limits: { cpuCap: null, eco: false, trimEveryMin: null, affinity: null },
-    antiAfk: true, afkAt: null, throttled: false, micro: false, fpsCap,
+    antiAfk: true, afkAt: null, throttled: false, micro: false, fpsCap, signInProblem: false,
   };
   instances.push(i);
   if (!lockHeld) eventHolder = i.id;
@@ -1035,7 +1035,7 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "remote_new_certificate":
       return { running: settings.remote.enabled, urls: [`https://192.168.1.20:${settings.remote.port}`], fingerprint: "9C:04:E7:31:AB:5F:12:D8:60:3E:C9:77:0B:F4:28:96:DA:41:7F:05:E3:BC:62:19:8A:D7:4C:20:F1:6B:93:5E" };
     case "network_status":
-      return { public: null };
+      return { public: false };
     case "remote_pin":
       return remotePin;
     case "remote_pin_regenerate":

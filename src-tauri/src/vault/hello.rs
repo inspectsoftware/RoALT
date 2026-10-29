@@ -36,9 +36,7 @@ pub async fn hello_available() -> bool {
 fn verify(hwnd: HWND, message: &HSTRING) -> Result<()> {
     let available = UserConsentVerifier::CheckAvailabilityAsync().and_then(|op| op.join()).map_err(failed)?;
     if available != UserConsentVerifierAvailability::Available {
-        return Err(AppError::Invalid(
-            "Windows Hello isn't set up. Set a master password in Settings to reveal cookies.".into(),
-        ));
+        return Err(AppError::Invalid(tr!("Windows Hello isn't set up. Set a master password in Settings to reveal cookies.")));
     }
     let interop = factory::<UserConsentVerifier, IUserConsentVerifierInterop>().map_err(failed)?;
     // SAFETY: `hwnd` is the live main window; the call only reads it to parent the prompt.
@@ -47,12 +45,12 @@ fn verify(hwnd: HWND, message: &HSTRING) -> Result<()> {
     match op.join().map_err(failed)? {
         Outcome::Verified => Ok(()),
         Outcome::Canceled => Err(AppError::Cancelled),
-        Outcome::DeviceBusy => Err(AppError::Invalid("Windows Hello is busy. Try again.".into())),
-        Outcome::RetriesExhausted => Err(AppError::Invalid("Too many failed attempts. Try again later.".into())),
-        _ => Err(AppError::Invalid("Windows Hello couldn't verify you.".into())),
+        Outcome::DeviceBusy => Err(AppError::Invalid(tr!("Windows Hello is busy. Try again."))),
+        Outcome::RetriesExhausted => Err(AppError::Invalid(tr!("Too many failed attempts. Try again later."))),
+        _ => Err(AppError::Invalid(tr!("Windows Hello couldn't verify you."))),
     }
 }
 
 fn failed(e: windows::core::Error) -> AppError {
-    AppError::Invalid(format!("Windows Hello failed: {}", e.message()))
+    AppError::Invalid(tr!("Windows Hello failed: {why}", why = e.message()))
 }

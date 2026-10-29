@@ -213,7 +213,7 @@ master-password vault locks. You can allow public networks in Settings, Security
 > compare its SHA-256 with `SHA256SUMS.txt` on the release page, then choose **More info → Run anyway**.
 >
 > ```powershell
-> Get-FileHash .\RoALT-Setup-0.6.5.exe -Algorithm SHA256
+> Get-FileHash .\RoALT-Setup-0.6.6.exe -Algorithm SHA256
 > ```
 
 Your accounts and settings live in `%LOCALAPPDATA%\RoALT`. Uninstalling keeps them unless you tick

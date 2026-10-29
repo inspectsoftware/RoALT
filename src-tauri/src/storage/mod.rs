@@ -118,6 +118,7 @@ impl Db {
             M::up(include_str!("migrations/003_crashes.sql")),
             M::up(include_str!("migrations/004_discord_mute.sql")),
             M::up(include_str!("migrations/005_fps_cap.sql")),
+            M::up(include_str!("migrations/006_tracked.sql")),
         ])
             .to_latest(&mut conn)
             .map_err(|e| AppError::Storage(e.to_string()))?;

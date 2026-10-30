@@ -1,7 +1,5 @@
 <div align="center">
 
-<img src="docs/images/banner.png" width="900" alt="RoALT: every alt, one click. The free Roblox account manager and multi-launcher for Windows.">
-
 # RoALT
 
 ### Every Roblox account you own, signed in, checked and one click from any game.

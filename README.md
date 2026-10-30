@@ -28,7 +28,7 @@ Your cookies stay encrypted on your PC. Nothing is sent anywhere except Roblox.
 
 <br>
 
-<img src="docs/images/accounts.png" alt="RoALT's Accounts view: a list of accounts with their status, groups and a details panel" width="900">
+<img src="docs/images/home.png" alt="RoALT's Home page: four running clients with live previews, and CPU, memory and GPU dials" width="900">
 
 </div>
 
@@ -60,6 +60,17 @@ and only ever one client open at a time. RoALT removes all of that.
 
 It runs entirely on your PC. There is no RoALT account, no RoALT server and no tracking.
 
+<table>
+<tr>
+<td width="50%"><img src="docs/images/accounts.png" alt="Accounts: every account with its status, groups and a details panel"><br><sub><b>Accounts:</b> status, groups and details at a glance</sub></td>
+<td width="50%"><img src="docs/images/play.png" alt="Play: pick who plays, then paste where to"><br><sub><b>Play:</b> who plays, where, then the big button</sub></td>
+</tr>
+<tr>
+<td><img src="docs/images/performance.png" alt="Performance: FPS cap, lowest graphics and graphics flags"><br><sub><b>Performance:</b> FPS cap, graphics flags, presets and profiles</sub></td>
+<td><img src="docs/images/settings.png" alt="Settings: theme, accent colour, background image and more"><br><sub><b>Settings:</b> dark or light, any accent, your own background</sub></td>
+</tr>
+</table>
+
 <br>
 
 ## ✨ Features
@@ -70,7 +81,7 @@ It runs entirely on your PC. There is no RoALT account, no RoALT server and no t
 
 ### 🔐 Encrypted vault
 Cookies are encrypted with **Windows DPAPI**, or with your own **master password** (Argon2id + AES-256-GCM)
-with auto-lock. Reveal and copy sit behind **Windows Hello** or the master password.
+with auto-lock and an optional **recovery code**. Reveal and copy sit behind **Windows Hello** or the master password.
 
 </td>
 <td width="50%" valign="top">
@@ -122,9 +133,10 @@ CPU, memory, disk/network and uptime per client, with sparklines and totals, ref
 </td>
 <td valign="top">
 
-### 🎚️ Performance tools
-Cap one client's CPU (down to 5%), use efficiency mode, pin cores or trim memory. An adaptive mode
-limits every client that isn't in front. Opt-in upload limit for all clients.
+### 🎚️ Performance tab
+FPS cap, lowest graphics and graphics flags (MSAA, textures, no grass, gray sky), with presets and
+shareable profiles. Cap one client's CPU, pin cores or trim memory. Adaptive mode limits every client
+that isn't in front.
 
 </td>
 </tr>
@@ -148,8 +160,9 @@ it is signed by Roblox Corporation. Optional auto-update when no client runs.
 <td valign="top">
 
 ### 🖥️ Home
-Every running client as a live window thumbnail. Right-click one to focus, minimize, shrink it to a
-micro window, limit it or close it. Tile all clients in a grid in one click.
+Every running client as a live window thumbnail, with your PC's CPU, memory and GPU. Right-click one to
+focus, minimize, shrink it to a tiny window, limit it or close it. Tile all clients in one click. Anti-AFK
+has its own switch here.
 
 </td>
 <td valign="top">
@@ -157,6 +170,22 @@ micro window, limit it or close it. Tile all clients in a grid in one click.
 ### 🛡️ Public networks
 Windows calls some networks **Public** (café, hotel, school Wi-Fi). Turn off **Allow public networks** in Settings,
 Security, and RoALT won't launch on them and a master-password vault locks there. It is on by default.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+### ↔️ Free resizing
+Drag a client's edges to any size, past the 800×600 minimum Roblox holds it to, and move small windows
+without them snapping back. Or start every client tiny.
+
+</td>
+<td valign="top">
+
+### 🎨 Soft Deck design
+A soft, very dark interface with a floating page, or a light theme. Pick any accent colour and your own
+background image, and skip the splash screen if you'd rather not wait.
 
 </td>
 </tr>
@@ -173,24 +202,24 @@ Security, and RoALT won't launch on them and a master-password vault locks there
 | 🚀 **Play** | Game links, place IDs, `roblox://` links, job IDs, private server links, `roblox.com/share` links (both formats), universes, profiles, `@username`. Join a friend or one of your other accounts. Favourites on the Play page and in the tray. `Ctrl+Enter` to launch. |
 | 🪟 **Batches** | Accounts launch strictly one after another with a stagger (default 6 s). **Same server**: *Pick a server* finds one with room for everyone first; *Follow the first* sends the rest to wherever the first account landed. Cancel at any time; one click re-picks the accounts that didn't launch. |
 | 🔁 **Recovery** | Auto-rejoin after kicks, shutdowns and lost connections (not after you leave on purpose). Opt-in auto-restart for crashes, frozen windows (30 s) and a memory limit. Crash breaker: default 3 relaunches in 10 minutes, with growing backoff. Per-account "Allow disconnect". Crash history with the log's reason. |
-| ↔️ **Free resizing** | Drag a client's edge to any size, past the minimum Roblox holds its window to. RoALT sizes the window itself (a mouse hook in RoALT's own process); nothing goes into the client. |
+| ↔️ **Free resizing** | Drag a client's edge to any size, past the minimum Roblox holds its window to, and move a small window by its title bar without it growing back. RoALT sizes the window itself (a mouse hook in RoALT's own process); nothing goes into the client. **Start clients tiny** opens every new client at a size you choose. |
 | 🖥️ **Home** | Live preview per client at 15, 30 or 60 FPS (your pick, while RoALT is on screen), with state, game, uptime, CPU and RAM. The **⋯** key, right-click, the menu key or `Shift+F10` for focus, minimize, restore, tiny window (any size, 320×240 by default) and back, CPU limit, efficiency mode, anti-AFK, close. **Tile** fits all clients in a grid on the screen; **Tile micro** lays out micro windows. Minimize all, Restore all. |
 | 🛑 **Stop all** | Hold one button in the sidebar, use the tray, or press a global **panic hotkey** you choose (off by default) to end every Roblox process and stop pending launches and rejoins. |
 | ⏲️ **Automation** | Minimize each new client on launch. Auto-shutdown timer: close the clients and shut the PC down at a set time (survives a RoALT restart, can be cancelled). Hourly Roblox log cleaner (logs older than a day or over 50 MB). Open logs button; RoALT's own logs rotate at 5 MB. |
 | ⚙️ **Launch control** | Custom launch arguments (default and per account, checked before use and never logged), a cooldown between launches, a configurable close grace (1–60 s). |
 | 🎚️ **Limits** | Per client: CPU cap, efficiency mode, core affinity, working-set trim (every N minutes or "Trim now"). Adaptive manager for background clients; your manual limits always win. **Memory throttle**: a client over a RAM limit gets a CPU cap, which lowers its frame rate, until it drops under 90 % of the limit. |
 | 🎞️ **FPS cap & graphics** | A default frame-rate cap (5–360), a per-account override and a per-launch one under Play's More options (a rejoin keeps it), plus the lowest graphics for every client (on by default). Set through Roblox's own Maximum Frame Rate and Graphics Quality just before each client starts; your own Roblox settings are put back once it has read them, and again when such a client closes (or when RoALT next starts, if it wasn't running then). Everything performance-related lives in its own **Performance** tab. |
-| 🪶 **Lighter rendering** | Clients RoALT starts get Roblox's lightest allowed rendering flags (lowest textures, no anti-aliasing or grass, low detail; on by default): about half the GPU time and less GPU memory per client. Written just before each client starts and put back once it has read them; skipped under a bootstrapper. |
+| 🪶 **Lighter rendering** | Clients RoALT starts get low geometry detail and the graphics flags below (on by default): less GPU time and memory per client. Written just before each client starts and put back once it has read them; skipped under a bootstrapper. |
 | 🎚️ **Graphics flags** | Pick MSAA, texture quality, rendering mode, gray sky, no grass and lowest render quality, from the FastFlags Roblox still allows. Roblox may ignore Vulkan and OpenGL. |
 | 👑 **Main account** | Mark an account **Full quality** and its clients keep your own Roblox graphics, without lowest graphics or lighter rendering. |
 | 🕘 **Recent servers** | Each account remembers the servers it reached (stored on this PC); rejoin a public one in a click. |
 | 🩺 **Diagnostics** | Copy or save a report for bug reports, from Debug: tickets, cookies, your Windows user name and IP addresses are removed. |
 | 📤 **Performance profiles** | Export your performance settings to a file or a share code, or import someone else's: you see what changes, then apply it. Only performance settings travel, never accounts, passwords, launch arguments or hotkeys. |
 | 📶 **Bandwidth** | One upload cap for all Roblox clients through a Windows QoS policy. Applied only when you click Apply (admin prompt); cleared when Windows restarts. |
-| 💤 **Anti-AFK** | Off by default. While you are away from the PC, every few minutes each client is briefly brought to the front and gets one Space press, so Roblox doesn't kick it after 20 idle minutes. Stops the moment you touch the mouse. Or **in the background**: a Tab press is posted to the window without bringing it to the front, even when minimized (Roblox may not count it in every game; auto-rejoin stays the fallback). Per-client opt-out. |
+| 💤 **Anti-AFK** | Off by default, with a switch on Home. While you are away from the PC, every few minutes each client is briefly brought to the front and gets one Space press, so Roblox doesn't kick it after 20 idle minutes. Stops the moment you touch the mouse. Or **in the background**: a Tab press is posted to the window without bringing it to the front, even when minimized (Roblox may not count it in every game; auto-rejoin stays the fallback). Per-client opt-out. |
 | 🔔 **Discord** | Crash, disconnect, restart and batch alerts, plus an opt-in alert when a client gets into a game. Mute alerts per account. **Rich presence** (on by default, a switch in Settings): your profile shows "Playing RoALT", idling or with the game and how many alts run. |
 | 🔄 **RoALT updates** | Looks for a new RoALT on GitHub Releases at start and every 6 hours (can be turned off; *Check now* in Settings). A banner offers it; *Update now* downloads it, checks its release signature, installs it silently and restarts RoALT. Never installs on its own. |
-| 🧰 **Comfort** | Tray menu with favourites, close to tray, relaunch an ended client in one click, movable data folder, keyboard shortcuts. Dark, light or system theme, any accent colour, and your own background image. |
+| 🧰 **Comfort** | Tray menu with favourites, close to tray, relaunch an ended client in one click, movable data folder, keyboard shortcuts. Dark, light or system theme, any accent colour, and your own background image, with a choice of how much the theme covers it. Optional skip of the splash screen. Your RoALT and Roblox versions at the top of Settings. |
 
 </details>
 
@@ -276,7 +305,7 @@ In **Settings → Launching**, turn on **Auto-rejoin** (and, if you like, **Auto
 
 | Keys | Action |
 |---|---|
-| `Ctrl+1` … `Ctrl+7` | Home, Accounts, Play, Servers, Settings, Monitor, Discord |
+| `Ctrl+1` … `Ctrl+9` | Home, Accounts, Play, Servers, Settings, Monitor, Discord, Debug, Performance |
 | `Ctrl+N` | Add account |
 | `Ctrl+F` | Search accounts |
 | `Ctrl+Enter` | Play |
@@ -346,6 +375,8 @@ In **Settings → Launching**, turn on **Auto-rejoin** (and, if you like, **Auto
   mode, posts a Tab press to its window.
 - **Window tools** (thumbnails, minimize, micro, tile) use ordinary Windows window calls (`PrintWindow`, `ShowWindow`,
   `SetWindowPos`).
+- **Free resizing** uses a low-level mouse hook in RoALT's own process. It sees where the mouse is across the PC, stores
+  nothing and sends nothing, and only acts on a press on the edge or title bar of a client RoALT started.
 - **Bandwidth limit (opt-in)** adds a Windows QoS policy named `RoALT-Roblox` through an admin prompt, only when you click
   Apply. Windows drops it on restart. It is the only change RoALT makes to Windows.
 
@@ -418,7 +449,8 @@ Without a code the password can't be recovered: that is what makes it safe. Remo
 <br>
 
 Yes. RoALT launches through the registered bootstrapper and follows its clients. It won't install Roblox updates over a
-bootstrapper, since the bootstrapper keeps Roblox up to date itself.
+bootstrapper, since the bootstrapper keeps Roblox up to date itself. RoALT's graphics flags are skipped there, because a
+bootstrapper writes its own.
 
 </details>
 
@@ -472,8 +504,8 @@ flowchart LR
 |---|---|
 | [`vault/`](src-tauri/src/vault) | Envelope encryption: one random data key encrypts every secret (AES-256-GCM, row-bound AAD). The key is wrapped with DPAPI, or with an Argon2id key from the master password and then DPAPI. Windows Hello re-auth, `.roalt` backups. |
 | [`roblox_api/`](src-tauri/src/roblox_api) | The one typed Roblox client. Every URL in `endpoints.rs`. CSRF from the real request's 403, per-route queues driven by `x-ratelimit-*`, rotated `.ROBLOSECURITY` saved atomically, three error-body shapes parsed. |
-| [`launcher/`](src-tauri/src/launcher) | `target.rs` parses any pasted link locally; `uri.rs` builds the `roblox-player:` URI exactly like the website; `bulk.rs` runs batches and same-server; `fps.rs` the FPS cap; `update.rs` + `authenticode.rs` install Roblox updates after `WinVerifyTrust`. |
-| [`instances/`](src-tauri/src/instances) | `tracker.rs` ties each client to its account by PID, start time and log file; `logwatch.rs` reads job IDs and disconnects; `rejoin.rs` and the crash breaker; `limits.rs` CPU caps, affinity, efficiency mode, trims; `metrics.rs`; `multi.rs` the singleton lock and take-over; `window.rs` thumbnails, micro and tile; `qos.rs`; `afk.rs`. |
+| [`launcher/`](src-tauri/src/launcher) | `target.rs` parses any pasted link locally; `uri.rs` builds the `roblox-player:` URI exactly like the website; `bulk.rs` runs batches and same-server; `client_settings.rs` the FPS cap and lowest graphics; `flags.rs` the rendering flags; `update.rs` + `authenticode.rs` install Roblox updates after `WinVerifyTrust`. |
+| [`instances/`](src-tauri/src/instances) | `tracker.rs` ties each client to its account by PID, start time and log file; `logwatch.rs` reads job IDs and disconnects; `rejoin.rs` and the crash breaker; `limits.rs` CPU caps, affinity, efficiency mode, trims; `metrics.rs`; `multi.rs` the singleton lock and take-over; `window.rs` thumbnails, micro and tile; `resize.rs` free resizing; `qos.rs`; `afk.rs`. |
 | [`discord.rs`](src-tauri/src/discord.rs) | Webhook alerts: host-checked URL, events coalesced every 2 s, `retry_after` honoured. |
 | [`webview.rs`](src-tauri/src/webview.rs) | Sign-in and session windows on temporary WebView2 profiles, deleted after use. |
 | [`storage/`](src-tauri/src/storage) | SQLite through `rusqlite` with numbered migrations. Running clients live in memory only. |
@@ -556,7 +588,7 @@ npm run tauri dev        # run the app with hot reload
 │  ├─ bindings/            ts-rs generated types (committed)
 │  ├─ dev/mockIpc.ts       mock backend for `npm run dev`
 │  ├─ ui/                  shared components
-│  └─ features/            dashboard · accounts · launch · servers · monitor · discord · settings · vault
+│  └─ features/            dashboard · accounts · launch · servers · performance · monitor · discord · debug · settings · splash · vault
 ├─ src-tauri/              Rust backend
 │  ├─ src/
 │  │  ├─ main.rs           builder, plugins, managed state

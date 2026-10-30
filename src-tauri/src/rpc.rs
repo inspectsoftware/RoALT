@@ -211,6 +211,8 @@ mod tests {
             throttled: false,
             micro: false,
             fps_cap: None,
+            relaunching: false,
+            relaunch_problem: None,
             sign_in_problem: false,
         }
     }

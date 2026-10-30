@@ -5,7 +5,7 @@ use aes_gcm::{Aes256Gcm, Nonce};
 use argon2::{Algorithm, Argon2, Params, Version};
 use zeroize::Zeroizing;
 
-use super::Kdf;
+use super::{Kdf, Secret};
 use crate::error::{AppError, Result};
 
 /// RFC 9106 second recommendation: 64 MiB, 3 passes, 4 lanes.
@@ -34,6 +34,48 @@ const COST: (u32, u32, u32) = (DEFAULT_M_KIB, DEFAULT_T, DEFAULT_P);
 // ponytail: unoptimised Argon2 takes ~3 s at the default cost, so tests derive with a cheap one.
 #[cfg(test)]
 const COST: (u32, u32, u32) = (1024, 1, 1);
+
+/// A fresh `Kdf` for a recovery code: a short code needs more cost than a password, and it is
+/// rarely used.
+pub fn new_recovery_kdf() -> Kdf {
+    let (m_kib, t, p) = RECOVERY_COST;
+    Kdf { salt: random_bytes::<16>().to_vec(), m_kib, t, p }
+}
+
+#[cfg(not(test))]
+const RECOVERY_COST: (u32, u32, u32) = (256 * 1024, 3, 4);
+#[cfg(test)]
+const RECOVERY_COST: (u32, u32, u32) = COST;
+
+/// No `0 O 1 I L`: a code gets read off paper. 9 of these are about 44 bits.
+const CODE_ALPHABET: &[u8; 31] = b"23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+const CODE_LEN: usize = 9;
+/// The largest multiple of the alphabet's size in a byte: above it, `% 31` would be biased.
+const CODE_BYTE_LIMIT: u8 = 248;
+
+fn dashed(code: &str) -> Secret {
+    Secret::new(format!("{}-{}-{}", &code[..3], &code[3..6], &code[6..]))
+}
+
+/// A new recovery code from the OS RNG, as `XXX-XXX-XXX`.
+pub fn recovery_code() -> Secret {
+    let mut code = Zeroizing::new(String::with_capacity(CODE_LEN));
+    while code.len() < CODE_LEN {
+        let [b] = random_bytes::<1>();
+        if b < CODE_BYTE_LIMIT {
+            code.push(CODE_ALPHABET[b as usize % CODE_ALPHABET.len()] as char);
+        }
+    }
+    dashed(&code)
+}
+
+/// What the user typed as `XXX-XXX-XXX`, ignoring case, dashes and spaces; None if it can't be a code.
+pub fn normalize_code(raw: &str) -> Option<Secret> {
+    let code: Zeroizing<String> = Zeroizing::new(
+        raw.chars().filter(|c| *c != '-' && !c.is_whitespace()).map(|c| c.to_ascii_uppercase()).collect(),
+    );
+    (code.len() == CODE_LEN && code.bytes().all(|b| CODE_ALPHABET.contains(&b))).then(|| dashed(&code))
+}
 
 /// Argon2id(password, kdf) → 32-byte key.
 pub fn derive_key(password: &str, kdf: &Kdf) -> Result<Zeroizing<[u8; 32]>> {
@@ -103,5 +145,35 @@ mod tests {
         assert_eq!(*a, *derive_key("hunter22", &kdf).unwrap());
         assert_ne!(*a, *derive_key("hunter23", &kdf).unwrap());
         assert!(Params::new(DEFAULT_M_KIB, DEFAULT_T, DEFAULT_P, Some(32)).is_ok());
+    }
+
+    #[test]
+    fn recovery_codes_have_the_format_and_alphabet() {
+        assert_eq!(CODE_ALPHABET.len(), 31);
+        assert!(!CODE_ALPHABET.iter().any(|b| b"0O1IL".contains(b)));
+        assert_eq!(CODE_BYTE_LIMIT as usize % CODE_ALPHABET.len(), 0);
+        assert!(Params::new(256 * 1024, 3, 4, Some(32)).is_ok());
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..200 {
+            let code = recovery_code();
+            let c = code.expose();
+            assert_eq!(c.len(), 11);
+            for (i, b) in c.bytes().enumerate() {
+                assert!(if i == 3 || i == 7 { b == b'-' } else { CODE_ALPHABET.contains(&b) }, "{c}");
+            }
+            assert_eq!(normalize_code(c).unwrap().expose(), c);
+            seen.insert(c.to_owned());
+        }
+        assert!(seen.len() > 190, "codes must differ");
+    }
+
+    #[test]
+    fn normalize_ignores_case_dashes_and_spaces() {
+        for raw in ["abc-def-234", "ABCDEF234", " abc def 234\r\n", "a-b-c-d-e-f-2-3-4"] {
+            assert_eq!(normalize_code(raw).unwrap().expose(), "ABC-DEF-234", "{raw:?}");
+        }
+        for raw in ["", "ABC-DEF-23", "ABC-DEF-2345", "ABC-DEF-230", "OBC-DEF-234", "ILC-DEF-234", "ÄBC-DEF-234", "ABC_DEF_234", "Hello world, this is text"] {
+            assert!(normalize_code(raw).is_none(), "{raw:?}");
+        }
     }
 }

@@ -63,7 +63,7 @@ fn set_cookie_rotation() {
         ("set-cookie", "rbx-ip2=1; domain=roblox.com; path=/"),
     ]);
     assert_eq!(rotated_cookie(&h).unwrap().expose(), "_|WARNING:-DO-NOT-SHARE-THIS.--x|_NEW");
-    assert_eq!(rotated_cookie(&headers(&[("set-cookie", ".ROBLOSECURITY=PLAIN")])).unwrap().expose(), "PLAIN");
+    assert_eq!(rotated_cookie(&headers(&[("set-cookie", ".ROBLOSECURITY=_|WARNING:-DO-NOT-SHARE-THIS.PLAIN")])).unwrap().expose(), "_|WARNING:-DO-NOT-SHARE-THIS.PLAIN");
 
     for gone in [
         ".ROBLOSECURITY=; path=/",
@@ -71,6 +71,8 @@ fn set_cookie_rotation() {
         ".ROBLOSECURITY=old; expires=Thu, 01 Jan 1970 00:00:00 GMT",
         "x.ROBLOSECURITY=other",
         "GuestData=UserID=-1; domain=.roblox.com",
+        ".ROBLOSECURITY=deleted; expires=Fri, 31 Dec 1999 23:59:59 GMT",
+        ".ROBLOSECURITY=x",
     ] {
         assert!(rotated_cookie(&headers(&[("set-cookie", gone)])).is_none(), "{gone}");
     }
@@ -195,7 +197,7 @@ async fn authenticated_user_success() {
 async fn csrf_token_is_stored_and_retried_once() {
     let csrf_403 = reply(
         "403 Forbidden",
-        &["x-csrf-token: TOK1", "set-cookie: .ROBLOSECURITY=NEW; domain=.roblox.com; path=/"],
+        &["x-csrf-token: TOK1", "set-cookie: .ROBLOSECURITY=_|WARNING:-DO-NOT-SHARE-THIS.NEW; domain=.roblox.com; path=/"],
         r#"{"code":0,"message":"Token Validation Failed"}"#,
     );
     let (base, reqs) = serve(vec![csrf_403, reply("200 OK", &[], "{}"), reply("200 OK", &[], "{}")]);
@@ -203,12 +205,12 @@ async fn csrf_token_is_stored_and_retried_once() {
     let (old, body) = (Secret::new("OLD"), serde_json::json!({}));
 
     let (_, _, rotated) = c.request(Method::POST, "ticket", TICKET, Some(&body), 3, Some(&old)).await.unwrap();
-    assert_eq!(rotated.unwrap().expose(), "NEW");
+    assert_eq!(rotated.unwrap().expose(), "_|WARNING:-DO-NOT-SHARE-THIS.NEW");
     let (first, retry) = (reqs.recv().unwrap(), reqs.recv().unwrap());
     assert!(!has(&first, "x-csrf-token"));
     assert!(has(&retry, "\r\nx-csrf-token: TOK1\r\n"));
     // The retry already carries the cookie Roblox rotated in the 403.
-    assert!(has(&retry, "\r\ncookie: .ROBLOSECURITY=NEW\r\n"));
+    assert!(has(&retry, "\r\ncookie: .ROBLOSECURITY=_|WARNING:-DO-NOT-SHARE-THIS.NEW\r\n"));
     for r in [&first, &retry] {
         assert!(r.starts_with("POST /v1/authentication-ticket HTTP/1.1\r\n"));
         assert!(has(r, "\r\nreferer: https://www.roblox.com/\r\n") && has(r, "\r\norigin: https://www.roblox.com\r\n"));
@@ -233,23 +235,23 @@ async fn csrf_retry_happens_only_once() {
 async fn rotated_cookie_reaches_sink_and_caller() {
     let set = [
         "set-cookie: __cf_bm=x; Path=/; Domain=roblox.com",
-        "set-cookie: .ROBLOSECURITY=NEW; domain=.roblox.com; expires=Mon, 24-Oct-2061 10:00:00 GMT; path=/; secure; HttpOnly",
+        "set-cookie: .ROBLOSECURITY=_|WARNING:-DO-NOT-SHARE-THIS.NEW; domain=.roblox.com; expires=Mon, 24-Oct-2061 10:00:00 GMT; path=/; secure; HttpOnly",
     ];
     let ok = reply("200 OK", &set, USER);
     let (base, _reqs) = serve(vec![ok.clone(), ok.clone(), ok]);
     let (c, rotations) = client(&base);
 
     let (_, rotated) = c.authenticated_user(7, &Secret::new("OLD")).await.unwrap();
-    assert_eq!(rotated.unwrap().expose(), "NEW");
-    assert_eq!(*rotations.lock().unwrap(), vec![(7, "NEW".to_string())]);
+    assert_eq!(rotated.unwrap().expose(), "_|WARNING:-DO-NOT-SHARE-THIS.NEW");
+    assert_eq!(*rotations.lock().unwrap(), vec![(7, "_|WARNING:-DO-NOT-SHARE-THIS.NEW".to_string())]);
 
     // A cookie that is not stored yet (id 0) comes back but never reaches the sink.
     let (_, rotated) = c.authenticated_user(0, &Secret::new("OLD")).await.unwrap();
-    assert_eq!(rotated.unwrap().expose(), "NEW");
+    assert_eq!(rotated.unwrap().expose(), "_|WARNING:-DO-NOT-SHARE-THIS.NEW");
     assert_eq!(rotations.lock().unwrap().len(), 1);
 
     // Roblox repeating the current value is no rotation.
-    let (_, rotated) = c.authenticated_user(7, &Secret::new("NEW")).await.unwrap();
+    let (_, rotated) = c.authenticated_user(7, &Secret::new("_|WARNING:-DO-NOT-SHARE-THIS.NEW")).await.unwrap();
     assert!(rotated.is_none());
     assert_eq!(rotations.lock().unwrap().len(), 1);
 }
@@ -319,12 +321,12 @@ async fn used_up_window_delays_the_next_call() {
     let (c, _) = client("http://127.0.0.1:1");
     c.set_window("route", 0, 1);
     let start = Instant::now();
-    c.wait_turn("route").await;
+    c.wait_turn("route").await.unwrap();
     assert!(start.elapsed() >= Duration::from_millis(900));
 
     c.set_window("route", 1, 60);
     let start = Instant::now();
-    c.wait_turn("route").await;
+    c.wait_turn("route").await.unwrap();
     assert!(start.elapsed() < Duration::from_millis(500));
     assert_eq!(lock(&c.windows)["route"].remaining, 0);
 }
@@ -557,7 +559,7 @@ async fn premium_is_a_bare_boolean() {
 #[tokio::test]
 async fn public_calls_send_no_cookie() {
     // A Set-Cookie on an anonymous answer is no rotation either.
-    let count = reply("200 OK", &["set-cookie: .ROBLOSECURITY=NEW; path=/"], r#"{"count":7}"#);
+    let count = reply("200 OK", &["set-cookie: .ROBLOSECURITY=_|WARNING:-DO-NOT-SHARE-THIS.NEW; path=/"], r#"{"count":7}"#);
     let (base, reqs) = serve(vec![count.clone(), count.clone(), count, ok(USER)]);
     let (c, rotations) = client(&base);
 
@@ -1172,4 +1174,12 @@ fn client_version_answer() {
     ] {
         assert!(client_version_of(bad.as_bytes()).is_err(), "{bad}");
     }
+}
+
+#[test]
+fn a_huge_rate_limit_window_neither_panics_nor_stalls() {
+    let c = Client::new(Arc::new(|_, _| {}));
+    c.set_window("r", 0, u64::MAX);
+    let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+    assert!(matches!(rt.block_on(c.wait_turn("r")), Err(AppError::RateLimited(_))));
 }

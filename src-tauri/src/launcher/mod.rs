@@ -137,7 +137,7 @@ fn args_for(s: &App, account_id: i64) -> Result<Vec<String>> {
 }
 
 /// One launch: resolve → `client-assertion` (failure ignored) → `authentication-ticket` →
-/// URI with a fresh `browsertrackerid` → start the client (`client::find` + `client::start`,
+/// URI with a fresh `browsertrackerid` → start the client (`update::launch_client` + `client::start`,
 /// with the account's or the default launch arguments after the URI). Just before the client
 /// starts, `fps_cap`, else the account's or the default FPS cap, and the lowest graphics when
 /// `Settings.low_graphics` is on, go into Roblox's settings file (`client_settings`). It returns
@@ -149,9 +149,9 @@ pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget, fps_cap: Op
     // launch's exe, ticket and start time should come after that wait, not before it.
     let held = client_settings::LOCK.lock().await;
     let cookie = account_cookie(s, account_id)?;
-    // Before any network call: no ticket is fetched when Roblox isn't installed or the
-    // arguments are refused.
-    let exe = client::find()?;
+    // Before any cookie call: no ticket is fetched when Roblox isn't installed or the arguments
+    // are refused.
+    let (exe, production) = update::launch_client(s).await?;
     let args = args_for(s, account_id)?;
     let (join, warning) = resolve(&s.api, account_id, &cookie, target).await?;
     let assertion = s
@@ -173,7 +173,7 @@ pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget, fps_cap: Op
             log::info!("lighter rendering skipped for account {account_id}: a bootstrapper manages Roblox's flags");
             None
         }
-        (true, false) => flags::apply(&exe.path),
+        (true, false) => flags::apply(&exe.path, &settings.render_flags),
     };
     let waiting = undo.is_some() || flags.is_some();
     let put_back = move || {
@@ -185,7 +185,7 @@ pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget, fps_cap: Op
         }
     };
     let since = std::time::SystemTime::now();
-    let started = client::start(&exe, &uri::player_uri(&ticket, started_at, &place), &args);
+    let started = client::start(&exe, &uri::player_uri(&ticket, started_at, &place, production), &args);
     match &started {
         Ok((pid, pid_start)) if waiting => {
             // A bootstrapper's own process exits by design: only the log tells then.

@@ -183,6 +183,12 @@ impl Entry {
 
     /// Why it is worth launching again (`wants_rejoin`), or its memory (`Mem`) while it still
     /// runs with no problem note.
+    fn stop_relaunch(&mut self) {
+        self.relaunching = None;
+        self.inst.relaunching = false;
+        self.inst.relaunch_problem = None;
+    }
+
     fn cause(&self) -> Option<CrashKind> {
         wants_rejoin(&self.inst, &self.facts, self.hung()).or_else(|| {
             (self.mem_high() && self.inst.state != InstanceState::Exited && self.inst.note.is_none()).then_some(CrashKind::Mem)
@@ -225,9 +231,16 @@ impl Tracker {
             throttled: false,
             micro: false,
             fps_cap: info.fps_cap,
+            relaunching: false,
+            relaunch_problem: None,
             sign_in_problem: false,
         };
-        self.entries().push(Entry::new(inst.clone(), info.browser_tracker_id, info.pid_start, !info.via_bootstrapper));
+        let mut entries = self.entries();
+        // The account has a new client: nothing is waiting to bring back an older one any more.
+        for e in entries.iter_mut().filter(|e| e.inst.account_id == info.account_id) {
+            e.inst.relaunch_problem = None;
+        }
+        entries.push(Entry::new(inst.clone(), info.browser_tracker_id, info.pid_start, !info.via_bootstrapper));
         inst
     }
 
@@ -321,6 +334,11 @@ impl Tracker {
         e.closing = true;
         e.mem_restart = cause == Some(CrashKind::Mem);
         e.alive.then_some((e.inst.pid, e.start_time))
+    }
+
+    /// Launches still in a bootstrapper's hands, whose client hasn't appeared: for the panic button.
+    pub fn bootstrappers(&self) -> Vec<(u32, Option<u64>)> {
+        self.entries().iter().filter(|e| !e.adopted && e.alive && e.inst.state != InstanceState::Exited).map(|e| (e.inst.pid, e.start_time)).collect()
     }
 
     /// Panic button: every entry, ended ones too, counts as closed by the user, so no rejoin or
@@ -504,7 +522,17 @@ impl Tracker {
 
     /// A relaunch of this client starts (`now`: Unix ms); false if one is at work already.
     pub fn begin_relaunch(&self, id: &str, now: i64) -> bool {
-        self.entries().iter_mut().find(|e| e.inst.id == id).is_some_and(|e| e.relaunching.replace(e.relaunching.unwrap_or(now)).is_none())
+        self.entries().iter_mut().find(|e| e.inst.id == id).is_some_and(|e| {
+            e.inst.relaunching = true;
+            e.relaunching.replace(e.relaunching.unwrap_or(now)).is_none()
+        })
+    }
+
+    /// Why this client's relaunch has to wait (None: it no longer does); the UI shows it.
+    pub fn set_relaunch_problem(&self, id: &str, why: Option<String>) {
+        if let Some(e) = self.entries().iter_mut().find(|e| e.inst.id == id && e.relaunching.is_some()) {
+            e.inst.relaunch_problem = why;
+        }
     }
 
     /// Not stopped by Close all or a clear (it is over when its task ends).
@@ -514,7 +542,7 @@ impl Tracker {
 
     pub fn end_relaunch(&self, id: &str) {
         if let Some(e) = self.entries().iter_mut().find(|e| e.inst.id == id) {
-            e.relaunching = None;
+            e.stop_relaunch();
         }
     }
 
@@ -527,7 +555,7 @@ impl Tracker {
     /// picked up counts as closed by the user.
     pub fn cancel_relaunches(&self) {
         for e in self.entries().iter_mut() {
-            e.relaunching = None;
+            e.stop_relaunch();
             e.closing |= e.inst.state == InstanceState::Exited;
         }
     }
@@ -550,6 +578,7 @@ impl Tracker {
                 // an earlier "Gave up" no longer says anything about it.
                 e.rejoin_seen = false;
                 e.gave_up = None;
+                e.inst.relaunch_problem = None;
             } else if !e.rejoin_seen {
                 e.rejoin_seen = true;
                 if let Some(cause) = e.cause() {
@@ -627,6 +656,7 @@ impl Tracker {
     /// logs go hourly (`logwatch::clean`).
     pub fn spawn(app: AppHandle) {
         restore(&app);
+        super::resize::start();
         tauri::async_runtime::spawn(async move {
             let mut tick: u64 = 0;
             loop {
@@ -670,6 +700,7 @@ impl Tracker {
                     s.multi.release_if(|| !s.tracker.any_running());
                     // Also gives a client re-adopted under a new pid its limits again.
                     let clients = s.tracker.clients();
+                    super::resize::set_clients(clients.iter().map(|c| c.1).collect());
                     let (held, throttle_moved) = s.tracker.throttle(v.mem_throttle.mb);
                     if !clients.is_empty() {
                         let fg = if v.adaptive.enabled { process::foreground_pid() } else { None };
@@ -677,9 +708,21 @@ impl Tracker {
                     }
                     // Once per client, without taking the focus (anti-AFK then skips it).
                     for pid in s.tracker.first_windows(&|pid| process::main_window(pid).is_some()) {
-                        if v.minimize_on_launch {
-                            super::window::minimize_quietly(pid, v.park_minimized);
-                        }
+                        let id = clients.iter().find(|c| c.1 == pid).map(|c| c.0.clone());
+                        let keeps_size = |id: &str| s.tracker.get(id).and_then(|i| s.db.account(i.account_id).ok()).is_some_and(|a| a.full_quality);
+                        let tiny = id.filter(|id| v.tiny_on_launch && !keeps_size(id) && s.tracker.set_micro(id, true));
+                        let (size, minimize, park) = ((v.micro_width, v.micro_height), v.minimize_on_launch, v.park_minimized);
+                        // Not on this thread: a busy client's ShowWindow would stop every poll.
+                        tauri::async_runtime::spawn_blocking(move || {
+                            if let Some(id) = tiny
+                                && let Err(e) = super::window::micro(&id, pid, true, size)
+                            {
+                                log::debug!("instance {id}: not made tiny at launch: {e}");
+                            }
+                            if minimize {
+                                super::window::minimize_quietly(pid, park);
+                            }
+                        });
                     }
                     // Skipped (not reset) while a launch, batch or rejoin runs.
                     if tick.is_multiple_of(10) && !clients.is_empty() && !s.bulk.any_busy() {
@@ -782,6 +825,7 @@ impl Tracker {
             (e.inst.anti_afk, e.inst.afk_at) = (old.inst.anti_afk, old.inst.afk_at);
             (e.inst.throttled, e.inst.micro, e.window_seen) = (old.inst.throttled, old.inst.micro, old.window_seen);
             (e.gave_up, e.relaunching) = (old.gave_up, old.relaunching);
+            (e.inst.relaunching, e.inst.relaunch_problem) = (old.inst.relaunching, old.inst.relaunch_problem.clone());
             let had_game = old.in_game_at.is_some();
             (e.mem_strikes, e.mem_mb, e.mem_restart) = (old.mem_strikes, old.mem_mb, old.mem_restart);
             if let Some(kind) = settle(e, now) {
@@ -961,7 +1005,8 @@ fn observe(e: &mut Entry, dir: Option<&Path>, procs: &dyn Procs, roblox: &mut Op
         e.hung_polls = if procs.hung(e.inst.pid) { e.hung_polls.saturating_add(1) } else { 0 };
     }
     let Some(dir) = dir else { return };
-    let launched = UNIX_EPOCH + Duration::from_millis(e.inst.started_at.max(0) as u64);
+    // Read back from the database: a value too large must not panic.
+    let launched = UNIX_EPOCH.checked_add(Duration::from_millis(e.inst.started_at.max(0) as u64)).unwrap_or(UNIX_EPOCH);
     // A client starts after the launch (whole seconds: one of slack) and after the process it
     // replaces or that started it.
     let after = first.max(u64::try_from(e.inst.started_at / 1000 - 1).unwrap_or(0));
@@ -977,7 +1022,7 @@ fn observe(e: &mut Entry, dir: Option<&Path>, procs: &dyn Procs, roblox: &mut Op
         && let Some(created) = created_secs(&path).filter(|&c| c > after + LOG_SKEW_SECS)
         && let Some(p) = pick_client(roblox.get_or_insert_with(|| procs.roblox()), Some(created), after, taken)
     {
-        log::debug!("instance {}: rebound from process {} to {} (updater relaunch)", e.inst.id, e.inst.pid, p.pid);
+        log::info!("instance {}: rebound from process {} to {} (updater relaunch)", e.inst.id, e.inst.pid, p.pid);
         adopt(e, p, taken);
         if e.log.as_ref() != Some(&path) {
             e.log = Some(path);
@@ -1756,9 +1801,11 @@ mod tests {
         let older = t.register(&LaunchInfo { account_id: 2, browser_tracker_id: BTID + 3, ..info(202, start, false) }, target()).id;
         t.entries().iter_mut().find(|e| e.inst.id == older).unwrap().inst.state = Exited;
         assert!(t.relaunch_wanted(&second, false));
+        t.set_relaunch_problem(&second, Some("no network".into()));
         // The account launched since it began: nothing left to do, whatever became of that client.
         let newer = t.register(&LaunchInfo { account_id: 2, browser_tracker_id: BTID + 2, ..info(201, start + 2, false) }, target()).id;
         assert!(!t.relaunch_wanted(&second, true));
+        assert_eq!(t.get(&second).unwrap().relaunch_problem, None, "the new client ended the wait");
         t.entries().iter_mut().find(|e| e.inst.id == newer).unwrap().inst.state = Exited;
         assert!(!t.relaunch_wanted(&second, true));
         std::fs::remove_dir_all(&dir).unwrap();
@@ -1781,6 +1828,8 @@ mod tests {
         append(&log, &["[FLog::Network] Sending disconnect with reason: 267".into()]);
         poll(start + 2_000);
         assert_eq!(t.take_rejoins().len(), 1);
+        t.begin_relaunch(&id, start);
+        t.set_relaunch_problem(&id, Some("no network".into()));
         t.give_up(&id, "Gave up".into());
         poll(start + 3_000);
         assert_eq!(state(&t, &id).1, note("Gave up"));
@@ -1791,6 +1840,7 @@ mod tests {
         append(&log, &[replicator()]);
         poll(start + 4_000);
         assert!(t.take_rejoins().is_empty());
+        assert_eq!(t.get(&id).unwrap().relaunch_problem, None, "back in a game: nothing to wait for");
         poll(start + 5_000);
         assert_eq!(state(&t, &id), (InGame, None, 100));
         append(&log, &["[FLog::Network] Sending disconnect with reason: 267".into()]);

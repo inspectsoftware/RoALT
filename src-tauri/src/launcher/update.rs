@@ -132,18 +132,68 @@ async fn live_version(s: &App) -> Option<String> {
     }
 }
 
-/// Why this launch must wait for a bootstrapper's update (`bootstrapper_would_close`), or None.
-/// `closing`: clients about to be closed for it, which don't count as running.
-pub async fn bootstrapper_hold(s: &App, closing: usize) -> Option<String> {
+/// Why this launch must wait for an update that would close running clients, or None: a
+/// bootstrapper's (`bootstrapper_would_close`), or production's build missing (`launch_client`
+/// would start a client that runs Roblox's installer). `closing`: clients about to be closed for
+/// it, which don't count as running.
+pub async fn update_hold(s: &App, closing: usize) -> Option<String> {
     let exe = client::find().ok()?;
-    let installed = client::bootstrapper_version(&exe)?;
     let running = crate::instances::process::roblox_processes().len().saturating_sub(closing);
     if running == 0 {
         return None;
     }
-    let live = live_version(s).await?;
-    bootstrapper_would_close(Some(&installed), Some(&live), running)
-        .then(|| tr!("Roblox has an update, and your bootstrapper (e.g. Bloxstrap) would close every running client to install it. Close your clients first, then launch."))
+    if let Some(installed) = client::bootstrapper_version(&exe) {
+        let live = live_version(s).await?;
+        return bootstrapper_would_close(Some(&installed), Some(&live), running)
+            .then(|| tr!("Roblox has an update, and your bootstrapper (e.g. Bloxstrap) would close every running client to install it. Close your clients first, then launch."));
+    }
+    if client::managed_by_bootstrapper(&exe) {
+        return None;
+    }
+    let live = production_version(s).await?;
+    client::installed_build(&live)
+        .is_none()
+        .then(|| tr!("Roblox has an update, and installing it would close every running client. Close your clients first, then launch."))
+}
+
+/// Production's live version, asked now, else the last one known; None when never known.
+async fn production_version(s: &App) -> Option<String> {
+    match s.api.client_version().await {
+        Ok(v) => {
+            *lock(&s.update.latest) = Some(v.clone());
+            Some(v)
+        }
+        Err(e) => {
+            log::info!("launch: Roblox version check failed, using the last one known: {e}");
+            lock(&s.update.latest).clone()
+        }
+    }
+}
+
+/// The client a launch starts, and whether its URI asks for production (`uri::player_uri`).
+///
+/// Roblox rewrites `clientExe` and the registry's channel for whichever account last played (each
+/// is enrolled in a channel of its own). A client whose build doesn't match the channel it asks
+/// about runs the foreground installer, which closes every running client (research multi-instance
+/// M9). So: production's build with an empty `channel:`, as they always agree. Over a bootstrapper,
+/// or with the version unknown, what `client::find` says, as is. Production's build missing: the
+/// client found, asked for production, updates itself (`update_hold` kept it from closing others).
+pub async fn launch_client(s: &App) -> Result<(client::ClientExe, bool)> {
+    let exe = client::find()?;
+    let managed = client::managed_by_bootstrapper(&exe);
+    let live = if managed { None } else { production_version(s).await };
+    let chosen = launch_choice(exe, managed, live.as_deref(), client::installed_build);
+    log::info!("launching {} (production: {})", chosen.0.path.display(), chosen.1);
+    Ok(chosen)
+}
+
+/// `launch_client`'s choice (pure but for `installed`).
+fn launch_choice(exe: client::ClientExe, managed: bool, live: Option<&str>, installed: impl FnOnce(&str) -> Option<PathBuf>) -> (client::ClientExe, bool) {
+    let Some(live) = live.filter(|_| !managed) else { return (exe, false) };
+    match installed(live) {
+        Some(path) => (client::ClientExe { path, bootstrapper: false }, true),
+        None => (exe, true),
+    }
 }
 
 /// The Roblox client as found now, with the last known live version.
@@ -405,6 +455,18 @@ mod tests {
             latest: latest.map(Into::into),
             outdated: outdated(version, latest),
         }
+    }
+
+    #[test]
+    fn launches_production_unless_a_bootstrapper_manages_it_or_the_version_is_unknown() {
+        let found = client::ClientExe { path: PathBuf::from(r"C:\R\version-test\RobloxPlayerBeta.exe"), bootstrapper: false };
+        let prod = PathBuf::from(r"C:\R\version-live\RobloxPlayerBeta.exe");
+        let there = |v: &str| (v == "version-live").then(|| prod.clone());
+        let (exe, production) = launch_choice(found.clone(), false, Some("version-live"), there);
+        assert_eq!((exe.path, production), (prod.clone(), true));
+        assert_eq!(launch_choice(found.clone(), false, Some("version-new"), there), (found.clone(), true), "missing: the client updates itself");
+        assert_eq!(launch_choice(found.clone(), false, None, there), (found.clone(), false), "unknown: as before");
+        assert_eq!(launch_choice(found.clone(), true, Some("version-live"), there), (found, false), "a bootstrapper's own");
     }
 
     #[test]

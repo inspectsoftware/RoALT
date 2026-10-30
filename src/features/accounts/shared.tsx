@@ -13,7 +13,7 @@ export function initials(a: AccountSummary) {
 }
 
 /** Accounts without a colour get a stable one from their user id. */
-export const avatarColor = (a: AccountSummary) => a.color ?? SWATCHES[a.userId % 6];
+export const avatarColor = (a: AccountSummary) => a.color ?? SWATCHES[Math.abs(a.userId) % 6];
 
 /** Dark ink on light colours, white on dark ones (custom #rrggbb can be anything). */
 function inkOn(hex: string) {
@@ -33,7 +33,7 @@ export function Avatar({ account, size, url }: { account: AccountSummary; size: 
   return (
     <span
       aria-hidden="true"
-      className="relative flex-none grid place-content-center font-bold overflow-hidden"
+      className="relative flex-none grid place-content-center font-bold overflow-hidden rounded-full"
       // The colour backs the initials only: a headshot has a transparent background of its own.
       style={{ width: size, height: size, background: done ? "transparent" : bg, color: inkOn(bg), fontSize: Math.round(size * 0.36) }}
     >
@@ -56,10 +56,10 @@ export function Avatar({ account, size, url }: { account: AccountSummary; size: 
 
 /** Status is told apart by shape and label, never by colour alone. */
 type Look = { label: Key; color: string; mark: CSSProperties };
-const hollow: CSSProperties = { border: "1px solid var(--grey)" };
+const hollow: CSSProperties = { border: "1px solid var(--grey)", borderRadius: "50%" };
 
 const LOOK: Record<AccountStatus, Look> = {
-  valid: { label: "accounts.status.valid", color: "var(--text)", mark: { background: "var(--accent-text)" } },
+  valid: { label: "accounts.status.valid", color: "var(--text)", mark: { background: "var(--accent-text)", borderRadius: "50%" } },
   invalid: { label: "accounts.status.invalid", color: "var(--orange)", mark: { background: "var(--orange)", transform: "rotate(45deg) scale(.85)" } },
   challenged: {
     label: "accounts.status.challenged",
@@ -70,9 +70,9 @@ const LOOK: Record<AccountStatus, Look> = {
 };
 
 const PRESENCE: Record<PresenceKind, Look> = {
-  inGame: { label: "accounts.presence.inGame", color: "var(--text)", mark: { background: "var(--accent-text)" } },
-  online: { label: "accounts.presence.online", color: "var(--text)", mark: { background: "var(--blue)" } },
-  studio: { label: "accounts.presence.studio", color: "var(--text)", mark: { border: "2px solid var(--blue)" } },
+  inGame: { label: "accounts.presence.inGame", color: "var(--text)", mark: { background: "var(--accent-text)", borderRadius: "50%" } },
+  online: { label: "accounts.presence.online", color: "var(--text)", mark: { background: "var(--blue)", borderRadius: "50%" } },
+  studio: { label: "accounts.presence.studio", color: "var(--text)", mark: { border: "2px solid var(--blue)", borderRadius: "50%" } },
   offline: { label: "accounts.presence.offline", color: "var(--dim)", mark: hollow },
   unknown: { label: "accounts.presence.unknown", color: "var(--dim)", mark: hollow },
 };
@@ -81,7 +81,7 @@ function Mark({ look, label, detail }: { look: Look; label: string; detail?: str
   return (
     <span className="inline-flex items-center gap-2 min-w-0 max-w-full" style={{ color: look.color }}>
       <span aria-hidden="true" className="w-2 h-2 flex-none" style={look.mark} />
-      <span className="truncate" title={label}>{label}</span>
+      <span className="truncate flex-none max-w-[calc(100%-16px)]" title={label}>{label}</span>
       {detail && <span className="mono text-xs text-dim truncate">{detail}</span>}
     </span>
   );
@@ -102,9 +102,9 @@ export function Status({ status, presence, checking, detail }: {
 }) {
   if (checking) {
     return (
-      <span className="inline-flex items-center gap-2 text-dim">
-        <span aria-hidden="true" className="w-2 h-2 flex-none bg-dim pulse" />
-        {t("accounts.status.checking")}
+      <span className="inline-flex items-center gap-2 min-w-0 max-w-full text-dim">
+        <span aria-hidden="true" className="w-2 h-2 flex-none rounded-full bg-dim pulse" />
+        <span className="truncate">{t("accounts.status.checking")}</span>
       </span>
     );
   }

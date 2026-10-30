@@ -49,7 +49,7 @@ pub fn find() -> Result<ClientExe> {
         .find(|p| p.is_file() && !in_store(p))
         .or_else(|| newest(versions_dirs().iter().flat_map(|d| players_in(d)).filter(|(p, _)| !in_store(p))));
     let path = path.ok_or_else(|| {
-        log::warn!("no Roblox client: none in the registry (clientExe, roblox-player handler, version) or under {:?} (Store builds excluded)", versions_dirs());
+        log::warn!("no Roblox client: none in the registry (clientExe, roblox-player handler, version) or under {} (Store builds excluded)", versions_dirs().iter().map(|d| d.display().to_string()).collect::<Vec<_>>().join("; "));
         AppError::Invalid(tr!(
             "Roblox isn't installed. Install it from roblox.com, then try again. (The Microsoft Store version can't be used: install the one from roblox.com.)"
         ))
@@ -86,10 +86,19 @@ fn in_store(path: &Path) -> bool {
 
 /// The `Versions` folders clients live in: Roblox's own (per user first), then Bloxstrap's and
 /// Fishstrap's copies.
-fn versions_dirs() -> Vec<PathBuf> {
+pub(super) fn versions_dirs() -> Vec<PathBuf> {
     let roblox = ["LOCALAPPDATA", "ProgramFiles(x86)", "ProgramFiles"].iter().filter_map(std::env::var_os).map(|d| PathBuf::from(d).join("Roblox"));
     let strap = std::env::var_os("LOCALAPPDATA").into_iter().flat_map(|d| ["Bloxstrap", "Fishstrap"].map(|b| PathBuf::from(&d).join(b)));
     roblox.chain(strap).map(|d| d.join("Versions")).collect()
+}
+
+/// The installed client of Roblox version `version` (`version-…`), whatever `find` picks.
+pub fn installed_build(version: &str) -> Option<PathBuf> {
+    build_in(&versions_dirs(), version)
+}
+
+fn build_in(dirs: &[PathBuf], version: &str) -> Option<PathBuf> {
+    dirs.iter().map(|d| d.join(version).join(PLAYER)).find(|p| p.is_file())
 }
 
 /// Every `<dir>\<version>\RobloxPlayerBeta.exe` with its last-write time.
@@ -276,10 +285,14 @@ mod tests {
         std::thread::sleep(Duration::from_millis(50));
         std::fs::write(dir.join("version-b").join(PLAYER), b"").unwrap();
         let found = players_in(&dir);
+        let dirs = [dir.join("missing"), dir.clone()];
+        let (a, none) = (build_in(&dirs, "version-a"), build_in(&dirs, "not-a-client"));
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(found.len(), 2, "the folder without a client is skipped");
         assert_eq!(newest(found), Some(dir.join("version-b").join(PLAYER)));
         assert!(players_in(&dir.join("missing")).is_empty());
+        assert_eq!(a, Some(dir.join("version-a").join(PLAYER)));
+        assert_eq!(none, None);
     }
 
     #[test]

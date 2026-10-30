@@ -11,7 +11,7 @@ pub enum AppError {
     WrongPassword,
     #[error("This cookie is not valid or has expired. Sign in again.")]
     CookieInvalid,
-    #[error("Roblox wants a human check for this account. Sign in to it again with Add account > Sign in.")]
+    #[error("Roblox wants a human check for this account. Sign in to it again with Add account > Sign in with Roblox.")]
     Challenge,
     #[error("Roblox is limiting requests. Try again in {0} s.")]
     RateLimited(u64),
@@ -85,7 +85,7 @@ impl AppError {
             Self::WrongPassword => tr!("Wrong password."),
             Self::CookieInvalid => tr!("This cookie is not valid or has expired. Sign in again."),
             Self::Challenge => {
-                tr!("Roblox wants a human check for this account. Sign in to it again with Add account > Sign in.")
+                tr!("Roblox wants a human check for this account. Sign in to it again with Add account > Sign in with Roblox.")
             }
             Self::RateLimited(s) => tr!("Roblox is limiting requests. Try again in {seconds} s.", seconds = s),
             Self::BoundSessionRequired => tr!("Roblox now requires a bound session for this account."),

@@ -1,11 +1,11 @@
 //! Lighter rendering for the clients RoALT starts (`Settings.lighter_rendering`), through the only
 //! local flags Roblox still honours: its allowlist (DevForum "Allowlist for local client
 //! configuration via Fast Flags"; any other is logged as "Denied local configuration for: ...")
-//! in `<version folder>\ClientSettings\ClientAppSettings.json`. Lowest textures, no anti-aliasing
-//! or grass, lowest geometry detail and render quality: less GPU memory and time per client.
+//! in `<version folder>\ClientSettings\ClientAppSettings.json`. Lowest geometry detail always, and
+//! what `Settings.render_flags` picks: less GPU memory and time per client.
 //!
 //! Every client shares the file and reads it once, as it starts; Roblox never writes it. A launch
-//! merges `FLAGS` into the user's own flags and puts the file back exactly as it was once its
+//! merges these flags into the user's own flags and puts the file back exactly as it was once its
 //! client has read its settings (inside `launch`'s `client_settings::LOCK` window, so another
 //! launch never sees them by mistake). The original waits in a file beside it (`SAVED`), so a quit
 //! or crash meanwhile loses nothing: `restore` at start and exit, or the next `apply`, puts it back.
@@ -18,30 +18,66 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 
 use super::client_settings::{retry, set_readonly};
+use crate::model::{Msaa, RenderFlags, RenderMode, TextureQuality};
 
-/// The allowlisted flags and their lightest values, as strings like Bloxstrap writes them.
-const FLAGS: [(&str, &str); 10] = [
-    ("DFFlagTextureQualityOverrideEnabled", "True"),
-    ("DFIntTextureQualityOverride", "0"),
-    ("FIntDebugForceMSAASamples", "1"),
-    ("FIntFRMMinGrassDistance", "0"),
-    ("FIntFRMMaxGrassDistance", "0"),
-    ("DFIntCSGLevelOfDetailSwitchingDistance", "0"),
-    ("DFIntCSGLevelOfDetailSwitchingDistanceL12", "0"),
-    ("DFIntCSGLevelOfDetailSwitchingDistanceL23", "0"),
-    ("DFIntCSGLevelOfDetailSwitchingDistanceL34", "0"),
-    ("DFIntDebugFRMQualityLevelOverride", "1"),
-];
+/// Only one of these can be on.
+const MODES: [&str; 3] = ["FFlagDebugGraphicsPreferD3D11", "FFlagDebugGraphicsPreferVulkan", "FFlagDebugGraphicsPreferOpenGL"];
 
-/// The file's text with `FLAGS` set and the user's other flags kept (pure); None when it isn't a
-/// JSON object (it is left alone then).
-fn merge(text: Option<&str>) -> Option<String> {
+/// The allowlisted flags for `r`, as strings like Bloxstrap writes them (pure). "Roblox default" is
+/// no flag at all, so a user's own value for it stays.
+fn flags_of(r: &RenderFlags) -> Vec<(&'static str, &'static str)> {
+    let mut f = vec![
+        ("DFIntCSGLevelOfDetailSwitchingDistance", "0"),
+        ("DFIntCSGLevelOfDetailSwitchingDistanceL12", "0"),
+        ("DFIntCSGLevelOfDetailSwitchingDistanceL23", "0"),
+        ("DFIntCSGLevelOfDetailSwitchingDistanceL34", "0"),
+    ];
+    match r.msaa {
+        Msaa::Default => {}
+        Msaa::X1 => f.push(("FIntDebugForceMSAASamples", "1")),
+        Msaa::X2 => f.push(("FIntDebugForceMSAASamples", "2")),
+        Msaa::X4 => f.push(("FIntDebugForceMSAASamples", "4")),
+    }
+    let level = match r.texture {
+        TextureQuality::Default => None,
+        TextureQuality::Lowest => Some("0"),
+        TextureQuality::Low => Some("1"),
+        TextureQuality::Medium => Some("2"),
+        TextureQuality::High => Some("3"),
+    };
+    if let Some(l) = level {
+        f.extend([("DFFlagTextureQualityOverrideEnabled", "True"), ("DFIntTextureQualityOverride", l)]);
+    }
+    match r.mode {
+        RenderMode::Default => {}
+        RenderMode::D3d11 => f.push((MODES[0], "True")),
+        RenderMode::Vulkan => f.push((MODES[1], "True")),
+        RenderMode::Opengl => f.push((MODES[2], "True")),
+    }
+    if r.gray_sky {
+        f.push(("FFlagDebugSkyGray", "True"));
+    }
+    if r.no_grass {
+        f.extend([("FIntFRMMinGrassDistance", "0"), ("FIntFRMMaxGrassDistance", "0")]);
+    }
+    if r.lowest_frm {
+        f.push(("DFIntDebugFRMQualityLevelOverride", "1"));
+    }
+    f
+}
+
+/// The file's text with `set` set and the user's other flags kept (pure); None when it isn't a JSON
+/// object (it is left alone then). A chosen rendering mode replaces one of the user's own.
+fn merge(text: Option<&str>, set: &[(&str, &str)]) -> Option<String> {
     let mut flags: Map<String, Value> = match text.map(str::trim) {
         None | Some("") => Map::new(),
         Some(t) => serde_json::from_str(t).ok()?,
     };
-    for (k, v) in FLAGS {
-        flags.insert(k.into(), v.into());
+    if set.iter().any(|(k, _)| MODES.contains(k)) {
+        flags.retain(|k, _| !MODES.contains(&k.as_str()));
+    }
+    for (k, v) in set {
+        flags.insert((*k).into(), (*v).into());
     }
     serde_json::to_string_pretty(&flags).ok()
 }
@@ -68,17 +104,21 @@ fn write(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// The original beside the flag file: `1` then its bytes, or `0` when there was no file.
 const SAVED: &str = "ClientAppSettings.json.roalt-before";
 
-/// Puts back the original kept beside `file`, if one is; it stays there until that worked.
-fn put_back_at(file: &Path) {
+/// Puts back the original kept beside `file`, if one is; it stays there until that worked. False
+/// when it is still there.
+fn put_back_at(file: &Path) -> bool {
     let saved = file.with_file_name(SAVED);
-    let Ok(kept) = std::fs::read(&saved) else { return };
+    let Ok(kept) = std::fs::read(&saved) else { return true };
     let done = match kept.split_first() {
         Some((b'1', bytes)) => write(file, bytes),
         _ => retry(|| std::fs::remove_file(file)).or_else(|e| if e.kind() == ErrorKind::NotFound { Ok(()) } else { Err(e) }),
     };
     match done.and_then(|()| retry(|| std::fs::remove_file(&saved))) {
-        Ok(()) => {}
-        Err(e) => log::warn!("lighter rendering: couldn't put {} back: {e}", file.display()),
+        Ok(()) => true,
+        Err(e) => {
+            log::warn!("lighter rendering: couldn't put {} back: {e}", file.display());
+            false
+        }
     }
 }
 
@@ -90,26 +130,37 @@ pub struct Undo {
 impl Undo {
     /// Puts the file back exactly as it was (removed if there was none); failures are logged.
     pub fn put_back(self) {
-        put_back_at(&self.file);
+        let _ = put_back_at(&self.file);
     }
 }
 
 /// Puts back what a launch cut short by a quit or crash left behind (at start, and at exit while a
-/// launch may still be waiting for its client).
+/// launch may still be waiting for its client), in every build: a launch can use another than
+/// `client::find`'s.
 pub fn restore() {
+    for dir in super::client::versions_dirs() {
+        for build in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let _ = put_back_at(&build.path().join("ClientSettings").join("ClientAppSettings.json"));
+        }
+    }
     if let Ok(exe) = super::client::find()
         && let Some(dir) = exe.path.parent()
     {
-        put_back_at(&dir.join("ClientSettings").join("ClientAppSettings.json"));
+        let _ = put_back_at(&dir.join("ClientSettings").join("ClientAppSettings.json"));
     }
 }
 
-/// Writes `FLAGS` next to the client at `exe` for the launch about to start; what to put back once
-/// it has started, None when nothing was written. Failures are logged and never stop the launch.
-pub fn apply(exe: &Path) -> Option<Undo> {
+/// Writes `render`'s flags next to the client at `exe` for the launch about to start; what to put
+/// back once it has started, None when nothing was written. Failures are logged and never stop the
+/// launch.
+pub fn apply(exe: &Path, render: &RenderFlags) -> Option<Undo> {
     let file = exe.parent()?.join("ClientSettings").join("ClientAppSettings.json");
-    // A launch cut short: the user's own file first, or these flags would pass for it.
-    put_back_at(&file);
+    // A launch cut short: the user's own file first, or these flags would pass for it and the only
+    // copy of it would be lost.
+    if !put_back_at(&file) {
+        log::warn!("lighter rendering skipped: the user's own {} couldn't be put back", file.display());
+        return None;
+    }
     let before = match retry(|| std::fs::read(&file)) {
         Ok(b) => Some(b),
         Err(e) if e.kind() == ErrorKind::NotFound => None,
@@ -118,7 +169,7 @@ pub fn apply(exe: &Path) -> Option<Undo> {
             return None;
         }
     };
-    let Some(text) = merge(before.as_deref().map(String::from_utf8_lossy).as_deref()) else {
+    let Some(text) = merge(before.as_deref().map(String::from_utf8_lossy).as_deref(), &flags_of(render)) else {
         log::warn!("lighter rendering skipped: {} isn't a JSON object", file.display());
         return None;
     };
@@ -148,17 +199,43 @@ mod tests {
 
     #[test]
     fn merges_into_the_users_flags() {
-        let v: Value = serde_json::from_str(&merge(None).unwrap()).unwrap();
+        let set = flags_of(&RenderFlags::default());
+        let v: Value = serde_json::from_str(&merge(None, &set).unwrap()).unwrap();
         assert_eq!(v["DFIntTextureQualityOverride"], "0");
-        assert_eq!(v.as_object().unwrap().len(), FLAGS.len());
+        assert_eq!(v.as_object().unwrap().len(), set.len());
         let own = r#"{"FFlagDebugGraphicsPreferD3D11": "True", "DFIntTextureQualityOverride": "3"}"#;
-        let v: Value = serde_json::from_str(&merge(Some(own)).unwrap()).unwrap();
+        let v: Value = serde_json::from_str(&merge(Some(own), &set).unwrap()).unwrap();
         assert_eq!(v["FFlagDebugGraphicsPreferD3D11"], "True", "the user's own flag stays");
         assert_eq!(v["DFIntTextureQualityOverride"], "0");
-        assert!(merge(Some("  ")).is_some(), "blank counts as empty");
+        assert!(merge(Some("  "), &set).is_some(), "blank counts as empty");
         for bad in ["not json", "[1, 2]", "{\"a\":"] {
-            assert_eq!(merge(Some(bad)), None, "{bad}");
+            assert_eq!(merge(Some(bad), &set), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn each_choice_gives_its_flags() {
+        let has = |r: RenderFlags, k: &str| flags_of(&r).iter().find(|(f, _)| *f == k).map(|(_, v)| *v);
+        let d = RenderFlags::default();
+        assert_eq!(has(d, "FIntDebugForceMSAASamples"), Some("1"));
+        assert_eq!(has(d, "FFlagDebugSkyGray"), None);
+        assert_eq!(has(d, "FIntFRMMaxGrassDistance"), Some("0"));
+        assert_eq!(has(d, "DFIntDebugFRMQualityLevelOverride"), Some("1"));
+        assert_eq!(has(RenderFlags { msaa: Msaa::X4, ..d }, "FIntDebugForceMSAASamples"), Some("4"));
+        assert_eq!(has(RenderFlags { msaa: Msaa::Default, ..d }, "FIntDebugForceMSAASamples"), None);
+        assert_eq!(has(RenderFlags { texture: TextureQuality::High, ..d }, "DFIntTextureQualityOverride"), Some("3"));
+        let off = RenderFlags { texture: TextureQuality::Default, ..d };
+        assert_eq!((has(off, "DFIntTextureQualityOverride"), has(off, "DFFlagTextureQualityOverrideEnabled")), (None, None));
+        assert_eq!(has(RenderFlags { gray_sky: true, ..d }, "FFlagDebugSkyGray"), Some("True"));
+        assert_eq!(has(RenderFlags { no_grass: false, ..d }, "FIntFRMMinGrassDistance"), None);
+        assert_eq!(has(RenderFlags { lowest_frm: false, ..d }, "DFIntDebugFRMQualityLevelOverride"), None);
+        assert_eq!(has(RenderFlags { mode: RenderMode::Vulkan, ..d }, MODES[1]), Some("True"));
+
+        // Only one mode: a chosen one replaces the user's own, and none leaves it.
+        let own = r#"{"FFlagDebugGraphicsPreferD3D11": "True"}"#;
+        let set = flags_of(&RenderFlags { mode: RenderMode::Opengl, ..d });
+        let v: Value = serde_json::from_str(&merge(Some(own), &set).unwrap()).unwrap();
+        assert_eq!((v.get(MODES[0]), v[MODES[2]].as_str()), (None, Some("True")));
     }
 
     #[test]
@@ -170,7 +247,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         // No file before: written, then removed again.
-        let undo = apply(&exe).expect("written");
+        let r = RenderFlags::default();
+        let undo = apply(&exe, &r).expect("written");
         assert!(std::fs::read_to_string(&file).unwrap().contains("DFIntDebugFRMQualityLevelOverride"));
         undo.put_back();
         assert!(!file.exists());
@@ -178,21 +256,35 @@ mod tests {
         // The user's own file: the very same bytes come back.
         let own = b"{\r\n  \"FFlagDebugSkyGray\": \"True\"\r\n}";
         std::fs::write(&file, own).unwrap();
-        apply(&exe).expect("written").put_back();
+        apply(&exe, &r).expect("written").put_back();
         assert_eq!(std::fs::read(&file).unwrap(), own);
 
         // Cut short by a quit: the next launch doesn't mistake the flags for the user's own.
-        let _left_behind = apply(&exe).expect("written");
-        apply(&exe).expect("written").put_back();
+        let _left_behind = apply(&exe, &r).expect("written");
+        apply(&exe, &r).expect("written").put_back();
         assert_eq!(std::fs::read(&file).unwrap(), own);
         assert!(!file.with_file_name(SAVED).exists());
-        let _left_behind = apply(&exe).expect("written");
+        let _left_behind = apply(&exe, &r).expect("written");
         put_back_at(&file);
         assert_eq!(std::fs::read(&file).unwrap(), own, "as `restore` does");
 
+        // Can't be put back (held open): the original isn't lost, and nothing is written over it.
+        let _left_behind = apply(&exe, &r).expect("written");
+        let flagged = std::fs::read(&file).unwrap();
+        let kept = std::fs::read(file.with_file_name(SAVED)).unwrap();
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            let _held = std::fs::OpenOptions::new().read(true).share_mode(1).open(&file).unwrap();
+            assert!(apply(&exe, &r).is_none());
+            assert_eq!(std::fs::read(&file).unwrap(), flagged);
+            assert_eq!(std::fs::read(file.with_file_name(SAVED)).unwrap(), kept);
+        }
+        assert!(put_back_at(&file));
+        assert_eq!(std::fs::read(&file).unwrap(), own);
+
         // Not a JSON object: left alone.
         std::fs::write(&file, b"oops").unwrap();
-        assert!(apply(&exe).is_none());
+        assert!(apply(&exe, &r).is_none());
         assert_eq!(std::fs::read(&file).unwrap(), b"oops");
         std::fs::remove_dir_all(&dir).unwrap();
     }

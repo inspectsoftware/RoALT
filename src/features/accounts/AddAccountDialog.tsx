@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { open as openFile } from "@tauri-apps/plugin-dialog";
 import { api, asError, type AccountSummary, type ImportReport } from "../../api";
@@ -8,22 +8,35 @@ import { Icon } from "../../ui/Icon";
 import { friendly, toast } from "../../ui/Toast";
 import { fmtList, t, tx } from "../../i18n";
 
-type Tab = "login" | "cookie" | "many";
+export type Tab = "login" | "cookie" | "many";
 
 const RAM_FILTER = [{ name: "Roblox Account Manager", extensions: ["json"] }];
 
-export function AddAccountDialog({ open, onClose, onAdded }: {
+export function AddAccountDialog({ open, startOn = "login", onClose, onAdded }: {
   open: boolean;
+  startOn?: Tab;
   onClose: () => void;
   onAdded: (a: AccountSummary) => void;
 }) {
   const qc = useQueryClient();
-  const [tab, setTab] = useState<Tab>("login");
+  const [tab, setTab] = useState<Tab>(startOn);
+  const [error, setError] = useState<string | null>(null);
+  // While rendering, not in an effect: Dialog focuses a field of the panel that shows when it opens.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setTab(startOn);
+      setError(null);
+    }
+  }
+  // Closed while its request ran: the account is still added, but the app stays where it is.
+  const stillOpen = useRef(open);
+  stillOpen.current = open;
   const [waiting, setWaiting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [cookie, setCookie] = useState("");
   const [many, setMany] = useState("");
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) return;
@@ -36,8 +49,10 @@ export function AddAccountDialog({ open, onClose, onAdded }: {
     qc.invalidateQueries({ queryKey: qk.accounts });
     qc.invalidateQueries({ queryKey: qk.vault });
     toast(t("accounts.add.added", { name: a.username }));
-    onAdded(a);
-    onClose();
+    if (stillOpen.current) {
+      onAdded(a);
+      onClose();
+    }
   };
 
   async function signIn() {
@@ -112,57 +127,56 @@ export function AddAccountDialog({ open, onClose, onAdded }: {
     if (path) runImport(() => api.accountsImportRam(path));
   }
 
-  const tabBtn = (id: Tab, label: string, icon: "signin" | "key" | "upload") => (
+  const choice = (id: Tab, label: string, desc: string, easiest?: boolean) => (
     <button
       type="button"
-      role="tab"
-      id={`add-tab-${id}`}
-      aria-selected={tab === id}
-      aria-controls={`add-panel-${id}`}
+      className="btn pick"
+      aria-pressed={tab === id}
       onClick={() => {
         setTab(id);
         setError(null);
       }}
-      className={`flex-1 min-w-0 flex items-center justify-center gap-2 min-h-10 py-1 text-center border-b-2 ${
-        tab === id ? "border-[var(--on)] text-text" : "border-transparent text-dim hover:text-text"
-      }`}
     >
-      <Icon name={icon} size={14} />
-      {label}
+      <span aria-hidden="true" className="tick tick-round"><Icon name="check" size={14} /></span>
+      <span className="flex-1 min-w-0 flex flex-col">
+        <span className="flex flex-wrap items-center gap-2">
+          {label}
+          {easiest && <span className="tag text-accent-text font-medium">{t("accounts.add.easiest")}</span>}
+        </span>
+        <span className="text-[13px] font-normal text-dim">{desc}</span>
+      </span>
     </button>
   );
 
   return (
-    <Dialog open={open} onClose={onClose} title={t("accounts.add.title")} width={460}>
-      <div role="tablist" aria-label={t("accounts.add.how")} className="flex px-5 border-b border-line">
-        {tabBtn("login", t("accounts.add.tabLogin"), "signin")}
-        {tabBtn("cookie", t("accounts.add.tabCookie"), "key")}
-        {tabBtn("many", t("accounts.add.tabMany"), "upload")}
+    <Dialog open={open} onClose={onClose} title={t("accounts.add.dialogTitle")} width={540}>
+      <p className="px-5 pb-3 text-dim">{t("accounts.add.staysHere")}</p>
+      <div role="group" aria-label={t("accounts.add.how")} className="flex flex-col gap-3 px-5">
+        {choice("login", t("accounts.add.tabLogin"), t("accounts.add.descLogin"), true)}
+        {choice("cookie", t("accounts.add.tabCookie"), t("accounts.add.descCookie"))}
+        {choice("many", t("accounts.add.tabMany"), t("accounts.add.descMany"))}
       </div>
 
       {tab === "login" ? (
-        <div key="login" role="tabpanel" id="add-panel-login" aria-labelledby="add-tab-login" className="enter flex flex-col gap-4 p-5">
-          <p className="text-dim">
-            {t("accounts.add.loginIntro")}
-          </p>
-          <p className="text-dim text-xs">
-            {t("accounts.add.loginPrivate")}
-          </p>
+        <div key="login" className="enter flex flex-col gap-3 p-5">
           {waiting ? (
             <div className="enter flex flex-col gap-2.5 py-1" role="status">
               <div className="live-bar" />
               <span>{t("accounts.add.waiting")}</span>
             </div>
           ) : (
-            <button type="button" className="btn btn-primary self-start" onClick={signIn} data-autofocus>
+            <button type="button" className="btn btn-primary min-h-[52px]" onClick={signIn} data-autofocus>
               <Icon name="external" size={14} />
               {t("accounts.add.openSignIn")}
             </button>
           )}
+          <p className="text-dim text-xs">
+            {t("accounts.add.loginPrivate")}
+          </p>
           {error && <div role="alert" className="alert">{error}</div>}
         </div>
       ) : tab === "many" ? (
-        <form key="many" role="tabpanel" id="add-panel-many" aria-labelledby="add-tab-many" onSubmit={pasteMany} className="enter flex flex-col gap-3 p-5">
+        <form key="many" onSubmit={pasteMany} className="enter flex flex-col gap-3 p-5">
           <label className="flex flex-col gap-1.5">
             <span className="label">{t("accounts.add.manyLabel")}</span>
             <textarea
@@ -193,7 +207,7 @@ export function AddAccountDialog({ open, onClose, onAdded }: {
           </div>
         </form>
       ) : (
-        <form key="cookie" role="tabpanel" id="add-panel-cookie" aria-labelledby="add-tab-cookie" onSubmit={paste} className="enter flex flex-col gap-3 p-5">
+        <form key="cookie" onSubmit={paste} className="enter flex flex-col gap-3 p-5">
           <label className="flex flex-col gap-1.5">
             <span className="label">{t("accounts.add.cookieLabel")}</span>
             <textarea

@@ -118,6 +118,8 @@ fn terminate(pid: u32, t0: u64) -> Result<()> {
     unsafe {
         if let Err(e) = TerminateProcess(*h, 1)
             && started(*h).is_some()
+            // Access is denied also for a process already on its way out.
+            && WaitForSingleObject(*h, 3_000) == WAIT_TIMEOUT
         {
             return Err(failed(e.message()));
         }

@@ -22,6 +22,17 @@ pub struct BackupPayload {
     pub exported_at: i64,
     pub accounts: Vec<BackupAccount>,
     pub groups: Vec<BackupGroup>,
+    #[serde(default)]
+    pub favourites: Vec<BackupFavourite>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupFavourite {
+    pub name: String,
+    pub target: crate::model::LaunchTarget,
+    pub user_ids: Vec<i64>,
+    pub in_tray: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -38,6 +49,17 @@ pub struct BackupAccount {
     /// Group names.
     pub groups: Vec<String>,
     pub cookie: Zeroizing<String>,
+    // Absent in backups from before 0.7; `allow_disconnect` always there after that.
+    #[serde(default)]
+    pub allow_disconnect: Option<bool>,
+    #[serde(default)]
+    pub launch_args: Option<String>,
+    #[serde(default)]
+    pub discord_muted: bool,
+    #[serde(default)]
+    pub fps_cap: Option<u32>,
+    #[serde(default)]
+    pub full_quality: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -79,8 +101,12 @@ pub fn write(path: &Path, password: &str, payload: &BackupPayload) -> Result<()>
 /// `WrongPassword` when the password (or file) does not authenticate,
 /// `Invalid("This isn't a RoALT backup.")` on a bad magic / truncated file.
 pub fn read(path: &Path, password: &str) -> Result<BackupPayload> {
-    let bytes = fs::read(path)?;
     let not_backup = || AppError::Invalid(tr!("This isn't a RoALT backup."));
+    // About 2 KB per account: far above anyone's vault, and it isn't all read into memory first.
+    if fs::metadata(path)?.len() > 64 << 20 {
+        return Err(not_backup());
+    }
+    let bytes = fs::read(path)?;
     if bytes.len() < HEADER_LEN + SEAL_OVERHEAD || !bytes.starts_with(MAGIC) {
         log::debug!("not a backup: bad magic or truncated ({} bytes)", bytes.len());
         return Err(not_backup());
@@ -132,6 +158,7 @@ mod tests {
 
     fn sample() -> BackupPayload {
         BackupPayload {
+            favourites: Vec::new(),
             version: 1,
             exported_at: 1_700_000_000,
             accounts: vec![BackupAccount {
@@ -145,6 +172,11 @@ mod tests {
                 sort_order: 0,
                 groups: vec!["Mains".into()],
                 cookie: Zeroizing::new("fake-cookie".into()),
+                allow_disconnect: Some(true),
+                launch_args: Some("--x".into()),
+                discord_muted: true,
+                fps_cap: Some(30),
+                full_quality: true,
             }],
             groups: vec![BackupGroup { name: "Mains".into(), color: None, sort_order: 0 }],
         }

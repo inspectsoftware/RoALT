@@ -20,6 +20,8 @@ function Tile({ className, fill }: { className: string; fill: string }) {
 }
 
 function seen() {
+  // Settings.skip_splash, from `main_window`: the window is already full size.
+  if ((window as { __ROALT_SKIP_SPLASH?: boolean }).__ROALT_SKIP_SPLASH) return true;
   try {
     return sessionStorage.getItem(KEY) !== null;
   } catch {

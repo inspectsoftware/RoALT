@@ -29,7 +29,8 @@ const TIMEOUT: Duration = Duration::from_secs(60);
 pub fn script(kbps: u32) -> Result<String> {
     let remove = format!("Remove-NetQosPolicy -Name '{POLICY}' -PolicyStore ActiveStore -Confirm:$false -ErrorAction SilentlyContinue");
     if kbps == 0 {
-        return Ok(remove);
+        // Nothing to remove is fine, yet leaves PowerShell's exit code at 1.
+        return Ok(format!("{remove}; exit 0"));
     }
     if !(MIN_KBPS..=MAX_KBPS).contains(&kbps) {
         return Err(AppError::Invalid(tr!("The bandwidth limit must be 0 (none) or {min} to {max} kbit/s.", min = MIN_KBPS, max = MAX_KBPS)));

@@ -1,23 +1,25 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  api, asError, type AccountSummary, type BulkProgress, type ErrorPayload, type JoinCandidate, type LaunchInfo, type LaunchTarget,
+  api, asError, type AccountSummary, type BulkProgress, type ErrorPayload, type Favourite, type JoinCandidate, type LaunchInfo, type LaunchTarget,
   type MultiInstanceStatus, type SameServer, type Settings,
 } from "../../api";
-import { publicBlock, qk, useBulk, useFavourites, useMultiStatus, useNetwork, usePresence, useRobloxClient, useSetSettings, useSettings } from "../../data";
-import { fmtList, t, tx, type Key } from "../../i18n";
+import { publicBlock, qk, useBulk, useFavourites, useInstances, useMultiStatus, useNetwork, usePresence, useRobloxClient, useSetSettings, useSettings } from "../../data";
+import { fmtNum, t, type Key } from "../../i18n";
 import { NumberField, Segmented, Switch } from "../../ui/controls";
 import { Icon } from "../../ui/Icon";
 import { friendly, toast } from "../../ui/Toast";
 import { accountName, Avatar, Status } from "../accounts/shared";
-import { FavouriteDialog } from "./Favourites";
+import { BatchSection } from "./Batch";
+import { FavouriteDialog, FavouritesRow } from "./Favourites";
 import { JoinDialog } from "./JoinDialog";
+import { isLive, isRunning, MultiNotice } from "./Running";
 import { describe, draftFor, draftForUser, placeOf, userFor, type Draft, type Tone } from "./target";
 
 const LAST_KEY = "roalt.lastLaunchAccount";
 const MARK: Record<Tone, CSSProperties> = {
   ok: { background: "var(--accent-text)" },
-  info: { background: "var(--blue)" },
+  info: { background: "var(--blue)", borderRadius: 2 },
   bad: { background: "var(--orange)", transform: "rotate(45deg) scale(.85)" },
 };
 const LAUNCH_ERRORS: Record<string, Key> = {
@@ -68,7 +70,7 @@ export function launchFailed(e: unknown) {
   if (err.kind !== "cancelled") toast(LAUNCH_ERRORS[err.kind] ? t(LAUNCH_ERRORS[err.kind]) : friendly(err), "error");
 }
 
-export function LaunchView({ accounts, picked, setPicked, sameServer, setSameServer, draft, setDraft, step, setStep }: {
+export function LaunchView({ accounts, picked, setPicked, sameServer, setSameServer, draft, setDraft, step, setStep, onAdd, onServers, onPickFavourite, onHome, onAccounts, onSettings }: {
   accounts: AccountSummary[];
   picked: number[];
   setPicked: Dispatch<SetStateAction<number[]>>;
@@ -78,6 +80,12 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
   setDraft: Dispatch<SetStateAction<Draft>>;
   step: string | null;
   setStep: (step: string | null) => void;
+  onAdd: () => void;
+  onServers: () => void;
+  onPickFavourite: (f: Favourite) => void;
+  onHome: () => void;
+  onAccounts: () => void;
+  onSettings: () => void;
 }) {
   const qc = useQueryClient();
   const favourites = useFavourites();
@@ -90,22 +98,42 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
   const pasted = useRef(false);
   const [joinOpen, setJoinOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
+  const targetField = useRef<HTMLInputElement>(null);
+  // Open when one of them is set: it applies to the next launch, so it stays in sight.
+  const [who, setWho] = useState("");
+  const [optionsOpen, setOptionsOpen] = useState(() => lastFps > 0 || sameServer !== "off");
   const [fps, setFpsState] = useState(lastFps);
   const setFps = (v: number) => setFpsState((lastFps = v));
 
+  // An account with a client on its way or in a game can't start another.
+  const instances = useInstances().data ?? [];
+  const liveAccounts = new Set(instances.filter(isLive).map((i) => i.accountId));
   // In list order, which is also the bulk launch order.
-  const chosen = accounts.filter((a) => a.status === "valid" && picked.includes(a.id));
+  const chosen = accounts.filter((a) => a.status === "valid" && !liveAccounts.has(a.id) && picked.includes(a.id));
   const account = chosen[0] ?? null;
   const bulk = chosen.length > 1;
+  // With multi-instance off, one more client ends the one that runs.
+  const replaces = !bulk && !!account && instances.some((i) => isRunning(i) && i.accountId !== account.id);
   const validIds = useMemo(
-    () => accounts.filter((a) => a.status === "valid").map((a) => a.id).sort((x, y) => x - y),
+    () => accounts.filter((a) => a.status === "valid" && !liveAccounts.has(a.id)).map((a) => a.id).sort((x, y) => x - y),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [accounts.map((a) => `${a.id}:${a.status}`).join()],
+    [accounts.map((a) => `${a.id}:${a.status}:${liveAccounts.has(a.id)}`).join()],
   );
-  const presence = usePresence(validIds).data;
+  // ponytail: the first 100 only; one request per account each minute. Past that, tiles show Ready.
+  const presence = usePresence(useMemo(() => validIds.slice(0, 100), [validIds])).data;
+  const needle = who.trim().toLowerCase();
+  const tiles = needle ? accounts.filter((a) => `${a.alias}\n${a.displayName}\n${a.username}`.toLowerCase().includes(needle)) : accounts;
+  // Picked accounts that are all playing already: that's what the button can't do.
+  const allPlaying = !chosen.length && accounts.some((a) => picked.includes(a.id) && liveAccounts.has(a.id));
+  const signedOut = accounts.length > 0 && accounts.every((a) => a.status !== "valid");
+  if (joinOpen && !account) setJoinOpen(false);
 
   // Debounced local parse; the result is kept with the text it belongs to.
   const { text } = draft;
+  // Straight to pasting a link. The field can be below the fold: no jump.
+  useEffect(() => {
+    if (!text.trim()) targetField.current?.focus({ preventScroll: true });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!text.trim() || draft.parsed?.text === text) return;
     const t = setTimeout(() => {
@@ -126,7 +154,10 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
   // A parse that hasn't caught up yet is launchable: resolveTarget parses again.
   const pending = !!text.trim() && draft.parsed?.text !== text;
   const network = useNetwork().data;
-  const blocked = publicBlock(network, settings) ?? launchBlocked(bulk, multi, batch);
+  // Turned on but held up by a Roblox already running: another client would still replace it.
+  const blocked = publicBlock(network, settings) ?? launchBlocked(bulk || (replaces && !!multi?.enabled), multi, batch);
+  // Multi-instance has its own notice, with the way out.
+  const otherBlock = publicBlock(network, settings) ?? (batch && !batch.done ? t("launch.batchRunning") : null);
   const canLaunch = !!account && (usableTarget || pending) && !step && !blocked;
 
   /** What the draft launches; parses again if the debounce hasn't caught up, looks a username up. */
@@ -207,31 +238,97 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
   };
 
   return (
-    <main className="@container flex-[999_1_520px] min-w-0 flex flex-col">
-      <div className="flex flex-wrap items-baseline gap-3 px-6 pt-[18px] pb-3">
-        <h1 className="text-xl font-semibold tracking-[-0.01em]">{t("common.launch")}</h1>
-        <span className="text-dim">{t("launch.subtitle")}</span>
-      </div>
+    <main className="scroll flex-1 min-w-0 px-8 pt-5 pb-12">
+      <div className="enter flex flex-col gap-6 max-w-[1000px]">
+        <header>
+          <h1 className="page-title">{t("app.nav.launch")}</h1>
+          <p className="page-sub">{t("launch.subtitle")}</p>
+        </header>
 
-      <div className="scroll flex-1 min-h-0">
-        <div className="flex flex-col gap-6 max-w-[880px] px-6 pt-2 pb-6">
-          <div className="flex flex-col gap-2">
-            <div className="flex items-end justify-between gap-2">
-              <label className="label" htmlFor="launch-target">{t("launch.targetLabel")}</label>
-              <button
-                className="btn btn-sm"
-                disabled={!account}
-                title={account ? t("launch.joinHint") : t("launch.pickAccountFirst")}
-                onClick={() => setJoinOpen(true)}
-              >
-                <Icon name="accounts" size={12} />
-                {t("launch.joinSomeone")}
+        <section aria-labelledby="play-who" className="panel flex flex-col gap-4 p-5">
+          <div className="flex flex-wrap items-center gap-3">
+            <span aria-hidden="true" className="num">1</span>
+            <h2 id="play-who" className="section-title flex-[1_1_160px]">{t("play.who")}</h2>
+            <span className="text-[13px] text-dim">{t("launch.pickedOfValid", { picked: chosen.length, count: validIds.length })}</span>
+            {validIds.length > 1 && (
+              <button className="btn btn-ghost" onClick={() => setPicked(chosen.length === validIds.length ? [] : validIds)}>
+                {chosen.length === validIds.length ? t("launch.clear") : t("launch.selectAll")}
+              </button>
+            )}
+          </div>
+          {signedOut && (
+            <div className="well flex flex-wrap items-center gap-3 px-4 py-3">
+              <p className="flex-[1_1_240px] text-dim">{t("home.signedOutLead")}</p>
+              <button className="btn" onClick={onAccounts}>{t("app.nav.accounts")}</button>
+            </div>
+          )}
+          {accounts.length > 12 && (
+            <input
+              className="field"
+              aria-label={t("accounts.filterLabel")}
+              placeholder={t("accounts.filterPlaceholder")}
+              spellCheck={false}
+              value={who}
+              onChange={(e) => setWho(e.target.value)}
+            />
+          )}
+          {accounts.length === 0 ? (
+            <div className="flex flex-wrap items-center gap-3.5">
+              <p className="flex-[1_1_240px] text-dim">{t("launch.noAccounts")}</p>
+              <button className="btn btn-primary" onClick={onAdd}>
+                <Icon name="plus" size={14} />
+                {t("accounts.add.title")}
               </button>
             </div>
+          ) : (
+            <div role="group" aria-labelledby="play-who" className="scroll grid gap-3.5 max-h-[440px] p-2 -m-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(250px, 100%), 1fr))" }}>
+              {tiles.map((a) => {
+                const valid = a.status === "valid";
+                const playing = liveAccounts.has(a.id);
+                return (
+                  <button
+                    key={a.id}
+                    className="btn pick"
+                    aria-pressed={valid && !playing && picked.includes(a.id)}
+                    disabled={!valid || playing}
+                    title={valid ? undefined : t("launch.onlyValid")}
+                    // A pick that is playing goes with this one, or it would come back by itself when its client ends.
+                    onClick={(e) => e.detail < 2 && setPicked((p) => (p.includes(a.id) ? p.filter((id) => id !== a.id) : [...p.filter((id) => !liveAccounts.has(id)), a.id]))}
+                  >
+                    <span aria-hidden="true" className="tick"><Icon name="check" size={14} /></span>
+                    <Avatar account={a} size={36} />
+                    <span className="flex-1 min-w-0 flex flex-col">
+                      <span className="truncate">{accountName(a)}</span>
+                      <span className="flex text-[13px] font-normal text-dim min-w-0">
+                        {playing ? t("play.already") : <Status status={a.status} presence={presence?.get(a.id)} />}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+        <section aria-labelledby="play-where" className="panel flex flex-col gap-4 p-5">
+          <div className="flex flex-wrap items-center gap-3">
+            <span aria-hidden="true" className="num">2</span>
+            <h2 id="play-where" className="section-title flex-[1_1_160px]">{t("play.where")}</h2>
+            <button className="btn btn-ghost" disabled={!account} title={account ? t("launch.joinHint") : t("launch.pickAccountFirst")} onClick={() => setJoinOpen(true)}>
+              <Icon name="accounts" size={14} />
+              {t("launch.joinSomeone")}
+            </button>
+            <button className="btn btn-ghost" onClick={onServers}>
+              <Icon name="servers" size={14} />
+              {t("play.browse")}
+            </button>
+          </div>
+          <div className="flex flex-col gap-2">
+            <label className="label" htmlFor="launch-target">{t("launch.targetLabel")}</label>
             <input
               id="launch-target"
-              autoFocus
-              className="field mono h-[38px]"
+              ref={targetField}
+              className="field mono"
               placeholder={t("launch.targetPlaceholder")}
               spellCheck={false}
               autoComplete="off"
@@ -248,17 +345,13 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
               }}
             />
             {text.trim() && (
-              <div className="enter flex items-center gap-3 min-h-[46px] px-3 py-1.5 border border-line bg-raised">
-                <span
-                  aria-hidden="true"
-                  className={`w-2 h-2 flex-none ${look ? "" : "bg-dim pulse"}`}
-                  style={look ? MARK[look.tone] : undefined}
-                />
-                <span className="flex items-baseline gap-3 min-w-0" aria-live="polite">
+              <div className="enter flex flex-wrap items-center gap-x-3 gap-y-1.5 min-h-11">
+                <span aria-hidden="true" className={`w-2 h-2 flex-none rounded-full ${look ? "" : "bg-dim pulse"}`} style={look ? MARK[look.tone] : undefined} />
+                <span className="flex items-baseline gap-3 min-w-0 flex-1" aria-live="polite">
                   {look ? (
                     <>
                       <span className="font-semibold flex-none">{look.kind}</span>
-                      <span className={`mono truncate ${look.tone === "bad" ? "text-orange" : "text-dim"}`} title={look.detail}>
+                      <span className={`mono text-[13px] truncate ${look.tone === "bad" ? "text-orange" : "text-dim"}`} title={look.detail}>
                         {look.detail}
                       </span>
                     </>
@@ -268,7 +361,7 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
                 </span>
                 {draft.note && <span className="tag flex-none max-w-[30%] truncate">{draft.note}</span>}
                 <button
-                  className="btn btn-sm ml-auto flex-none"
+                  className="btn btn-sm flex-none"
                   disabled={!usableTarget}
                   style={fav ? { color: "var(--accent-text)" } : undefined}
                   onClick={() => setSaveOpen(true)}
@@ -303,131 +396,118 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
               </label>
             )}
           </div>
+          <FavouritesRow accounts={accounts} active={draft.favId} onPick={onPickFavourite} />
+        </section>
 
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <span className="label" id="launch-account-label">{t("launch.accounts")}</span>
-              <span className="flex flex-wrap items-center justify-end gap-3">
-                <span className="mono text-xs text-dim">{t("launch.pickedOfValid", { picked: chosen.length, count: validIds.length })}</span>
-                {validIds.length > 1 && (
-                  <button
-                    className="btn btn-sm"
-                    onClick={() => setPicked(chosen.length === validIds.length ? [] : validIds)}
-                  >
-                    {chosen.length === validIds.length ? t("launch.clear") : t("launch.selectAll")}
-                  </button>
-                )}
-              </span>
-            </div>
-            {accounts.length === 0 ? (
-              <p className="text-dim">{t("launch.noAccounts")}</p>
-            ) : (
-              <div role="group" aria-labelledby="launch-account-label" className="grid grid-cols-1 @xl:grid-cols-2 border-t border-l border-line">
-                {accounts.map((a) => {
-                  const valid = a.status === "valid";
-                  return (
-                    <label
-                      key={a.id}
-                      title={valid ? undefined : t("launch.onlyValid")}
-                      className={`flex items-center gap-2.5 h-[42px] px-3 border-r border-b border-line has-[:checked]:bg-sel ${valid ? "cursor-pointer hover:bg-hover" : "opacity-55"}`}
-                    >
-                      <input
-                        type="checkbox"
-                        className="cb"
-                        checked={valid && picked.includes(a.id)}
-                        disabled={!valid}
-                        onChange={(e) => {
-                          const on = e.target.checked;
-                          setPicked((p) => (on ? [...p, a.id] : p.filter((id) => id !== a.id)));
-                        }}
-                      />
-                      <Avatar account={a} size={22} />
-                      <span className="flex-1 min-w-0 truncate">{accountName(a)}</span>
-                      <span className="flex justify-end min-w-0 max-w-[50%] text-xs">
-                        <Status status={a.status} presence={presence?.get(a.id)} />
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
-            )}
+        <section aria-labelledby="play-ready" className="panel flex flex-col gap-4 p-5">
+          <BatchSection accounts={accounts} onPick={setPicked} />
+          <div className="flex items-center gap-3">
+            <span aria-hidden="true" className="num">3</span>
+            <h2 id="play-ready" className="section-title">{t("play.ready")}</h2>
           </div>
-        </div>
-      </div>
-
-      <div className="flex-none border-t border-line">
-        <div className={step ? "live-bar" : "h-0.5"} />
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-6 pt-3.5">
-          <span
-            className="flex"
-            title={t("launch.fpsHint")}
-          >
-            <NumberField label={t("launch.fpsCap")} unit={t("launch.fpsUnit")} short="FPS" min={0} max={360} value={fps} onCommit={setFps} />
-          </span>
-          {bulk && (
-            <>
-            <NumberField
-              label={t("launch.stagger")}
-              unit={t("launch.seconds")}
-              short={t("launch.secondsShort")}
-              min={2}
-              max={60}
-              step={0.5}
-              value={delayMs / 1000}
-              onCommit={(s) => setSettings.mutate({ launchDelayMs: Math.round(s * 1000) })}
-            />
-            <span className="flex items-center gap-2.5">
-              <Switch label={t("launch.sameServer")} checked={sameServer !== "off"} onChange={(on) => setSameServer(on ? "pickFirst" : "off")} />
-              <span aria-hidden="true">{t("launch.sameServer")}</span>
-            </span>
-            {sameServer !== "off" && (
-              <Segmented
-                label={t("launch.findServer")}
-                value={sameServer}
-                options={[{ value: "pickFirst", label: t("launch.pickServer") }, { value: "followFirst", label: t("launch.followFirst") }]}
-                onChange={setSameServer}
-              />
-            )}
-            <span className="flex items-center gap-2.5" title={t("launch.autoRejoinHint")}>
-              <Switch
-                label={t("launch.autoRejoin")}
-                checked={settings?.autoRejoin ?? false}
-                onChange={(autoRejoin) => setSettings.mutate({ autoRejoin })}
-              />
-              <span aria-hidden="true">{t("launch.autoRejoin")}</span>
-            </span>
-            </>
+          <MultiNotice wanted={bulk} replaces={replaces} />
+          {client && !client.path && (
+            <div className="well flex flex-wrap items-center gap-3 px-4 py-3">
+              <p className="alert flex-[1_1_240px]">{t("settings.robloxMissing")}</p>
+              <button className="btn" onClick={onSettings}>{t("settings.installRoblox")}</button>
+            </div>
           )}
-        </div>
-        <div className="flex flex-wrap items-center gap-3 px-6 py-3.5">
-          <span className="flex items-center gap-2 min-w-0 text-dim" aria-live="polite">
-            {step ? (
-              <>
-                <span aria-hidden="true" className="w-2 h-2 flex-none bg-accent-text pulse" />
-                <span className="text-text">{step}</span>
-              </>
-            ) : blocked ? (
-              <span className="alert">{blocked}</span>
-            ) : bulk && client?.outdated ? (
-              // Not blocking: Roblox updates itself on the first launch, which can end the clients after it.
-              <span className="alert" title={t("launch.robloxVersions", { installed: client.version ?? "", latest: client.latest ?? "" })}>
-                {t("launch.robloxOutdated")}
-              </span>
-            ) : account ? (
-              <span className="truncate">
-                {tx("launch.asAccounts", { names: <span className="text-text font-medium">{fmtList(chosen.map(accountName))}</span> }, { kbd: (k) => <span className="kbd">{k}</span> })}
-              </span>
-            ) : (
-              t("launch.pickValid")
-            )}
-          </span>
-          <button className="btn btn-primary h-10 px-5 ml-auto max-w-full" disabled={!canLaunch} title={t("launch.launchHint")} onClick={() => void launch()}>
-            <Icon name="play" size={12} fill />
+          {allPlaying && (
+            <div className="well flex flex-wrap items-center gap-3 px-4 py-3">
+              <p className="flex-[1_1_240px] text-dim">{t("play.allPlaying")}</p>
+              <button className="btn" onClick={onHome}>{t("app.nav.dashboard")}</button>
+            </div>
+          )}
+          <button className="btn btn-primary btn-play" disabled={!canLaunch} title={t("launch.launchHint")} onClick={() => void launch()}>
+            <Icon name="play" size={22} fill />
             <span className="truncate">
-              {step ? t("launch.launching") : bulk ? t("launch.launchMany", { count: chosen.length }) : account ? t("launch.launchAs", { name: accountName(account) }) : t("common.launch")}
+              {step
+                ? t("launch.launching")
+                : !account
+                  ? t("play.pickFirst")
+                  : !usableTarget && !pending
+                    ? t("play.chooseWhere")
+                    : bulk
+                      ? t("launch.launchMany", { count: chosen.length })
+                      : t("launch.launchAs", { name: accountName(account) })}
             </span>
           </button>
-        </div>
+          <div className={step ? "live-bar" : "h-1"} />
+          <div className="flex justify-center text-center text-[13px] text-dim" aria-live="polite">
+            {step ? (
+              <span className="text-text">{step}</span>
+            ) : otherBlock ? (
+              <span className="alert text-left">{otherBlock}</span>
+            ) : bulk && client?.outdated ? (
+              // Not blocking: Roblox updates itself on the first launch, which can end the clients after it.
+              <span className="alert text-left" title={t("launch.robloxVersions", { installed: client.version ?? "", latest: client.latest ?? "" })}>
+                {t("launch.robloxOutdated")}
+              </span>
+            ) : canLaunch && look ? (
+              <span>
+                {t("play.into", { target: look.kind })} {look.detail}
+                {bulk && <> · {t("play.apart", { s: fmtNum(delayMs / 1000) })}</>}
+                {fps > 0 && <> · {t("dashboard.fps", { fps })}</>}
+                {bulk && sameServer !== "off" && <> · {t("launch.sameServer")}</>}
+                {settings?.lowGraphics && !account?.fullQuality && <> · {t("settings.lowGraphics")}</>}
+              </span>
+            ) : (
+              t("play.hint")
+            )}
+          </div>
+          <button className="btn btn-ghost self-center" aria-expanded={optionsOpen} onClick={() => setOptionsOpen(!optionsOpen)}>
+            {optionsOpen ? t("play.fewerOptions") : t("play.moreOptions")}
+            <Icon name="chevron" size={12} className={optionsOpen ? "rotate-180" : ""} />
+          </button>
+          {optionsOpen && (
+            <div className="enter well px-[18px] py-4">
+              <div className="setting">
+                <div className="setting-text">
+                  <p className="font-medium">{t("launch.fpsCap")}</p>
+                  <p className="text-[13px] text-dim">{t("launch.fpsHint")}</p>
+                </div>
+                <NumberField unit={t("launch.fpsUnit")} short="FPS" min={0} max={360} value={fps} onCommit={setFps} />
+              </div>
+              <div className="setting">
+                <div className="setting-text">
+                  <p className="font-medium">{t("launch.stagger")}</p>
+                  <p className="text-[13px] text-dim">{t("play.staggerHint")}</p>
+                </div>
+                <NumberField
+                  unit={t("launch.seconds")}
+                  short={t("launch.secondsShort")}
+                  min={2}
+                  max={60}
+                  step={0.5}
+                  value={delayMs / 1000}
+                  onCommit={(s) => setSettings.mutate({ launchDelayMs: Math.round(s * 1000) })}
+                />
+              </div>
+              <div className="setting">
+                <div className="setting-text">
+                  <p className="font-medium">{t("launch.sameServer")}</p>
+                  <p className="text-[13px] text-dim">{t("play.sameServerHint")}</p>
+                </div>
+                {sameServer !== "off" && (
+                  <Segmented
+                    label={t("launch.findServer")}
+                    value={sameServer}
+                    options={[{ value: "pickFirst", label: t("launch.pickServer") }, { value: "followFirst", label: t("launch.followFirst") }]}
+                    onChange={setSameServer}
+                  />
+                )}
+                <Switch label={t("launch.sameServer")} checked={sameServer !== "off"} onChange={(on) => setSameServer(on ? "pickFirst" : "off")} />
+              </div>
+              <div className="setting">
+                <div className="setting-text">
+                  <p className="font-medium">{t("launch.autoRejoin")}</p>
+                  <p className="text-[13px] text-dim">{t("play.autoRejoinHint")}</p>
+                </div>
+                <Switch label={t("launch.autoRejoin")} checked={settings?.autoRejoin ?? false} onChange={(autoRejoin) => setSettings.mutate({ autoRejoin })} />
+              </div>
+            </div>
+          )}
+        </section>
       </div>
 
       <JoinDialog open={joinOpen} onClose={() => setJoinOpen(false)} account={account} accounts={accounts} onPick={join} />
@@ -438,7 +518,7 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
         initial={
           fav ?? {
             name: look ? `${look.kind} · ${look.detail}`.replace(/ · [^·]*••••/, "").slice(0, 60) : "",
-            accountIds: chosen.map((a) => a.id),
+            accountIds: accounts.filter((a) => a.status === "valid" && picked.includes(a.id)).map((a) => a.id),
             inTray: false,
           }
         }

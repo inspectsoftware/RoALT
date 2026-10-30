@@ -122,7 +122,7 @@ fn menu(app: &AppHandle, v: &View) -> tauri::Result<Menu<Wry>> {
             &item("show", &tr!("Show RoALT"), true)?,
             &favourites,
             &item("close-all", &tr!("Close all clients"), v.running)?,
-            &item("kill-all", &tr!("Kill all Roblox"), true)?,
+            &item("kill-all", &tr!("Stop all Roblox"), true)?,
         ],
     )?;
     if v.master {
@@ -218,6 +218,12 @@ async fn launch(app: &AppHandle, id: i64) -> Result<()> {
             notice(app, false, tr!("No account of \"{name}\" can launch. Pick accounts for it in RoALT.", name = fav.name));
         }
         1 => {
+            // Without the multi-instance lock it would end the client that runs.
+            if !s.multi.is_active() && s.tracker.list().iter().any(|i| i.account_id != ids[0] && i.state != crate::model::InstanceState::Exited) {
+                show_main(app);
+                notice(app, false, tr!("\"{name}\" wasn't started: another client is running and multi-instance is off.", name = fav.name));
+                return Ok(());
+            }
             let _single = s.bulk.begin_single_launch()?;
             commands::launch_tracked(app, &s, ids[0], fav.target, Some(fav.id), None, None, true).await?;
         }

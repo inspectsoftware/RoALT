@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type PointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type AccountStatus, type AccountSummary, type Density, type Group, type Presence, type VaultMode } from "../../api";
-import { groupColor, qk, setAccounts, usePresence, useSetSettings, useUpdateAccount } from "../../data";
-import { Segmented } from "../../ui/controls";
+import { groupColor, qk, setAccounts, useInstances, usePresence, useUpdateAccount } from "../../data";
 import { ConfirmDialog } from "../../ui/Dialog";
+import { menuKeys } from "../../ui/menu";
 import { Icon } from "../../ui/Icon";
 import { toast } from "../../ui/Toast";
 import { AccountMenu, type MenuAt } from "./AccountMenu";
+import { isLive } from "../launch/Running";
 import { DetailPanel } from "./DetailPanel";
+import { GroupChips } from "./GroupsNav";
 import { accountName, ago, Avatar, Status } from "./shared";
 import { t, tx, type Key } from "../../i18n";
 import { Divider, usePanelWidth } from "../../ui/Resizer";
@@ -58,7 +60,6 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
   const closeMenu = useCallback(() => setMenu(null), []);
   const qc = useQueryClient();
   const update = useUpdateAccount();
-  const setSettings = useSetSettings();
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [checked, setChecked] = useState<Set<number>>(new Set());
@@ -66,12 +67,15 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
   const [removeOpen, setRemoveOpen] = useState(false);
   const [drag, setDrag] = useState<{ id: number; over: number } | null>(null);
   const [order, setOrder] = useState<number[] | null>(null);
+  const [moved, setMoved] = useState("");
   const [now, tick] = useReducer(() => Date.now(), Date.now());
   const tbody = useRef<HTMLTableSectionElement>(null);
   const dragging = useRef<{ id: number; startY: number; row: HTMLElement; over: number } | null>(null);
   const flip = useRef<Map<number, number> | null>(null);
   const seen = useRef(new Set<number>());
   const compact = density === "compact";
+  // An account with a client on its way or in a game can't start another.
+  const live = new Set((useInstances().data ?? []).filter(isLive).map((i) => i.accountId));
 
   useEffect(() => {
     const timer = setInterval(tick, 60_000);
@@ -90,15 +94,21 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
     (a) => !needle || `${a.alias}\n${a.displayName}\n@${a.username}\n${a.userId}`.toLowerCase().includes(needle),
   );
   // Presence only for rows that can be on screen, and only for valid cookies (DESIGN: visible rows only).
+  // Not per search: a new sweep for each result. ponytail: the first 100 unless a status filter
+  // needs them all (one request per account each minute); past that, rows show Ready.
   const presenceIds = useMemo(
-    () => matching.filter((a) => a.status === "valid").map((a) => a.id).sort((x, y) => x - y),
+    () => {
+      const ids = inGroup.filter((a) => a.status === "valid").map((a) => a.id).sort((x, y) => x - y);
+      return filter === "all" ? ids.slice(0, 100) : ids;
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [matching.map((a) => `${a.id}:${a.status}`).join()],
+    [inGroup.map((a) => `${a.id}:${a.status}`).join(), filter],
   );
   const presence = usePresence(presenceIds).data;
   const shown = matching.filter((a) => inFilter(a, filter, presence?.get(a.id)));
   const checkedIds = accounts.filter((a) => checked.has(a.id)).map((a) => a.id);
-  const checkedValid = checkedIds.filter((id) => byId.get(id)?.status === "valid").length;
+  const canPlay = (id: number) => byId.get(id)?.status === "valid" && !live.has(id);
+  const checkedValid = checkedIds.filter(canPlay).length;
   const current = (selected !== null && byId.get(selected)) || shown[0] || null;
   const needsSignIn = accounts.filter((a) => a.status === "invalid").length;
   const lastChecked = Math.max(0, ...accounts.map((a) => a.statusCheckedAt ?? 0)) || null;
@@ -209,7 +219,8 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
     const rows = tbody.current ? [...tbody.current.rows] : [];
     const fresh = rows.filter((r) => !seen.current.has(Number(r.dataset.id)));
     seen.current = new Set(rows.map((r) => Number(r.dataset.id)));
-    if (reducedMotion()) return;
+    // A whole list coming back at once is no new row, and would animate thousands of elements.
+    if (reducedMotion() || fresh.length > 40) return;
     fresh.forEach((r, i) =>
       r.animate([{ opacity: 0, transform: "translateY(8px)" }, { opacity: 1, transform: "none" }], {
         duration: 220,
@@ -265,6 +276,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
     e.preventDefault();
     const i = shown.findIndex((a) => a.id === id);
     if (dropAt(id, dir < 0 ? i - 1 : i + 2)) {
+      setMoved(`${accountName(shown[i])}: ${i + 1 + dir} / ${shown.length}`);
       requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-grip="${id}"]`)?.focus());
     }
   }
@@ -302,7 +314,8 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
         e.preventDefault();
         runValidate();
       } else if (e.key === "Delete" && !typing) {
-        const ids = checkedIds.length ? checkedIds : current ? [current.id] : [];
+        const row = e.target instanceof Element ? e.target.closest<HTMLElement>("tr[data-id]") : null;
+        const ids = checkedIds.length ? checkedIds : row ? [Number(row.dataset.id)] : current ? [current.id] : [];
         if (ids.length) askRemove(ids);
       } else if (e.key === "Escape" && !typing) {
         setChecked(new Set());
@@ -326,24 +339,21 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
 
   return (
     <>
-      <main className={`@container flex-1 min-w-0 flex flex-col ${compact ? "compact" : ""}`}>
-        <div className="flex flex-wrap items-center gap-3 px-5 pt-[18px] pb-3">
-          <h1 className="text-xl font-semibold tracking-[-0.01em]">{t("accounts.title")}</h1>
-          <span className="mono text-dim">
-            {t("accounts.total", { count: accounts.length })}
-            {needsSignIn > 0 && <> · <span className="text-orange">{t("accounts.toast.needSignIn", { count: needsSignIn })}</span></>}
-          </span>
-          <div className="ml-auto flex flex-wrap gap-2">
+      <main className={`@container scroll flex-1 min-w-0 flex flex-col gap-4 px-8 pt-5 pb-6 ${compact ? "compact" : ""}`}>
+        <span className="sr-only" aria-live="polite">{moved}</span>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="min-w-0">
+            <h1 className="page-title">{t("accounts.title")}</h1>
+            <p className="page-sub">
+              {t("accounts.total", { count: accounts.length })}
+              {needsSignIn > 0 && <> · <span className="text-orange">{t("accounts.toast.needSignIn", { count: needsSignIn })}</span></>}
+            </p>
+          </div>
+          <div className="ml-auto flex flex-wrap gap-3">
             <button className="btn" onClick={() => !validate.isPending && validate.mutate(undefined)} disabled={validate.isPending || !accounts.length} title={t("accounts.validateAllHint", { keys: "Ctrl+R" })}>
               <Icon name="refresh" size={14} className={validate.isPending ? "spin" : ""} />
               {validate.isPending ? t("accounts.validating") : t("accounts.validateAll")}
             </button>
-            <Segmented
-              label={t("accounts.density")}
-              value={density}
-              options={[{ value: "detailed", label: t("accounts.densityDetailed") }, { value: "compact", label: t("accounts.densityCompact") }]}
-              onChange={(d) => setSettings.mutate({ density: d })}
-            />
             <button className="btn btn-primary" onClick={onAdd} title={t("accounts.addHint", { keys: "Ctrl+N" })}>
               <Icon name="plus" size={14} />
               {t("accounts.add.title")}
@@ -352,11 +362,19 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
         </div>
 
         {accounts.length === 0 ? (
-          <Empty onAdd={onAdd} />
+          <>
+            {/* Left over from accounts that are gone: they can still be edited or deleted. */}
+            {groups.length > 0 && (
+              <div className="flex flex-wrap items-center gap-3">
+                <GroupChips groups={groups} accounts={accounts} active={activeGroup?.id ?? null} onPick={setGroup} />
+              </div>
+            )}
+            <Empty onAdd={onAdd} />
+          </>
         ) : (
           <>
-            <div className="flex flex-wrap items-center gap-2 px-5 pb-3.5">
-              <label className="flex items-center gap-2 flex-[0_1_260px] h-[30px] px-2.5 border border-line bg-panel text-dim focus-within:border-[var(--focus)]">
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="field flex items-center gap-2 flex-[1_1_160px] max-w-[320px] w-auto text-dim focus-within:border-[var(--focus)]">
                 <Icon name="search" size={14} />
                 <span className="sr-only">{t("accounts.filterLabel")}</span>
                 <input
@@ -374,27 +392,42 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
                   className="flex-1 min-w-0 bg-transparent outline-none text-text"
                 />
               </label>
-              {FILTERS.map((f) => (
-                <button key={f.key} className="chip" aria-pressed={filter === f.key} onClick={() => setFilter(f.key)}>
-                  {f.key === "fav" && <Icon name="star" size={12} fill={filter === "fav"} />}
-                  {t(f.label)}
-                  <span className="mono text-[11px] opacity-80">{counts(f.key)}</span>
-                </button>
-              ))}
-              {activeGroup && (
-                <button className="chip" aria-pressed="true" onClick={() => setGroup(null)} aria-label={t("accounts.clearGroupFilter", { name: activeGroup.name })}>
-                  <span aria-hidden="true" className="w-2 h-2" style={{ background: groupColor(activeGroup) }} />
-                  {activeGroup.name}
-                  <Icon name="x" size={12} />
-                </button>
-              )}
+              <button
+                className="chip"
+                popoverTarget="status-filter"
+                style={{ anchorName: "--status-filter" }}
+                data-on={filter !== "all" || undefined}
+              >
+                <Icon name="sliders" size={14} />
+                {filter === "all" ? t("accounts.filter.status") : t(FILTERS.find((f) => f.key === filter)!.label)}
+                <Icon name="chevron" size={12} />
+              </button>
+              <div id="status-filter" popover="auto" className="menu" onKeyDown={menuKeys} style={{ positionAnchor: "--status-filter", positionArea: "block-end span-inline-end", margin: "6px 0 0" }}>
+                {FILTERS.map((f) => (
+                  <button
+                    key={f.key}
+                    aria-pressed={filter === f.key}
+                    className="menu-item"
+                    popoverTarget="status-filter"
+                    popoverTargetAction="hide"
+                    onClick={() => setFilter(f.key)}
+                  >
+                    <Icon name="check" size={12} className={filter === f.key ? "" : "invisible"} />
+                    <span className="flex-1">{t(f.label)}</span>
+                    <span className="mono text-xs text-dim">{counts(f.key)}</span>
+                  </button>
+                ))}
+              </div>
+              <GroupChips groups={groups} accounts={accounts} active={activeGroup?.id ?? null} onPick={setGroup} />
             </div>
 
-            <div className="scroll flex-1 min-h-0 border-t border-line">
-              <table className="w-full border-collapse">
+            <div className="flex-[1_0_300px] min-h-0 flex">
+            <div className="panel flex-1 min-w-0 flex flex-col overflow-hidden p-2 mr-3">
+            <div className="scroll flex-1 min-h-0">
+              <table className="w-full border-separate border-spacing-0">
                 <thead>
                   <tr>
-                    <th className="w-[68px] pl-[35px]">
+                    <th className="w-[68px] pl-[35px] rounded-tl-[14px]">
                       <input
                         type="checkbox"
                         className="cb"
@@ -407,9 +440,9 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
                       />
                     </th>
                     <th className="label">{t("accounts.colAccount")}</th>
-                    <th className="label w-[34%]">{t("accounts.colStatus")}</th>
-                    <th className="label w-[24%] hidden @2xl:table-cell">{t("accounts.groups.title")}</th>
-                    <th className="w-12"><span className="sr-only">{t("accounts.detail.favourite")}</span></th>
+                    <th className="label w-[30%] hidden @3xl:table-cell">{t("accounts.colStatus")}</th>
+                    <th className="label w-[22%] hidden @5xl:table-cell">{t("accounts.groups.title")}</th>
+                    <th className="w-[104px]"><span className="sr-only">{t("launch.running.actions")}</span></th>
                   </tr>
                 </thead>
                 <tbody ref={tbody}>
@@ -426,6 +459,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
                         key={a.id}
                         data-id={a.id}
                         data-selected={current?.id === a.id || undefined}
+                        aria-current={current?.id === a.id || undefined}
                         className={cls.filter(Boolean).join(" ")}
                         onClick={() => setSelected(a.id)}
                         onContextMenu={(e) => {
@@ -460,18 +494,22 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
                             />
                           </div>
                         </td>
-                        <td className="pr-3">
+                        <td className="pr-3 max-w-0">
                           <div className="flex items-center gap-2.5 min-w-0">
                             <Avatar account={a} size={compact ? 22 : 28} />
                             <div className={compact ? "flex items-baseline gap-2 min-w-0" : "flex flex-col min-w-0 leading-tight"}>
                               <button type="button" className="linkbtn font-semibold truncate" onClick={() => setSelected(a.id)}>
                                 {name}
                               </button>
-                              <span className="mono text-xs text-dim truncate">@{a.username}</span>
+                              <span className="mono text-xs text-dim truncate hidden @3xl:block">@{a.username}</span>
+                              {/* No room for the Status column. */}
+                              <span className="flex min-w-0 text-xs @3xl:hidden">
+                                <Status status={a.status} presence={presence?.get(a.id)} checking={isChecking(a.id)} />
+                              </span>
                             </div>
                           </div>
                         </td>
-                        <td className="pr-3 max-w-0">
+                        <td className="pr-3 max-w-0 hidden @3xl:table-cell">
                           <Status
                             status={a.status}
                             presence={presence?.get(a.id)}
@@ -479,30 +517,46 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
                             detail={!compact && a.statusCheckedAt ? ago(a.statusCheckedAt, now) : undefined}
                           />
                         </td>
-                        <td className="pr-3 hidden @2xl:table-cell">
+                        <td className="pr-3 hidden @5xl:table-cell">
                           <div className="flex flex-wrap gap-1">
                             {a.groupIds.flatMap((gid) => groupById.get(gid) ?? []).map((g) => (
                               <span key={g.id} className="tag">
-                                <span aria-hidden="true" className="w-1.5 h-1.5" style={{ background: groupColor(g) }} />
+                                <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full" style={{ background: groupColor(g) }} />
                                 {g.name}
                               </span>
                             ))}
                           </div>
                         </td>
                         <td className="pr-2">
-                          <button
-                            type="button"
-                            className="wc w-9 h-9"
-                            style={a.favourite ? { color: "var(--accent-text)" } : undefined}
-                            aria-label={t("accounts.favouriteName", { name })}
-                            aria-pressed={a.favourite}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              update.mutate({ id: a.id, patch: { favourite: !a.favourite } });
-                            }}
-                          >
-                            <Icon name="star" size={14} fill={a.favourite} />
-                          </button>
+                          <span className="flex items-center justify-end gap-1">
+                            <button
+                              type="button"
+                              className="wc w-9 h-9"
+                              style={a.favourite ? { color: "var(--accent-text)" } : undefined}
+                              aria-label={t("accounts.favouriteName", { name })}
+                              aria-pressed={a.favourite}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                update.mutate({ id: a.id, patch: { favourite: !a.favourite } });
+                              }}
+                            >
+                              <Icon name="star" size={14} fill={a.favourite} />
+                            </button>
+                            {canPlay(a.id) && (
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-icon w-9"
+                                aria-label={t("launch.launchAs", { name })}
+                                title={t("launch.launchAs", { name })}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onLaunch([a.id]);
+                                }}
+                              >
+                                <Icon name="play" size={12} fill />
+                              </button>
+                            )}
+                          </span>
                         </td>
                       </tr>
                     );
@@ -525,13 +579,39 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
                 </div>
               )}
             </div>
-          </>
-        )}
 
+        <footer className="h-7 flex-none flex items-center gap-4 px-3 text-xs text-dim">
+          <span>{lastChecked ? t("accounts.validatedAgo", { when: ago(lastChecked, now) }) : t("accounts.notValidated")}</span>
+          <span className="mono ml-auto">v{import.meta.env.APP_VERSION}</span>
+        </footer>
+            </div>
+      {current && <Divider panel={detail} side="right" label={t("accounts.detailsWidth")} />}
+      {current && (
+        <aside
+          key={current.id}
+          // Pin the panel to this account once it is used, so an edit that drops it from the
+          // filtered list can't swap the panel to another account under the next click.
+          onFocusCapture={() => setSelected(current.id)}
+          aria-label={t("accounts.details")}
+          style={{ width: detail.width, maxWidth: "40cqw" }}
+          className="panel scroll flex-none ml-3">
+          <DetailPanel
+            account={current}
+            groups={groups}
+            vaultMode={vaultMode}
+            clipboardSeconds={clipboardSeconds}
+            checking={isChecking(current.id)}
+            playing={live.has(current.id)}
+            onValidate={() => validate.mutate([current.id])}
+            onRemove={() => askRemove([current.id])}
+            onLaunch={() => onLaunch([current.id])}
+          />
+        </aside>
+      )}
+            </div>
         {checkedIds.length > 0 && (
-          <div className="enter flex flex-wrap items-center gap-2.5 px-5 py-2.5 border-t border-line-strong bg-raised">
+          <div className="enter well flex-none flex flex-wrap items-center gap-2.5 px-3.5 py-2.5">
             <span className="mono font-medium">{t("accounts.selected", { count: checkedIds.length })}</span>
-            <span className="w-px h-5 bg-line" aria-hidden="true" />
             <button
               className="btn btn-primary"
               onClick={() => onLaunch(checkedIds)}
@@ -539,7 +619,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
               title={checkedValid < checkedIds.length ? t("accounts.cantLaunch", { count: checkedIds.length - checkedValid }) : undefined}
             >
               <Icon name="play" size={12} />
-              {t("accounts.launchCount", { count: checkedValid })}
+              {t("launch.launchMany", { count: checkedValid })}
             </button>
             <button className="btn" onClick={() => validate.mutate(checkedIds)} disabled={validate.isPending}>
               <Icon name="refresh" size={14} />
@@ -571,45 +651,19 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
             <button className="btn ml-auto" onClick={() => setChecked(new Set())}>{t("accounts.clear")}</button>
           </div>
         )}
-
-        <footer className="mono h-7 flex-none flex items-center gap-4 px-5 border-t border-line text-[11px] text-dim">
-          <span>{lastChecked ? t("accounts.validatedAgo", { when: ago(lastChecked, now) }) : t("accounts.notValidated")}</span>
-          <span className="ml-auto">v{import.meta.env.APP_VERSION}</span>
-        </footer>
+          </>
+        )}
       </main>
 
       <AccountMenu
         at={menu}
         onClose={closeMenu}
         selection={checkedIds}
-        canLaunch={(id) => byId.get(id)?.status === "valid"}
+        canLaunch={canPlay}
         onLaunch={onLaunch}
         onValidate={(ids) => validate.mutate(ids)}
         onRemove={askRemove}
       />
-      {current && <Divider panel={detail} side="right" label={t("accounts.detailsWidth")} />}
-      {current && (
-        <aside
-          key={current.id}
-          // Pin the panel to this account once it is used, so an edit that drops it from the
-          // filtered list can't swap the panel to another account under the next click.
-          onFocusCapture={() => setSelected(current.id)}
-          aria-label={t("accounts.details")}
-          style={{ width: detail.width }}
-          className="scroll flex-none bg-panel border-l border-line">
-          <DetailPanel
-            account={current}
-            groups={groups}
-            vaultMode={vaultMode}
-            clipboardSeconds={clipboardSeconds}
-            checking={isChecking(current.id)}
-            onValidate={() => validate.mutate([current.id])}
-            onRemove={() => askRemove([current.id])}
-            onLaunch={() => onLaunch([current.id])}
-          />
-        </aside>
-      )}
-
       <ConfirmDialog
         open={removeOpen}
         onClose={() => setRemoveOpen(false)}
@@ -635,12 +689,12 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
 
 function Empty({ onAdd }: { onAdd: () => void }) {
   return (
-    <div className="enter flex-1 grid place-items-center border-t border-line p-8">
-      <div className="flex flex-col items-center gap-4 max-w-sm text-center">
-        <span className="w-12 h-12 grid place-content-center border border-line-strong text-dim">
+    <div className="enter flex-1 grid place-items-center p-8">
+      <div className="panel flex flex-col items-center gap-4 max-w-sm p-8 text-center">
+        <span className="num w-12 h-12 text-dim">
           <Icon name="accounts" size={20} />
         </span>
-        <h2 className="text-[15px] font-semibold">{t("accounts.emptyTitle")}</h2>
+        <h2 className="section-title">{t("accounts.emptyTitle")}</h2>
         <p className="text-dim">
           {t("accounts.emptyText")}
         </p>

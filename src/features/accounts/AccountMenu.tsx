@@ -1,3 +1,4 @@
+import { menuKeys } from "../../ui/menu";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -34,7 +35,7 @@ export function AccountMenu({ at, onClose, selection, canLaunch, onLaunch, onVal
     // Keep it inside the window.
     const r = el.getBoundingClientRect();
     setPos({ left: Math.max(4, Math.min(at.x, innerWidth - r.width - 4)), top: Math.max(4, Math.min(at.y, innerHeight - r.height - 4)) });
-    el.querySelector<HTMLElement>(".menu-item")?.focus();
+    el.querySelector<HTMLElement>(".menu-item:not(:disabled)")?.focus();
   }, [at]);
 
   useEffect(() => {
@@ -56,7 +57,7 @@ export function AccountMenu({ at, onClose, selection, canLaunch, onLaunch, onVal
 
   const items: ([IconName, string, () => unknown, boolean?] | null)[] = a
     ? [
-        ["play", many ? t("accounts.menu.launchMany", { count: ids.length }) : t("common.launch"), () => onLaunch(ids), !anyValid],
+        ["play", many ? t("launch.launchMany", { count: ids.length }) : t("common.launch"), () => onLaunch(ids), !anyValid],
         ["signin", t("accounts.menu.openSession"), () => session.mutateAsync(a.id).catch(toastError)],
         ["external", t("accounts.menu.openProfile"), () => openUrl(`https://www.roblox.com/users/${a.userId}/profile`).catch(toastError)],
         null,
@@ -81,6 +82,7 @@ export function AccountMenu({ at, onClose, selection, canLaunch, onLaunch, onVal
       role="menu"
       aria-label={a ? t("accounts.menu.actionsFor", { name: a.username }) : t("accounts.menu.actions")}
       className="menu"
+      onKeyDown={menuKeys}
       style={{ position: "fixed", positionArea: "none", inset: "auto", left: pos.left, top: pos.top, margin: 0, maxHeight: "none" }}
     >
       {items.map((it, i) =>

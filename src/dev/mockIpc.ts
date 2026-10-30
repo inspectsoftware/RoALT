@@ -69,14 +69,14 @@ let accounts: AccountSummary[] = seed.map(([alias, displayName, username, userId
 }));
 
 let settings: Settings = {
-  theme: "dark", accent: "", backgroundDim: 80, density: "detailed", autoLockMinutes: 15, clipboardClearSeconds: 30, cacheMinutes: 10,
+  theme: "dark", accent: "", backgroundDim: 60, density: "detailed", autoLockMinutes: 15, clipboardClearSeconds: 30, cacheMinutes: 10,
   multiInstance: true, protectSharedLogin: true, launchDelayMs: 6000, autoRejoin: false, autoRestartOnCrash: false,
   breakerMax: 3, breakerWindowMin: 10, closeGraceS: 5, launchArgs: "", closeToTray: false,
   memRestartMb: 0, memThrottle: { mb: 0, cpuCap: 10 }, trimEveryMin: 0, autoSpread: false,
   adaptive: { enabled: false, background: { cpuCap: 25, eco: true, trimEveryMin: null, affinity: null } }, bandwidthKbps: 0,
   antiAfk: { enabled: false, intervalMin: 15, mode: "focus" },
   discord: { crash: true, hang: true, memRestart: true, disconnect: true, restart: true, breaker: true, batchDone: true, launch: false, statusEveryMin: 0 },
-  autoUpdate: false, selfUpdate: true, discordPresence: true, minimizeOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0, lowGraphics: true, lighterRendering: true, parkMinimized: false,
+  autoUpdate: false, selfUpdate: true, discordPresence: true, minimizeOnLaunch: false, microWidth: 320, microHeight: 240, tinyOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0, lowGraphics: true, skipSplash: false, lighterRendering: true, renderFlags: { msaa: "x1", texture: "lowest", mode: "default", graySky: false, noGrass: true, lowestFrm: true }, parkMinimized: false,
   allowPublicNetworks: true, language: "",
 };
 
@@ -186,7 +186,7 @@ function endInstance(id: string, note: string) {
 }
 /** The last performance profile "saved" in the preview (performance_export). */
 let lastProfile: string | null = null;
-const PERF_KEYS = ["fpsCap", "lowGraphics", "lighterRendering", "minimizeOnLaunch", "parkMinimized", "memRestartMb", "memThrottle", "trimEveryMin", "autoSpread", "adaptive"] as const;
+const PERF_KEYS = ["fpsCap", "lowGraphics", "lighterRendering", "renderFlags", "minimizeOnLaunch", "microWidth", "microHeight", "tinyOnLaunch", "parkMinimized", "memRestartMb", "memThrottle", "trimEveryMin", "autoSpread", "adaptive"] as const;
 
 function perfProfile(previewFps: number) {
   const s: Record<string, unknown> = {};
@@ -222,7 +222,7 @@ function track(accountId: number, pid: number, target: LaunchTarget, placeId: nu
   const i: Instance = {
     id: crypto.randomUUID(), accountId, pid, state: "starting", target, placeId, jobId: null,
     startedAt: Date.now(), endedAt: null, viaBootstrapper, note: null, rejoins, limits: { cpuCap: null, eco: false, trimEveryMin: null, affinity: null },
-    antiAfk: true, afkAt: null, throttled: false, micro: false, fpsCap, signInProblem: false,
+    antiAfk: true, afkAt: null, throttled: false, micro: false, fpsCap, relaunching: false, relaunchProblem: null, signInProblem: false,
   };
   instances.push(i);
   if (!lockHeld) eventHolder = i.id;
@@ -280,7 +280,13 @@ setInterval(() => {
   due.forEach((i) => (i.afkAt = Date.now()));
   if (due.length) instancesChanged();
 }, 20_000);
-const vault = { mode: "master" as VaultMode, locked: false, password: "password" };
+// Fake recovery code: "ABC-DEF-234" until a new one is made.
+const vault = { mode: "master" as VaultMode, locked: false, password: "password", recovery: "ABC-DEF-234" };
+const normalCode = (s: string) => s.replace(/[-\s]/g, "").toUpperCase();
+function fakeRecoveryCode() {
+  const pick = () => "23456789ABCDEFGHJKMNPQRSTUVWXYZ"[Math.floor(Math.random() * 31)];
+  return Array.from({ length: 3 }, () => pick() + pick() + pick()).join("-");
+}
 const FAKE_COOKIE = "_|WARNING:-DO-NOT-SHARE-THIS.--DEV-PREVIEW-FAKE-VALUE|_" + "0F1E2D3C4B5A69788796A5B4C3D2E1F0".repeat(6);
 
 type Args = Record<string, any>;
@@ -641,7 +647,7 @@ function reauth(password?: string) {
 async function handle(cmd: string, args: Args): Promise<unknown> {
   switch (cmd) {
     case "vault_status":
-      return { mode: vault.mode, locked: vault.locked, accounts: accounts.length, autoLockMinutes: settings.autoLockMinutes };
+      return { mode: vault.mode, locked: vault.locked, accounts: accounts.length, autoLockMinutes: settings.autoLockMinutes, hasRecovery: !!vault.recovery };
     case "vault_unlock":
       await sleep(450);
       if (args.password !== vault.password) return fail("wrongPassword", "Wrong password.");
@@ -657,10 +663,26 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       if (args.mode === "master") {
         if (!args.newPassword || args.newPassword.length < 8) return fail("invalid", "Use at least 8 characters.");
         vault.password = args.newPassword;
-      }
+      } else vault.recovery = "";
       vault.mode = args.mode;
       return null;
     }
+    case "vault_recovery_create":
+      await sleep(800);
+      if (args.currentPassword !== vault.password) return fail("wrongPassword", "Wrong password.");
+      return (vault.recovery = fakeRecoveryCode());
+    case "vault_recover": {
+      await sleep(1200);
+      if (!vault.recovery || normalCode(args.code) !== normalCode(vault.recovery)) return fail("wrongPassword", "Wrong password.");
+      if (args.newPassword.length < 8) return fail("invalid", "Use at least 8 characters.");
+      vault.password = args.newPassword;
+      vault.locked = false;
+      return (vault.recovery = fakeRecoveryCode());
+    }
+    case "vault_recovery_save":
+    case "vault_recovery_copy":
+      if (normalCode(args.code).length !== 9) return fail("invalid", "That isn't a recovery code.");
+      return null;
     case "app_activity":
       return null;
     case "splash_done":
@@ -933,7 +955,7 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       i.micro = args.on;
       minimized.delete(i.id);
       instancesChanged();
-      return args.on ? [320, 240] : [800, 600];
+      return args.on ? (args.size ?? [settings.microWidth, settings.microHeight]) : [800, 600];
     }
     case "instances_tile": {
       const shown = instances.filter((i) => i.state !== "exited" && i.state !== "starting" && !minimized.has(i.id));
@@ -943,6 +965,41 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     }
     case "instances_metrics":
       return fakeMetrics();
+    case "system_usage": {
+      const m = fakeMetrics();
+      return { cpuPct: Math.min(100, 12 + m.reduce((n, x) => n + (x.cpuPct ?? 0), 0)), memUsedMb: 7000 + m.reduce((n, x) => n + x.privateMb, 0), memTotalMb: 32_768 };
+    }
+    case "instance_stop_relaunch": {
+      const i = instances.find((x) => x.id === args.id);
+      if (i) {
+        i.relaunching = false;
+        i.relaunchProblem = null;
+      }
+      instancesChanged();
+      return null;
+    }
+    case "instances_retry_relaunch":
+      for (const i of instances.filter((x) => x.relaunching)) {
+        i.relaunching = false;
+        i.relaunchProblem = null;
+        i.state = "joining";
+        setTimeout(() => {
+          i.state = "inGame";
+          instancesChanged();
+        }, 2000);
+      }
+      instancesChanged();
+      return null;
+    case "mock_trouble": {
+      const i = instances.find((x) => x.state === "inGame");
+      if (i) {
+        i.state = "disconnected";
+        i.relaunching = true;
+        i.relaunchProblem = "Couldn't reach Roblox. Check your connection and try again.";
+        instancesChanged();
+      }
+      return null;
+    }
     case "bandwidth_status":
       return { kbps: settings.bandwidthKbps, active: settings.bandwidthKbps > 0 && bandwidthActive };
     case "bandwidth_apply":

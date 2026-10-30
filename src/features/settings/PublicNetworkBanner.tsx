@@ -9,7 +9,7 @@ export function PublicNetworkBanner({ settings }: { settings: Settings }) {
   const onPublic = useNetwork().data?.public;
   if (!onPublic || settings.allowPublicNetworks) return null;
   return (
-    <div role="status" className="enter flex-none flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2 bg-panel border-b border-line">
+    <div role="status" className="enter panel flex-none flex flex-wrap items-center gap-x-4 gap-y-2 mx-3 mt-1 mb-2 px-4 py-2.5">
       <Icon name="lock" />
       <span className="flex-1 min-w-0">{t("settings.publicBannerBlocked")}</span>
     </div>

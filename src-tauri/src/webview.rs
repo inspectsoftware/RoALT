@@ -56,6 +56,7 @@ pub async fn capture_login(app: &AppHandle, data_dir: &Path) -> Result<Secret> {
         .incognito(true)
         .devtools(cfg!(debug_assertions))
         .general_autofill_enabled(false)
+        .on_navigation(allowed)
         .build();
     let window = match built {
         Ok(w) => w,
@@ -105,6 +106,7 @@ pub async fn open_session(
         .incognito(true)
         .devtools(cfg!(debug_assertions))
         .general_autofill_enabled(false)
+        .on_navigation(allowed)
         .build();
     let window = match built {
         Ok(w) => w,
@@ -216,6 +218,21 @@ fn harden_webview(pv: &PlatformWebview, cookie: Option<&Secret>) -> windows::cor
         let settings = settings.cast::<ICoreWebView2Settings4>()?;
         settings.SetAreBrowserAcceleratorKeysEnabled(false)?;
         settings.SetIsPasswordAutosaveEnabled(false)?;
+        // As well as on_navigation: Tauri lets through any address it can't parse, and a page on
+        // such a host panics Tauri's IPC, which ends the app.
+        let guard = webview2_com::NavigationStartingEventHandler::create(Box::new(|_, args| {
+            if let Some(args) = args {
+                let mut uri = windows::core::PWSTR::null();
+                // A live args interface; `take_pwstr` frees the string it hands out.
+                args.Uri(&mut uri)?;
+                if !allowed_uri(&webview2_com::take_pwstr(uri)) {
+                    args.SetCancel(true)?;
+                }
+            }
+            Ok(())
+        }));
+        let mut token = Default::default();
+        wv.add_NavigationStarting(&guard, &mut token)?;
         if let Some(cookie) = cookie {
             // WebView2's own manager: `.roblox.com` keeps its dot (Tauri's `set_cookie` drops it).
             let value = wide(cookie.expose());
@@ -344,6 +361,25 @@ fn pick_roblosecurity(cookies: Vec<Cookie<'static>>) -> Option<Secret> {
         .map(|c| Secret::new(c.value()))
 }
 
+/// Where a Roblox window may go: Roblox over https, and the sign-in providers it hands off to.
+/// A Tauri window's page can crash the app through its IPC with a crafted host name, so it stays
+/// off anything else.
+fn allowed(url: &Url) -> bool {
+    let ok = url.as_str() == "about:blank"
+        || (url.scheme() == "https"
+            && url.username().is_empty()
+            && url.port().is_none()
+            && url.host_str().is_some_and(|h| is_roblox(h) || ["apple.com", "google.com"].iter().any(|d| h == *d || h.ends_with(&format!(".{d}")))));
+    if !ok {
+        log::debug!("Roblox window: navigation to another site refused");
+    }
+    ok
+}
+
+fn allowed_uri(uri: &str) -> bool {
+    uri.parse().is_ok_and(|u| allowed(&u))
+}
+
 fn is_roblox(domain: &str) -> bool {
     let d = domain.trim_start_matches('.').to_ascii_lowercase();
     d == "roblox.com" || d.ends_with(".roblox.com")
@@ -411,6 +447,28 @@ mod tests {
         assert_eq!(picked(vec![Cookie::new(".ROBLOSECURITY", "no-domain")]), None);
         assert_eq!(picked(vec![cookie(".roblosecurity", "x", "roblox.com")]), None);
         assert_eq!(picked(vec![]), None);
+    }
+
+    #[test]
+    fn roblox_windows_stay_on_roblox() {
+        let go = allowed_uri;
+        for u in ["about:blank", "https://www.roblox.com/home", "https://roblox.com/", "https://appleid.apple.com/x", "https://accounts.google.com/"] {
+            assert!(go(u), "{u}");
+        }
+        for u in [
+            "http://www.roblox.com/",
+            "http://tauri.localhost/",
+            "https://tauri.localhost/",
+            "http://x:y@tauri.localhost:1234/",
+            "https://evil.com/",
+            "https://roblox.com.evil.com/",
+            "https://x@www.roblox.com/",
+            "https://www.roblox.com:8443/",
+            "file:///C:/x",
+            "http://xn--a.localhost:1/",
+        ] {
+            assert!(!go(u), "{u}");
+        }
     }
 
     #[test]

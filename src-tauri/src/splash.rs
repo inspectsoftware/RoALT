@@ -1,6 +1,7 @@
 //! The start-up splash. The main window opens small (440 × 300, centered on where it will end
 //! up) while the UI plays the logo animation (`src/features/splash`); `splash_done` then grows it
-//! to the size and place window-state restored, and maximizes it if it was.
+//! to the size and place window-state restored, and maximizes it if it was. With
+//! `Settings.skip_splash` it opens there at once.
 
 use std::sync::Mutex;
 use std::thread::sleep;
@@ -38,8 +39,8 @@ struct Target {
 pub struct Pending(Mutex<Option<Target>>);
 
 /// Restores the saved window state (the plugin skips "main" at start), remembers it, shrinks the
-/// hidden window to the splash size centered on it and shows it.
-pub fn start(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
+/// hidden window to the splash size centered on it and shows it; `skip`: shows it as it will stay.
+pub fn start(app: &AppHandle, w: &WebviewWindow, skip: bool) -> tauri::Result<()> {
     w.restore_state(StateFlags::all() - StateFlags::VISIBLE)?;
     let maximized = w.is_maximized()?;
     if maximized {
@@ -59,6 +60,14 @@ pub fn start(app: &AppHandle, w: &WebviewWindow) -> tauri::Result<()> {
     }
     if maximized && let Some(m) = &monitor {
         rect = area(m);
+    }
+    if skip {
+        w.set_size(PhysicalSize::new(rect.w as u32, rect.h as u32))?;
+        w.set_position(PhysicalPosition::new(rect.x, rect.y))?;
+        settle(&w, maximized);
+        w.show()?;
+        let _ = w.set_focus();
+        return Ok(());
     }
     let s = centered(rect, (SPLASH.0 * scale) as i32, (SPLASH.1 * scale) as i32);
     w.set_size(PhysicalSize::new(s.w as u32, s.h as u32))?;
@@ -134,10 +143,15 @@ fn grow(app: &AppHandle, fallback: bool) {
             log::warn!("splash: could not place the window: {e}");
         }
     }
+    settle(&w, target.maximized);
+}
+
+/// The window at its final size: from here it has its minimum, and is maximized if it was.
+fn settle(w: &WebviewWindow, maximized: bool) {
     if let Err(e) = w.set_min_size(Some(LogicalSize::new(MIN.0, MIN.1))) {
         log::warn!("splash: could not set the minimum size: {e}");
     }
-    if target.maximized
+    if maximized
         && let Err(e) = w.maximize()
     {
         log::warn!("splash: could not maximize the window: {e}");

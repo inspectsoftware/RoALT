@@ -175,7 +175,7 @@ impl Multi {
         let message = match (enabled && !active, blocked_by.is_empty()) {
             (false, _) => None,
             (true, false) => Some(running()),
-            (true, true) => Some(tr!("Multi-instance isn't active yet. Turn it off and on again to retry.")),
+            (true, true) => Some(tr!("Multi-instance isn't active yet.")),
         };
         MultiInstanceStatus { enabled, active, protect_shared_login, blocked_by, message }
     }

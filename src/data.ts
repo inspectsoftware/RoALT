@@ -19,6 +19,7 @@ export const qk = {
   crashes: ["crashes"],
   serverHistory: (id: number) => ["serverHistory", id] as const,
   metrics: ["metrics"],
+  system: ["system"],
   bandwidth: ["bandwidth"],
   discord: ["discord"],
   bulk: ["bulk"],
@@ -59,6 +60,9 @@ export const useCrashes = () => useQuery({ queryKey: qk.crashes, queryFn: api.cr
 /** Polled every 2 s while a caller is mounted and the window is visible. */
 export const useMetrics = () =>
   useQuery({ queryKey: qk.metrics, queryFn: api.instancesMetrics, staleTime: 0, refetchInterval: 2000, refetchIntervalInBackground: false });
+/** How busy the whole PC is; polled like the metrics. */
+export const useSystemUsage = (enabled: boolean) =>
+  useQuery({ queryKey: qk.system, queryFn: api.systemUsage, enabled, staleTime: 0, refetchInterval: 2000, refetchIntervalInBackground: false });
 /** While the lock is wanted but not held, asks again every 5 s (Roblox may have been closed). */
 export const useMultiStatus = () =>
   useQuery({
@@ -145,10 +149,12 @@ export function useUpdateAccount() {
 export function useSetSettings() {
   const qc = useQueryClient();
   return useMutation({
+    mutationKey: qk.settings,
     mutationFn: (patch: SettingsPatch) => api.settingsSet(patch),
     onMutate: (patch) => qc.setQueryData<Settings>(qk.settings, (s) => (s ? { ...s, ...patch } : s)),
     onSuccess: (s) => {
-      qc.setQueryData(qk.settings, s);
+      // An earlier save's answer would undo the optimistic value of a later one still on its way.
+      if (qc.isMutating({ mutationKey: qk.settings }) === 1) qc.setQueryData(qk.settings, s);
       qc.invalidateQueries({ queryKey: qk.vault });
     },
     onError: () => qc.invalidateQueries({ queryKey: qk.settings }),

@@ -77,7 +77,7 @@ with auto-lock. Reveal and copy sit behind **Windows Hello** or the master passw
 
 ### 👥 Accounts at a glance
 Avatars, live presence, Robux, Plus, friends, followers and 2-step status. Groups, aliases, notes,
-favourites, search and filters. Validate one or all in a click.
+favourites, search and filters. Check sign-ins, one or all, in a click.
 
 </td>
 </tr>
@@ -147,7 +147,7 @@ it is signed by Roblox Corporation. Optional auto-update when no client runs.
 <tr>
 <td valign="top">
 
-### 🖥️ Dashboard
+### 🖥️ Home
 Every running client as a live window thumbnail. Right-click one to focus, minimize, shrink it to a
 micro window, limit it or close it. Tile all clients in a grid in one click.
 
@@ -168,18 +168,20 @@ Security, and RoALT won't launch on them and a master-password vault locks there
 
 | Area | What you get |
 |---|---|
-| 🔐 **Vault** | DPAPI by default (opens silently). Optional master password with auto-lock after idle. Encrypted `.roalt` backups you can export and import. Copied cookies are kept out of clipboard history and cleared after 30 s. |
+| 🔐 **Vault** | DPAPI by default (opens silently). Optional master password with auto-lock after idle, and an optional one-use recovery code for it. Encrypted `.roalt` backups you can export and import. Copied cookies are kept out of clipboard history and cleared after 30 s. |
 | 👥 **Accounts** | Add through Roblox's sign-in page (passkeys and security keys work), by pasting a cookie, by pasting many cookies at once, or by importing from Roblox Account Manager (an unlocked `AccountData.json`). Groups, alias, notes, colour, favourite, drag to reorder. Presence, Robux, Plus / Premium (legacy), friend and follower counts, join date, email and 2-step status. "Open on roblox.com" signed in as that account. |
-| 🚀 **Launch** | Game links, place IDs, `roblox://` links, job IDs, private server links, `roblox.com/share` links (both formats), universes, profiles, `@username`. Join a friend or one of your other accounts. Favourites in the sidebar and tray. `Ctrl+Enter` to launch. |
+| 🚀 **Play** | Game links, place IDs, `roblox://` links, job IDs, private server links, `roblox.com/share` links (both formats), universes, profiles, `@username`. Join a friend or one of your other accounts. Favourites on the Play page and in the tray. `Ctrl+Enter` to launch. |
 | 🪟 **Batches** | Accounts launch strictly one after another with a stagger (default 6 s). **Same server**: *Pick a server* finds one with room for everyone first; *Follow the first* sends the rest to wherever the first account landed. Cancel at any time; one click re-picks the accounts that didn't launch. |
 | 🔁 **Recovery** | Auto-rejoin after kicks, shutdowns and lost connections (not after you leave on purpose). Opt-in auto-restart for crashes, frozen windows (30 s) and a memory limit. Crash breaker: default 3 relaunches in 10 minutes, with growing backoff. Per-account "Allow disconnect". Crash history with the log's reason. |
-| 🖥️ **Dashboard** | Live preview per client at 15, 30 or 60 FPS (your pick, while RoALT is on screen), with state, game, uptime, CPU and RAM. Right-click, the menu key or `Shift+F10` for focus, minimize, restore, micro window (320×240) and back, CPU limit, efficiency mode, anti-AFK, close. **Tile** fits all clients in a grid on the screen; **Tile micro** lays out micro windows. Minimize all, Restore all. |
-| 🛑 **Kill all** | Hold one button in the sidebar, use the tray, or press a global **panic hotkey** you choose (off by default) to end every Roblox process and stop pending launches and rejoins. |
+| ↔️ **Free resizing** | Drag a client's edge to any size, past the minimum Roblox holds its window to. RoALT sizes the window itself (a mouse hook in RoALT's own process); nothing goes into the client. |
+| 🖥️ **Home** | Live preview per client at 15, 30 or 60 FPS (your pick, while RoALT is on screen), with state, game, uptime, CPU and RAM. The **⋯** key, right-click, the menu key or `Shift+F10` for focus, minimize, restore, tiny window (any size, 320×240 by default) and back, CPU limit, efficiency mode, anti-AFK, close. **Tile** fits all clients in a grid on the screen; **Tile micro** lays out micro windows. Minimize all, Restore all. |
+| 🛑 **Stop all** | Hold one button in the sidebar, use the tray, or press a global **panic hotkey** you choose (off by default) to end every Roblox process and stop pending launches and rejoins. |
 | ⏲️ **Automation** | Minimize each new client on launch. Auto-shutdown timer: close the clients and shut the PC down at a set time (survives a RoALT restart, can be cancelled). Hourly Roblox log cleaner (logs older than a day or over 50 MB). Open logs button; RoALT's own logs rotate at 5 MB. |
 | ⚙️ **Launch control** | Custom launch arguments (default and per account, checked before use and never logged), a cooldown between launches, a configurable close grace (1–60 s). |
 | 🎚️ **Limits** | Per client: CPU cap, efficiency mode, core affinity, working-set trim (every N minutes or "Trim now"). Adaptive manager for background clients; your manual limits always win. **Memory throttle**: a client over a RAM limit gets a CPU cap, which lowers its frame rate, until it drops under 90 % of the limit. |
-| 🎞️ **FPS cap & graphics** | A default frame-rate cap (5–360), a per-account override and a per-launch one in Launch (a rejoin keeps it), plus the lowest graphics for every client (on by default). Set through Roblox's own Maximum Frame Rate and Graphics Quality just before each client starts; your own Roblox settings are put back once it has read them, and again when such a client closes (or when RoALT next starts, if it wasn't running then). Everything performance-related lives in its own **Performance** tab. |
+| 🎞️ **FPS cap & graphics** | A default frame-rate cap (5–360), a per-account override and a per-launch one under Play's More options (a rejoin keeps it), plus the lowest graphics for every client (on by default). Set through Roblox's own Maximum Frame Rate and Graphics Quality just before each client starts; your own Roblox settings are put back once it has read them, and again when such a client closes (or when RoALT next starts, if it wasn't running then). Everything performance-related lives in its own **Performance** tab. |
 | 🪶 **Lighter rendering** | Clients RoALT starts get Roblox's lightest allowed rendering flags (lowest textures, no anti-aliasing or grass, low detail; on by default): about half the GPU time and less GPU memory per client. Written just before each client starts and put back once it has read them; skipped under a bootstrapper. |
+| 🎚️ **Graphics flags** | Pick MSAA, texture quality, rendering mode, gray sky, no grass and lowest render quality, from the FastFlags Roblox still allows. Roblox may ignore Vulkan and OpenGL. |
 | 👑 **Main account** | Mark an account **Full quality** and its clients keep your own Roblox graphics, without lowest graphics or lighter rendering. |
 | 🕘 **Recent servers** | Each account remembers the servers it reached (stored on this PC); rejoin a public one in a click. |
 | 🩺 **Diagnostics** | Copy or save a report for bug reports, from Debug: tickets, cookies, your Windows user name and IP addresses are removed. |
@@ -211,7 +213,7 @@ Security, and RoALT won't launch on them and a master-password vault locks there
 > compare its SHA-256 with `SHA256SUMS.txt` on the release page, then choose **More info → Run anyway**.
 >
 > ```powershell
-> Get-FileHash .\RoALT-Setup-0.6.9.exe -Algorithm SHA256
+> Get-FileHash .\RoALT-Setup-0.7.0.exe -Algorithm SHA256
 > ```
 
 Your accounts and settings live in `%LOCALAPPDATA%\RoALT`. Uninstalling keeps them unless you tick
@@ -244,8 +246,8 @@ password in **Settings**. RoALT then asks for it on start and locks itself after
 <summary><b>3. Launch a game</b></summary>
 <br>
 
-Go to **Launch** (`Ctrl+3`), paste a game link, tick an account and press **Launch** (`Ctrl+Enter`).
-Tick several accounts to launch a batch. Turn on **Same server** to put them all in one server.
+Go to **Play** (`Ctrl+3`), pick an account, paste a game link and press the big **Play** key (`Ctrl+Enter`).
+Pick several accounts to launch a batch. Under **More options**, turn on **Same server** to put them all in one server.
 
 </details>
 
@@ -253,8 +255,8 @@ Tick several accounts to launch a batch. Turn on **Same server** to put them all
 <summary><b>4. Run several clients at once</b></summary>
 <br>
 
-**Multi-instance** is on by default (the switch is in the sidebar); start RoALT before Roblox. If Roblox is already open, RoALT says so and offers
-**Close Roblox** or **Take over**. Every client RoALT starts shows up under Running and on the **Dashboard**
+**Multi-instance** is on by default (the switch is in **Settings → Launching**); start RoALT before Roblox. If Roblox is already open, RoALT says so and offers
+**Close Roblox** or **Take over**. Every client RoALT starts shows up on **Home**
 (`Ctrl+1`), with its state, server and uptime.
 
 </details>
@@ -274,10 +276,10 @@ In **Settings → Launching**, turn on **Auto-rejoin** (and, if you like, **Auto
 
 | Keys | Action |
 |---|---|
-| `Ctrl+1` … `Ctrl+7` | Dashboard, Accounts, Launch, Servers, Settings, Monitor, Discord |
+| `Ctrl+1` … `Ctrl+7` | Home, Accounts, Play, Servers, Settings, Monitor, Discord |
 | `Ctrl+N` | Add account |
 | `Ctrl+F` | Search accounts |
-| `Ctrl+Enter` | Launch |
+| `Ctrl+Enter` | Play |
 | `F5` | Refresh |
 
 </details>
@@ -398,8 +400,16 @@ check, or remove it and add it again.
 <summary><b>I forgot my master password.</b></summary>
 <br>
 
-It can't be recovered: that is what makes it safe. Remove the data folder (`%LOCALAPPDATA%\RoALT`) and add your
-accounts again, or import a `.roalt` backup whose password you know.
+If you made a **recovery code**, press **Forgot password?** on the unlock screen, enter the code and choose a new
+password. The code works once and you get a new one. It's optional: make one when you set the password, or later in
+**Settings**.
+
+- A code file on the same PC opens the vault for anyone who finds it, so keep it on a USB stick, a phone or paper.
+- It works only for the same Windows user on the same PC. After a Windows reinstall or on a new PC it won't help; a
+  `.roalt` backup does.
+
+Without a code the password can't be recovered: that is what makes it safe. Remove the data folder
+(`%LOCALAPPDATA%\RoALT`) and add your accounts again, or import a `.roalt` backup whose password you know.
 
 </details>
 

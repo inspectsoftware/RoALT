@@ -13,7 +13,7 @@ export const MIN_PASSWORD = 8;
  */
 export function PasswordDialog({
   open, onClose, title, text, submitLabel, onSubmit,
-  current = false, next = false, currentLabel = t("settings.masterPassword"), nextLabel = t("vault.newPassword"),
+  current = false, next = false, currentLabel = t("settings.masterPassword"), nextLabel = t("vault.newPassword"), cancelLabel = t("common.cancel"),
 }: {
   open: boolean;
   onClose: () => void;
@@ -25,6 +25,7 @@ export function PasswordDialog({
   next?: boolean;
   currentLabel?: string;
   nextLabel?: string;
+  cancelLabel?: string;
 }) {
   const [cur, setCur] = useState("");
   const [nw, setNw] = useState("");
@@ -87,7 +88,7 @@ export function PasswordDialog({
         )}
         {error && <div role="alert" className="alert">{error}</div>}
         <div className="flex justify-end gap-2 pt-1">
-          <button type="button" className="btn" onClick={close} disabled={busy}>{t("common.cancel")}</button>
+          <button type="button" className="btn" onClick={close} disabled={busy}>{cancelLabel}</button>
           <button type="submit" className="btn btn-primary" disabled={busy}>{busy ? t("vault.working") : submitLabel}</button>
         </div>
       </form>

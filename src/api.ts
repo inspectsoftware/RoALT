@@ -10,6 +10,7 @@ import type { BandwidthStatus } from "./bindings/BandwidthStatus";
 import type { BulkProgress } from "./bindings/BulkProgress";
 import type { BulkRequest } from "./bindings/BulkRequest";
 import type { ClientMetrics } from "./bindings/ClientMetrics";
+import type { SystemUsage } from "./bindings/SystemUsage";
 import type { Profile } from "./bindings/Profile";
 import type { ServerVisit } from "./bindings/ServerVisit";
 import type { ConflictPolicy } from "./bindings/ConflictPolicy";
@@ -55,6 +56,7 @@ export type {
 export type { AccountStatus } from "./bindings/AccountStatus";
 export type { Adaptive } from "./bindings/Adaptive";
 export type { Profile } from "./bindings/Profile";
+export type { SystemUsage } from "./bindings/SystemUsage";
 export type { ServerVisit } from "./bindings/ServerVisit";
 export type { AfkMode } from "./bindings/AfkMode";
 export type { AntiAfk } from "./bindings/AntiAfk";
@@ -105,6 +107,12 @@ export const api = {
   vaultLock: () => invoke<void>("vault_lock"),
   vaultSetMode: (mode: VaultMode, currentPassword?: string, newPassword?: string) =>
     invoke<void>("vault_set_mode", { mode, currentPassword, newPassword }),
+  /** Sets the new password and unlocks; returns the fresh code, since this one is used up. */
+  vaultRecover: (code: string, newPassword: string) => invoke<string>("vault_recover", { code, newPassword }),
+  /** A new recovery code; the one before stops working. */
+  vaultRecoveryCreate: (currentPassword: string) => invoke<string>("vault_recovery_create", { currentPassword }),
+  vaultRecoverySave: (path: string, code: string) => invoke<void>("vault_recovery_save", { path, code }),
+  vaultRecoveryCopy: (code: string) => invoke<void>("vault_recovery_copy", { code }),
   appActivity: () => invoke<void>("app_activity"),
   /** The splash reached its grow: resolves once the window has grown into the app. */
   splashDone: () => invoke<void>("splash_done"),
@@ -167,11 +175,17 @@ export const api = {
   /** Minimizes or restores every running client's window. */
   instancesShowAll: (what: Exclude<WindowShow, "focus">) => invoke<void>("instances_show_all", { what }),
   /** Makes the client's window 320×240 (or puts it back); resolves to the client area it got, [w, h]. */
-  instanceMicro: (id: string, on: boolean) => invoke<[number, number]>("instance_micro", { id, on }),
+  instanceMicro: (id: string, on: boolean, size?: [number, number]) => invoke<[number, number]>("instance_micro", { id, on, size }),
   /** Lays every running, unminimized client out in a grid on RoALT's monitor; how many it laid out. */
   instancesTile: (micro: boolean) => invoke<number>("instances_tile", { micro }),
   /** CPU, memory and IO of each running client (sampled at most every 2 s). */
   instancesMetrics:() => invoke<ClientMetrics[]>("instances_metrics"),
+  /** How busy the whole PC is (sampled at most every 2 s); null if Windows doesn't say. */
+  systemUsage: () => invoke<SystemUsage | null>("system_usage"),
+  /** Stops trying to bring this client back. */
+  instanceStopRelaunch: (id: string) => invoke<void>("instance_stop_relaunch", { id }),
+  /** Relaunches waiting to try again do so now. */
+  instancesRetryRelaunch: () => invoke<void>("instances_retry_relaunch"),
   /** The Roblox bandwidth limit and whether it is in force now. */
   bandwidthStatus: () => invoke<BandwidthStatus>("bandwidth_status"),
   /** Sets the outbound limit for all Roblox clients (0 removes it); Windows asks for admin rights. */

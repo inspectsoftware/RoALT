@@ -166,12 +166,18 @@ pub fn read_new(path: &Path, offset: u64, facts: &mut LogFacts, mut on_problem: 
     f.read_to_end(&mut buf)?;
     let Some(end) = buf.iter().rposition(|&b| b == b'\n') else { return Ok(offset) };
     let mut problems: Vec<(String, usize)> = Vec::new();
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for line in buf[..end].split(|&b| b == b'\n') {
         let line = String::from_utf8_lossy(line);
-        if let Some(p) = problem_of(&line) {
-            match problems.iter_mut().find(|(q, _)| q == p) {
-                Some((_, n)) => *n += 1,
-                None => problems.push((p.to_owned(), 1)),
+        if let Some(p) = problem_of(&line).or_else(|| update_line(&line)) {
+            match seen.get(p) {
+                Some(&i) => problems[i].1 += 1,
+                // A game can print any number of different warnings.
+                None if problems.len() < MAX_PROBLEMS => {
+                    seen.insert(p.to_owned(), problems.len());
+                    problems.push((p.to_owned(), 1));
+                }
+                None => {}
             }
         }
         parse_line(&line, facts);
@@ -179,6 +185,9 @@ pub fn read_new(path: &Path, offset: u64, facts: &mut LogFacts, mut on_problem: 
     problems.iter().for_each(|(p, n)| on_problem(p, *n));
     Ok(offset + end as u64 + 1)
 }
+
+/// Different problem lines reported per read.
+const MAX_PROBLEMS: usize = 100;
 
 /// A client error or warning line from its `[..Error]` / `[..Warning]` tag on, at most 300
 /// characters; None for anything else and for any line that could carry a ticket, cookie or
@@ -197,11 +206,31 @@ pub fn problem_of(line: &str) -> Option<&str> {
     Some(&rest[..rest.char_indices().nth(300).map_or(rest.len(), |(i, _)| i)])
 }
 
+/// The client's channel and update decision from its tag on, worth a line in RoALT's log: a
+/// foreground update closes every client (research multi-instance M9). Never a URL (pure).
+fn update_line(line: &str) -> Option<&str> {
+    const MARKS: [&str; 3] = ["RobloxChannel has been set to ", "Update check thread: updateRequired ", "Update mode is chosen as "];
+    if !MARKS.iter().any(|m| line.contains(m)) {
+        return None;
+    }
+    Some(line[line.find('[')?..].trim_end())
+}
+
 /// One log line into `facts` (pure).
 pub fn parse_line(line: &str, facts: &mut LogFacts) {
+    // A game's scripts write print, warn and error lines: nothing in them is an event. The real
+    // join line is an Output line too, so it only counts while no game is running.
+    let tag = first_tag(line);
+    let joining = line.find(JOINING).filter(|_| matches!(tag, None | Some("FLog::Output")));
+    if matches!(tag, Some("FLog::Output" | "FLog::Warning" | "FLog::Error")) && joining.is_none() {
+        return;
+    }
+    if joining.is_some() && facts.in_game && !facts.teleporting && !facts.disconnected {
+        return;
+    }
     if let Some(id) = tracker_id(line) {
         facts.browser_tracker_id = Some(id);
-    } else if let Some(i) = line.find(JOINING) {
+    } else if let Some(i) = joining {
         if let Some((job, rest)) = line[i + JOINING.len()..].split_once('\'')
             && is_guid(job)
         {
@@ -235,6 +264,12 @@ pub fn parse_line(line: &str, facts: &mut LogFacts) {
     } else if line.contains("Received close main window request") && facts.signalled {
         facts.replaced = true;
     }
+}
+
+/// The tag of a log line, the first `[..]`: the client's own, before any text a script wrote.
+fn first_tag(line: &str) -> Option<&str> {
+    let start = line.find('[')?;
+    Some(&line[start + 1..start + line[start..].find(']')?])
 }
 
 /// A disconnect line from its marker on, for crash diagnostics: letters, digits, spaces and
@@ -327,6 +362,27 @@ mod tests {
     }
 
     #[test]
+    fn a_games_own_lines_are_no_events() {
+        let guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let mut f = parsed(&[&line(&format!("[FLog::Output] ! Joining game '{guid}' place 1 at 1.1.1.1")), &line("[FLog::Network] Replicator created: 1")]);
+        assert!(f.in_game);
+        for tag in ["FLog::Output", "FLog::Warning", "FLog::Error"] {
+            for text in [
+                "[FLog::Network] Lost connection with reason : x".to_owned(),
+                "Sending disconnect with reason: 285".to_owned(),
+                "reason: challengedByGcs".to_owned(),
+                "UgcExperienceController: doTeleport".to_owned(),
+                "[FLog::GameJoinLoadTime] Report game_join_loadtime: userid:5".to_owned(),
+                "! Joining game 'ffffffff-bbbb-cccc-dddd-eeeeeeeeeeee' place 666 at 1.1.1.1".to_owned(),
+            ] {
+                parse_line(&line(&format!("[{tag}] {text}")), &mut f);
+            }
+        }
+        assert!(f.in_game && !f.disconnected && !f.left && !f.challenged && !f.teleporting);
+        assert_eq!((f.job_id.as_deref(), f.place_id, f.user_id), (Some(guid), Some(1), None));
+    }
+
+    #[test]
     fn client_problems_are_kept_without_secrets() {
         let l = "2024-05-01T12:00:00.123Z,1.2,1a2c,6 [FLog::Error] Texture failed to load";
         assert_eq!(problem_of(l), Some("[FLog::Error] Texture failed to load"));
@@ -335,6 +391,9 @@ mod tests {
         assert_eq!(problem_of("x,6 [FLog::Error] bad https://roblox.com/x?ticket=1"), None);
         assert_eq!(problem_of("x,6 [FLog::Output] fine"), None);
         assert_eq!(problem_of("no tag"), None);
+        assert_eq!(update_line("x,6,Info [FLog::UpdateController] Update check thread: updateRequired TRUE"), Some("[FLog::UpdateController] Update check thread: updateRequired TRUE"));
+        assert_eq!(update_line("x,6 [FLog::Output] RobloxChannel has been set to zaflag"), Some("[FLog::Output] RobloxChannel has been set to zaflag"));
+        assert_eq!(update_line("x,6,Info [FLog::UpdateController] versionQueryUrl: https://x"), None);
     }
 
     #[test]

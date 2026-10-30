@@ -14,7 +14,7 @@ use rusqlite_migration::{M, Migrations};
 use crate::commands::now_ms;
 use crate::error::{AppError, Result};
 use crate::model::{AccountPatch, AccountStatus, AccountSummary, Crash, CrashKind, Group, GroupInput, ServerVisit, Settings, VaultMode};
-use crate::vault::{Kdf, VaultRecord};
+use crate::vault::{Kdf, RecoveryRecord, VaultRecord};
 
 /// What `upsert_account` writes. `cookie` is the encrypted blob.
 pub struct NewAccount<'a> {
@@ -58,6 +58,8 @@ pub struct FavouriteRow {
 
 /// Set once `Db::public_guard_off_once` has run.
 const PUBLIC_GUARD_OFF_ONCE: &str = "public_guard_default_v2";
+/// Set once `Db::background_cover_once` has run.
+const BACKGROUND_COVER_ONCE: &str = "background_cover_v2";
 const MAX_ALIAS: usize = 64;
 const MAX_NOTES: usize = 2000;
 const MAX_GROUP_NAME: usize = 40;
@@ -115,16 +117,7 @@ impl Db {
         conn.busy_timeout(Duration::from_secs(5))?;
         // secure_delete: freed pages (removed cookies, old key wraps) are zeroed, not left behind.
         conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON;")?;
-        Migrations::new(vec![
-            M::up(include_str!("migrations/001_init.sql")),
-            M::up(include_str!("migrations/002_account_options.sql")),
-            M::up(include_str!("migrations/003_crashes.sql")),
-            M::up(include_str!("migrations/004_discord_mute.sql")),
-            M::up(include_str!("migrations/005_fps_cap.sql")),
-            M::up(include_str!("migrations/006_tracked.sql")),
-            M::up(include_str!("migrations/007_full_quality.sql")),
-            M::up(include_str!("migrations/008_server_history.sql")),
-        ])
+        migrations()
             .to_latest(&mut conn)
             .map_err(|e| {
                 log::error!("database migration failed: {e}");
@@ -132,6 +125,7 @@ impl Db {
             })?;
         let db = Db { conn: Mutex::new(conn), file };
         db.public_guard_off_once()?;
+        db.background_cover_once()?;
         Ok(db)
     }
 
@@ -151,6 +145,22 @@ impl Db {
         self.set_setting_value(PUBLIC_GUARD_OFF_ONCE, Some("1"))
     }
 
+    /// The theme used to cover a background image by 70 to 90 %, which hid most pictures. A stored
+    /// value over today's default goes down to it once; choices made after that stay.
+    fn background_cover_once(&self) -> Result<()> {
+        if self.setting_value(BACKGROUND_COVER_ONCE)?.is_some() {
+            return Ok(());
+        }
+        let cover = Settings::default().background_dim;
+        if let Some(mut s) = self.setting_value("settings")?.and_then(|j| serde_json::from_str::<Settings>(&j).ok())
+            && s.background_dim > cover
+        {
+            s.background_dim = cover;
+            self.save_settings(&s)?;
+        }
+        self.set_setting_value(BACKGROUND_COVER_ONCE, Some("1"))
+    }
+
     /// A consistent copy of the open database, written to `path` (compacted: no freed pages
     /// come along) and encrypted with the same key, which goes beside it (`key_path`); then
     /// `then` with the database still locked, so nothing is written to it after the copy
@@ -163,8 +173,13 @@ impl Db {
         match &self.file {
             Some(file) => {
                 let key = cipher::read_key(file)?;
-                cipher::export(&conn, path, &key)?;
+                // Under its final name only when whole: a kill here must not leave a folder
+                // that looks as if it already had a database.
+                let partial = path.with_extension("db.partial");
+                let _ = std::fs::remove_file(&partial);
+                cipher::export(&conn, &partial, &key)?;
                 cipher::write_key(&key_path(path), &key)?;
+                std::fs::rename(&partial, path)?;
             }
             None => {
                 let path = path.to_str().ok_or_else(|| AppError::Invalid(tr!("That folder's name can't be used.")))?;
@@ -209,23 +224,53 @@ impl Db {
     }
 
     pub fn save_vault_record(&self, rec: &VaultRecord) -> Result<()> {
+        self.save_vault(rec, None)
+    }
+
+    /// Both or neither: a recovery is only done, and its old code void, with the new password.
+    pub fn save_vault_and_recovery(&self, rec: &VaultRecord, recovery: &RecoveryRecord) -> Result<()> {
+        self.save_vault(rec, Some(recovery))
+    }
+
+    fn save_vault(&self, rec: &VaultRecord, recovery: Option<&RecoveryRecord>) -> Result<()> {
         let (mode, kdf) = match rec.mode {
             VaultMode::Dpapi => ("dpapi", None),
             VaultMode::Master => ("master", rec.kdf.as_ref()),
         };
-        let c = self.conn();
-        c.execute(
+        let mut c = self.conn();
+        let tx = c.transaction()?;
+        tx.execute(
             "INSERT OR REPLACE INTO vault (id, mode, wrapped_key, kdf_salt, kdf_m_kib, kdf_t, kdf_p) \
              VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)",
             params![mode, rec.wrapped_key, kdf.map(|k| &k.salt), kdf.map(|k| k.m_kib), kdf.map(|k| k.t), kdf.map(|k| k.p)],
         )?;
-        // The previous wrap of the data key must not survive in the WAL: it would open the
-        // vault without the new (or any) master password.
-        let busy: i64 = c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))?;
-        if busy != 0 {
-            return Err(AppError::Storage("could not flush the database journal".into()));
+        // A recovery code belongs to the master password: it goes when that does.
+        if rec.mode == VaultMode::Dpapi {
+            tx.execute("DELETE FROM vault_recovery", [])?;
         }
-        Ok(())
+        if let Some(r) = recovery {
+            write_recovery(&tx, r)?;
+        }
+        tx.commit()?;
+        flush_old_wraps(&c)
+    }
+
+    pub fn recovery_record(&self) -> Result<Option<RecoveryRecord>> {
+        let sql = "SELECT wrapped_key, kdf_salt, kdf_m_kib, kdf_t, kdf_p FROM vault_recovery WHERE id = 1";
+        let rec = self
+            .conn()
+            .query_row(sql, [], |r| {
+                Ok(RecoveryRecord { wrapped_key: r.get(0)?, kdf: Kdf { salt: r.get(1)?, m_kib: r.get(2)?, t: r.get(3)?, p: r.get(4)? } })
+            })
+            .optional()?;
+        Ok(rec)
+    }
+
+    /// Replaces the record, which revokes the old code.
+    pub fn save_recovery_record(&self, recovery: &RecoveryRecord) -> Result<()> {
+        let c = self.conn();
+        write_recovery(&c, recovery)?;
+        flush_old_wraps(&c)
     }
 
     /// Ordered by `sort_order`, then `id`.
@@ -251,8 +296,10 @@ impl Db {
     pub fn upsert_account(&self, a: &NewAccount) -> Result<i64> {
         // One statement, so atomic without an explicit transaction.
         let sql = "INSERT INTO accounts \
-             (user_id, username, display_name, cookie, status, status_checked_at, sort_order, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, (SELECT COALESCE(MAX(sort_order) + 1, 0) FROM accounts), ?7, ?7) \
+             (id, user_id, username, display_name, cookie, status, status_checked_at, sort_order, created_at, updated_at) \
+             VALUES (MAX((SELECT COALESCE(MAX(id), 0) FROM accounts), \
+                         (SELECT COALESCE(CAST(MAX(value) AS INTEGER), 0) FROM settings WHERE key = 'last_account_id')) + 1, \
+                     ?1, ?2, ?3, ?4, ?5, ?6, (SELECT COALESCE(MAX(sort_order) + 1, 0) FROM accounts), ?7, ?7) \
              ON CONFLICT (user_id) DO UPDATE SET username = excluded.username, \
              display_name = excluded.display_name, cookie = excluded.cookie, status = excluded.status, \
              status_checked_at = excluded.status_checked_at, updated_at = excluded.updated_at \
@@ -371,6 +418,14 @@ impl Db {
                   UNION ALL SELECT 'headshot:' || user_id FROM accounts WHERE id = ?1)",
                 [id],
             )?;
+            // An id is never used again: a late cookie rotation, a running client or a favourite
+            // must not reach whoever is added next.
+            tx.execute(
+                "INSERT INTO settings (key, value) VALUES ('last_account_id', ?1) ON CONFLICT (key) \
+                 DO UPDATE SET value = MAX(CAST(value AS INTEGER), ?1)",
+                [id],
+            )?;
+            tx.execute("UPDATE favourites SET account_ids = (SELECT json_group_array(value) FROM json_each(account_ids) WHERE value <> ?1)", [id])?;
             tx.execute("DELETE FROM accounts WHERE id = ?1", [id])?;
         }
         tx.commit()?;
@@ -425,9 +480,10 @@ impl Db {
             .and_then(|j| {
                 serde_json::from_str(&j)
                     .inspect_err(|e| {
-                        log::error!("stored settings are corrupt ({:?} at {}:{}); using defaults", e.classify(), e.line(), e.column())
+                        log::error!("stored settings are corrupt ({:?} at {}:{}); keeping what can be read", e.classify(), e.line(), e.column())
                     })
                     .ok()
+                    .or_else(|| readable_settings(&j))
             })
             .unwrap_or_default())
     }
@@ -651,6 +707,42 @@ impl Db {
     }
 }
 
+fn migrations() -> Migrations<'static> {
+    Migrations::new(vec![
+        M::up(include_str!("migrations/001_init.sql")),
+        M::up(include_str!("migrations/002_account_options.sql")),
+        M::up(include_str!("migrations/003_crashes.sql")),
+        M::up(include_str!("migrations/004_discord_mute.sql")),
+        M::up(include_str!("migrations/005_fps_cap.sql")),
+        M::up(include_str!("migrations/006_tracked.sql")),
+        M::up(include_str!("migrations/007_full_quality.sql")),
+        M::up(include_str!("migrations/008_server_history.sql")),
+        M::up(include_str!("migrations/009_vault_recovery.sql")),
+    ])
+}
+
+fn write_recovery(c: &Connection, r: &RecoveryRecord) -> Result<()> {
+    c.execute(
+        "INSERT OR REPLACE INTO vault_recovery (id, wrapped_key, kdf_salt, kdf_m_kib, kdf_t, kdf_p) \
+         VALUES (1, ?1, ?2, ?3, ?4, ?5)",
+        params![r.wrapped_key, r.kdf.salt, r.kdf.m_kib, r.kdf.t, r.kdf.p],
+    )?;
+    Ok(())
+}
+
+/// The previous wrap of the data key must not survive in the WAL: it would open the vault
+/// without the new (or any) master password, or with a revoked code.
+fn flush_old_wraps(c: &Connection) -> Result<()> {
+    // Committed by now: a failure here must not be reported as a failed save. The next
+    // checkpoint removes the old wrap.
+    match c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get::<_, i64>(0)) {
+        Ok(0) => {}
+        Ok(_) => log::warn!("database journal not flushed after a vault change: busy"),
+        Err(e) => log::warn!("database journal not flushed after a vault change: {e}"),
+    }
+    Ok(())
+}
+
 fn account_row(r: &Row) -> rusqlite::Result<AccountSummary> {
     let groups: Option<String> = r.get(9)?;
     Ok(AccountSummary {
@@ -706,14 +798,36 @@ fn color(c: Option<&str>) -> Result<Option<String>> {
     }
 }
 
-fn write_meta(c: &Connection, id: i64, m: &AccountMeta) -> Result<()> {
-    let alias = m.alias.trim();
-    if alias.chars().count() > MAX_ALIAS {
+/// One unreadable value (from a newer version, say) costs that value, not every setting.
+fn readable_settings(json: &str) -> Option<Settings> {
+    let stored: serde_json::Map<String, serde_json::Value> = serde_json::from_str(json).ok()?;
+    let mut good = serde_json::to_value(Settings::default()).ok()?;
+    for (k, v) in stored {
+        let mut next = good.clone();
+        next[&k] = v;
+        if serde_json::from_value::<Settings>(next.clone()).is_ok() {
+            good = next;
+        } else {
+            log::warn!("setting {k} unreadable: using its default");
+        }
+    }
+    serde_json::from_value(good).ok()
+}
+
+/// The limits on what `write_meta` stores.
+pub fn check_meta(m: &AccountMeta) -> Result<()> {
+    if m.alias.trim().chars().count() > MAX_ALIAS {
         return Err(invalid(tr!("Alias can be at most {max} characters.", max = MAX_ALIAS)));
     }
     if m.notes.chars().count() > MAX_NOTES {
         return Err(invalid(tr!("Notes can be at most {max} characters.", max = MAX_NOTES)));
     }
+    color(m.color.as_deref()).map(|_| ())
+}
+
+fn write_meta(c: &Connection, id: i64, m: &AccountMeta) -> Result<()> {
+    check_meta(m)?;
+    let alias = m.alias.trim();
     let color = color(m.color.as_deref())?;
     let sql = "UPDATE accounts SET alias = ?2, notes = ?3, color = ?4, favourite = ?5, updated_at = ?6 WHERE id = ?1";
     found(c.execute(sql, params![id, alias, m.notes, color, m.favourite, now_ms()])?)
@@ -760,6 +874,29 @@ fn write_group(c: &Connection, id: Option<i64>, name: &str, color_in: Option<&st
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_bad_setting_keeps_the_others() {
+        let v = readable_settings(r#"{"autoLockMinutes":7,"theme":"neon","launchDelayMs":9000}"#).unwrap();
+        assert_eq!((v.auto_lock_minutes, v.launch_delay_ms), (7, 9000));
+        assert_eq!(v.theme, Settings::default().theme);
+    }
+
+    #[test]
+    fn a_removed_accounts_id_is_never_used_again() {
+        let db = Db::open_in_memory().unwrap();
+        let add = |user: i64| {
+            db.upsert_account(&NewAccount { user_id: user, username: "u", display_name: "d", cookie: b"x", status: AccountStatus::Unknown, checked_at: None }).unwrap()
+        };
+        let (a, b) = (add(1), add(2));
+        let f = db.save_favourite(None, "f", b"t", &[a, b], false).unwrap();
+        db.remove_accounts(&[b]).unwrap();
+        assert_eq!(db.favourites().unwrap().iter().find(|x| x.id == f).unwrap().account_ids, [a]);
+        let c = add(3);
+        assert!(c > b, "{c} after {b}");
+        // The same user added again is new too, and an update keeps its id.
+        assert_eq!(add(3), c);
+    }
 
     fn add(db: &Db, user_id: i64) -> i64 {
         let name = format!("user{user_id}");
@@ -849,6 +986,83 @@ mod tests {
         };
         db.save_vault_record(&master).unwrap();
         // The process may exit without closing the connection: check the files as they are.
+        for f in ["roalt.db", "roalt.db-wal"] {
+            let bytes = std::fs::read(dir.join(f)).unwrap_or_default();
+            assert!(!bytes.windows(old.len()).any(|w| w == old.as_slice()), "old wrap left in {f}");
+        }
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn master_record(wrap: u8) -> VaultRecord {
+        VaultRecord {
+            mode: VaultMode::Master,
+            wrapped_key: vec![wrap; 64],
+            kdf: Some(Kdf { salt: vec![7; 16], m_kib: 65536, t: 3, p: 4 }),
+        }
+    }
+
+    fn recovery_record(wrap: u8) -> RecoveryRecord {
+        RecoveryRecord { wrapped_key: vec![wrap; 64], kdf: Kdf { salt: vec![8; 16], m_kib: 262144, t: 3, p: 4 } }
+    }
+
+    #[test]
+    fn recovery_record_outlives_a_password_change_but_not_master_mode() {
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(db.recovery_record().unwrap(), None);
+        db.save_vault_record(&master_record(1)).unwrap();
+
+        db.save_recovery_record(&recovery_record(2)).unwrap();
+        assert_eq!(db.recovery_record().unwrap(), Some(recovery_record(2)));
+        db.save_recovery_record(&recovery_record(3)).unwrap();
+        assert_eq!(db.recovery_record().unwrap(), Some(recovery_record(3)), "one code at a time");
+
+        db.save_vault_record(&master_record(4)).unwrap();
+        assert_eq!(db.recovery_record().unwrap(), Some(recovery_record(3)), "a password change keeps it");
+
+        db.save_vault_and_recovery(&master_record(5), &recovery_record(6)).unwrap();
+        assert_eq!(db.vault_record().unwrap(), Some(master_record(5)));
+        assert_eq!(db.recovery_record().unwrap(), Some(recovery_record(6)));
+
+        db.save_vault_record(&VaultRecord { mode: VaultMode::Dpapi, wrapped_key: vec![9; 64], kdf: None }).unwrap();
+        assert_eq!(db.recovery_record().unwrap(), None, "leaving master mode deletes it");
+    }
+
+    #[test]
+    fn saving_vault_and_recovery_is_all_or_nothing() {
+        let db = Db::open_in_memory().unwrap();
+        db.save_vault_record(&master_record(1)).unwrap();
+        db.save_recovery_record(&recovery_record(2)).unwrap();
+        db.conn().execute_batch("CREATE TRIGGER no_recovery BEFORE INSERT ON vault_recovery BEGIN SELECT RAISE(ABORT, 'no'); END;").unwrap();
+        assert!(db.save_vault_and_recovery(&master_record(3), &recovery_record(4)).is_err());
+        assert_eq!(db.vault_record().unwrap(), Some(master_record(1)), "the old password still opens it");
+        assert_eq!(db.recovery_record().unwrap(), Some(recovery_record(2)), "and the old code");
+    }
+
+    #[test]
+    fn migration_keeps_an_existing_vault() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrations().to_version(&mut conn, 8).unwrap();
+        conn.execute(
+            "INSERT INTO vault (id, mode, wrapped_key, kdf_salt, kdf_m_kib, kdf_t, kdf_p) VALUES (1, 'master', ?1, ?2, 65536, 3, 4)",
+            params![vec![1u8; 64], vec![7u8; 16]],
+        )
+        .unwrap();
+        let db = Db::init(conn, None).unwrap();
+        assert_eq!(db.vault_record().unwrap(), Some(master_record(1)));
+        assert_eq!(db.recovery_record().unwrap(), None);
+    }
+
+    #[test]
+    fn replaced_recovery_wrap_leaves_no_trace_on_disk() {
+        let dir = std::env::temp_dir().join(format!("roalt-test-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("roalt.db");
+        let db = Db::open(&path).unwrap();
+        db.save_vault_record(&master_record(1)).unwrap();
+        let old = b"OLD-RECOVERY-WRAP-MARKER-0123456".to_vec();
+        db.save_recovery_record(&RecoveryRecord { wrapped_key: old.clone(), ..recovery_record(2) }).unwrap();
+        add(&db, 1);
+        db.save_recovery_record(&recovery_record(3)).unwrap();
         for f in ["roalt.db", "roalt.db-wal"] {
             let bytes = std::fs::read(dir.join(f)).unwrap_or_default();
             assert!(!bytes.windows(old.len()).any(|w| w == old.as_slice()), "old wrap left in {f}");
@@ -1032,6 +1246,16 @@ mod tests {
         db2.public_guard_off_once().unwrap();
         assert!(!db2.settings().unwrap().allow_public_networks, "the user's later choice stays");
         assert!(Settings::default().allow_public_networks);
+
+        // The background's cover comes down once, and a later choice stays.
+        let heavy = Settings { background_dim: 90, ..Settings::default() };
+        db2.set_setting_value(BACKGROUND_COVER_ONCE, None).unwrap();
+        db2.save_settings(&heavy).unwrap();
+        db2.background_cover_once().unwrap();
+        assert_eq!(db2.settings().unwrap().background_dim, Settings::default().background_dim);
+        db2.save_settings(&heavy).unwrap();
+        db2.background_cover_once().unwrap();
+        assert_eq!(db2.settings().unwrap().background_dim, 90, "the user's later choice stays");
 
         // Values kept beside the settings leave them alone.
         assert_eq!(db.setting_value("discord_webhook").unwrap(), None);

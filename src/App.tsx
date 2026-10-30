@@ -3,15 +3,13 @@ import { QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-q
 import { api, asError, events, type Favourite, type SameServer, type Settings, type VaultStatus } from "./api";
 import { qk, queryClient, useAccounts, useGroups, useInstances, useSetSettings, useSettings, useVault } from "./data";
 import { AccountsView } from "./features/accounts/AccountsView";
-import { AddAccountDialog } from "./features/accounts/AddAccountDialog";
+import { AddAccountDialog, type Tab as AddTab } from "./features/accounts/AddAccountDialog";
 import { DashboardView } from "./features/dashboard/DashboardView";
 import { DiscordView } from "./features/discord/DiscordView";
 import { PerformanceView } from "./features/performance/PerformanceView";
 import { DebugView } from "./features/debug/DebugView";
-import { GroupsNav } from "./features/accounts/GroupsNav";
-import { FavouritesNav } from "./features/launch/Favourites";
 import { lastLaunchAccount, LaunchView } from "./features/launch/LaunchView";
-import { isRunning, KillAllButton, MultiInstanceSwitch, RunningPanel } from "./features/launch/Running";
+import { isLive, isRunning, KillAllButton } from "./features/launch/Running";
 import { draftFor, EMPTY_DRAFT, type Draft } from "./features/launch/target";
 import { MonitorView } from "./features/monitor/MonitorView";
 import { ServersView } from "./features/servers/ServersView";
@@ -19,6 +17,7 @@ import { SettingsView, SETTINGS_SECTIONS } from "./features/settings/SettingsVie
 import { Splash } from "./features/splash/Splash";
 import { UpdateBanner } from "./features/settings/UpdateBanner";
 import { PublicNetworkBanner } from "./features/settings/PublicNetworkBanner";
+import { RecoveryCodeDialog } from "./features/vault/RecoveryCodeDialog";
 import { UnlockScreen, type LockReason } from "./features/vault/UnlockScreen";
 import { setLang, t } from "./i18n";
 import { Icon } from "./ui/Icon";
@@ -46,6 +45,7 @@ function Root() {
   const setSettings = useSetSettings();
   const dark = useTheme(settings.data);
   const [lockReason, setLockReason] = useState<LockReason>("start");
+  const [recoveryCode, setRecoveryCode] = useState<string | null>(null);
   const manualLockAt = useRef(0);
   const v = vault.data;
   const s = settings.data;
@@ -92,6 +92,29 @@ function Root() {
 
   useActivity(unlocked);
 
+  // Keyboard use: when what had focus went away (a menu item, a button that disabled itself),
+  // focus goes to the page, not to nowhere, where the next Tab starts over.
+  useEffect(() => {
+    let keys = false;
+    const key = () => void (keys = true);
+    const pointer = () => void (keys = false);
+    const lost = () =>
+      requestAnimationFrame(() => {
+        if (!keys || document.activeElement !== document.body) return;
+        const to = document.querySelector<HTMLElement>("dialog[open]") ?? document.querySelector<HTMLElement>("main");
+        to?.setAttribute("tabindex", "-1");
+        to?.focus({ preventScroll: true });
+      });
+    window.addEventListener("keydown", key, true);
+    window.addEventListener("pointerdown", pointer, true);
+    window.addEventListener("focusout", lost);
+    return () => {
+      window.removeEventListener("keydown", key, true);
+      window.removeEventListener("pointerdown", pointer, true);
+      window.removeEventListener("focusout", lost);
+    };
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const ctrl = e.ctrlKey || e.metaKey;
@@ -137,20 +160,23 @@ function Root() {
       ) : !v || !s ? (
         <div className="flex-1" />
       ) : v.locked ? (
-        <UnlockScreen status={v} reason={lockReason} />
+        <UnlockScreen status={v} reason={lockReason} onRecovered={setRecoveryCode} />
       ) : (
-        <Shell vault={v} settings={s} />
+        <Shell vault={v} settings={s} onRecoveryCode={setRecoveryCode} />
       )}
+      {/* Up here because it must outlive what opened it: the old code is void by now, and a recovered unlock swaps the screen below. Hidden while locked: it would open the vault for whoever comes by. */}
+      <RecoveryCodeDialog code={unlocked ? recoveryCode : null} onClose={() => setRecoveryCode(null)} />
     </div>
   );
 }
 
-function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) {
-  const nav = usePanelWidth("nav", 208, 168, 320);
+function Shell({ vault, settings, onRecoveryCode }: { vault: VaultStatus; settings: Settings; onRecoveryCode: (code: string) => void }) {
+  const nav = usePanelWidth("nav", 228, 180, 320);
   const qc = useQueryClient();
   const accounts = useAccounts();
   const groups = useGroups();
-  const running = useInstances().data?.filter(isRunning).length ?? 0;
+  const instances = useInstances().data ?? [];
+  const running = instances.filter(isRunning).length;
   const [view, setView] = useState<"dashboard" | "accounts" | "launch" | "performance" | "servers" | "monitor" | "discord" | "debug" | "settings">("dashboard");
   const [group, setGroup] = useState<number | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
@@ -166,7 +192,19 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
   // The game the Servers view shows.
   const [serversPlace, setServersPlace] = useState<number | null>(null);
   const [adding, setAdding] = useState(false);
+  const [addOn, setAddOn] = useState<AddTab>("login");
+  const [toolsOpen, setToolsOpen] = useState(false);
+  // A tool that is open stays in sight.
+  const showTools = toolsOpen || view === "servers" || view === "monitor" || view === "discord" || view === "debug";
+  const openAdd = (tab: AddTab = "login") => {
+    setAddOn(tab);
+    setAdding(true);
+  };
   const known = useRef<Set<number> | null>(null);
+  const viewName = t(({ dashboard: "app.nav.dashboard", accounts: "app.nav.accounts", launch: "app.nav.launch", performance: "app.nav.performance", servers: "app.nav.servers", monitor: "app.nav.monitor", discord: "app.nav.discord", debug: "app.nav.debug", settings: "app.nav.settings" } as const)[view]);
+  useEffect(() => {
+    document.title = `${viewName} · RoALT`;
+  }, [viewName]);
 
   // A new account needs its headshot; the backend only asks Roblox for the missing ones.
   useEffect(() => {
@@ -204,10 +242,12 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
       const go = views[e.code];
       if (go) {
         e.preventDefault();
+        // A field saves on blur: what was typed goes with it, not lost with the view.
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
         go();
       } else if (k === "n") {
         e.preventDefault();
-        setAdding(true);
+        openAdd();
       } else if (k === "f") {
         e.preventDefault();
         setView("accounts");
@@ -234,11 +274,13 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
     setView("accounts");
     setGroup(null);
   };
-  /** Opens Launch with these accounts picked; ones that can't launch are left out. */
+  /** Opens Launch with these accounts picked; ones that can't launch (signed out, already
+   * playing) are left out, and with none left nothing changes. */
   const launchAs = (ids: number[]) => {
-    const valid = ids.filter((id) => accounts.data?.some((a) => a.id === id && a.status === "valid"));
-    if (!valid.length) return;
+    const live = new Set(instances.filter(isLive).map((i) => i.accountId));
+    const valid = ids.filter((id) => !live.has(id) && accounts.data?.some((a) => a.id === id && a.status === "valid"));
     if (valid.length < ids.length) toast(t("app.leftOut", { count: ids.length - valid.length }));
+    if (!valid.length) return;
     setPicked(valid);
     setView("launch");
   };
@@ -250,51 +292,55 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
   };
   return (
     <div className="flex-1 flex min-h-0">
-      <nav aria-label={t("app.sections")} style={{ width: nav.width }} className="flex-none flex flex-col px-2 py-3 bg-panel border-r border-line">
-        <div className="flex flex-col gap-0.5">
+      <span className="sr-only" aria-live="polite">{viewName}</span>
+      <nav aria-label={t("app.sections")} style={{ width: nav.width }} className="flex-none flex flex-col min-h-0">
+        <div className="scroll flex-1 min-h-0 flex flex-col gap-1.5 px-3 pt-2.5 pb-3" style={{ scrollbarWidth: "none" }}>
           <button className="nav-item" aria-current={view === "dashboard" ? "page" : undefined} onClick={() => setView("dashboard")}>
-            <Icon name="grid" />
+            <Icon name="home" />
             <span className="flex-1 min-w-0 truncate">{t("app.nav.dashboard")}</span>
             {running > 0 && (
-              <span className="mono text-xs text-accent-text" title={t("app.running", { count: running })}>
+              <span className="nav-count mono" title={t("app.running", { count: running })}>
                 {running}
               </span>
             )}
+          </button>
+          <button className="nav-item" aria-current={view === "launch" ? "page" : undefined} onClick={() => setView("launch")}>
+            <Icon name="play" />
+            <span className="flex-1 min-w-0 truncate">{t("app.nav.launch")}</span>
           </button>
           <button className="nav-item" aria-current={view === "accounts" ? "page" : undefined} onClick={showAll}>
             <Icon name="accounts" />
             <span className="flex-1 min-w-0 truncate">{t("app.nav.accounts")}</span>
-            <span className="mono text-xs text-dim">{accounts.data.length}</span>
-          </button>
-          <button className="nav-item" aria-current={view === "launch" ? "page" : undefined} onClick={() => setView("launch")}>
-            <Icon name="play" fill />
-            <span className="flex-1 min-w-0 truncate">{t("app.nav.launch")}</span>
-            {running > 0 && (
-              <span className="mono text-xs text-accent-text" title={t("app.running", { count: running })}>
-                {running}
-              </span>
-            )}
+            {accounts.data.length > 0 && <span className="nav-count mono">{accounts.data.length}</span>}
           </button>
           <button className="nav-item" aria-current={view === "performance" ? "page" : undefined} onClick={() => setView("performance")}>
             <Icon name="gauge" />
             <span className="flex-1 min-w-0 truncate">{t("app.nav.performance")}</span>
           </button>
-          <button className="nav-item" aria-current={view === "servers" ? "page" : undefined} onClick={openServers}>
-            <Icon name="servers" />
-            <span className="flex-1 min-w-0 truncate">{t("app.nav.servers")}</span>
+          <button className="nav-item" aria-expanded={showTools} onClick={() => setToolsOpen(!showTools)}>
+            <Icon name="chevron" className={showTools ? "" : "-rotate-90"} />
+            <span className="flex-1 min-w-0 truncate">{t("app.nav.moreTools")}</span>
           </button>
-          <button className="nav-item" aria-current={view === "monitor" ? "page" : undefined} onClick={() => setView("monitor")}>
-            <Icon name="monitor" />
-            <span className="flex-1 min-w-0 truncate">{t("app.nav.monitor")}</span>
-          </button>
-          <button className="nav-item" aria-current={view === "discord" ? "page" : undefined} onClick={() => setView("discord")}>
-            <Icon name="bell" />
-            <span className="flex-1 min-w-0 truncate">Discord</span>
-          </button>
-          <button className="nav-item" aria-current={view === "debug" ? "page" : undefined} onClick={() => setView("debug")}>
-            <Icon name="sliders" />
-            <span className="flex-1 min-w-0 truncate">{t("app.nav.debug")}</span>
-          </button>
+          {showTools && (
+            <>
+              <button className="nav-item" aria-current={view === "servers" ? "page" : undefined} onClick={openServers}>
+                <Icon name="servers" />
+                <span className="flex-1 min-w-0 truncate">{t("app.nav.servers")}</span>
+              </button>
+              <button className="nav-item" aria-current={view === "monitor" ? "page" : undefined} onClick={() => setView("monitor")}>
+                <Icon name="monitor" />
+                <span className="flex-1 min-w-0 truncate">{t("app.nav.monitor")}</span>
+              </button>
+              <button className="nav-item" aria-current={view === "discord" ? "page" : undefined} onClick={() => setView("discord")}>
+                <Icon name="bell" />
+                <span className="flex-1 min-w-0 truncate">{t("app.nav.discord")}</span>
+              </button>
+              <button className="nav-item" aria-current={view === "debug" ? "page" : undefined} onClick={() => setView("debug")}>
+                <Icon name="sliders" />
+                <span className="flex-1 min-w-0 truncate">{t("app.nav.debug")}</span>
+              </button>
+            </>
+          )}
           <button className="nav-item" aria-current={view === "settings" ? "page" : undefined} onClick={() => setView("settings")}>
             <Icon name="settings" />
             <span className="flex-1 min-w-0 truncate">{t("app.nav.settings")}</span>
@@ -302,38 +348,31 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
           {view === "settings" && (
             <div className="enter flex flex-col pl-7 pt-1">
               {SETTINGS_SECTIONS.map(([id, label]) => (
-                <button key={id} className="sub" onClick={() => document.getElementById(id)?.scrollIntoView({ block: "start" })}>
+                <button key={id} className="sub" onClick={() => {
+                  const to = document.getElementById(id);
+                  to?.scrollIntoView({ block: "start" });
+                  to?.setAttribute("tabindex", "-1");
+                  to?.focus({ preventScroll: true });
+                }}>
                   {t(label)}
                 </button>
               ))}
             </div>
           )}
         </div>
-        <div className="scroll flex-1 min-h-0">
-          <FavouritesNav accounts={accounts.data} active={view === "launch" ? draft.favId : null} onPick={pickFavourite} />
-          <GroupsNav
-            groups={groups.data}
-            accounts={accounts.data}
-            active={view === "accounts" ? group : null}
-            onPick={(id) => {
-              setGroup(id);
-              setView("accounts");
-            }}
-          />
-        </div>
-        <div className="flex flex-col gap-2.5 mt-3 p-3 border border-line">
-          <MultiInstanceSwitch />
+        <div className="flex-none flex flex-col gap-3.5 px-3 pt-3 pb-4">
           <KillAllButton />
-          <div className="mono flex items-center gap-2 text-[11px] text-dim">
-            <span aria-hidden="true" className="w-1.5 h-1.5 flex-none bg-accent-text" />
-            {vault.mode === "master" ? t("app.vaultUnlockedMaster") : t("app.vaultUnlockedDpapi")}
-          </div>
+          <p className="flex items-center gap-2 text-[13px] text-dim" title={vault.mode === "master" ? t("app.vaultUnlockedMaster") : t("app.vaultUnlockedDpapi")}>
+            <Icon name="lock" size={14} />
+            {t("app.encrypted")}
+          </p>
         </div>
       </nav>
       <Divider panel={nav} side="left" label={t("app.sidebarWidth")} />
 
+      <div className="sheet">
       {view === "dashboard" ? (
-        <DashboardView accounts={accounts.data} onLaunch={() => setView("launch")} />
+        <DashboardView accounts={accounts.data} onLaunch={() => setView("launch")} onAdd={() => openAdd()} onImport={() => openAdd("many")} onAccounts={showAll} />
       ) : view === "accounts" ? (
         <AccountsView
           accounts={accounts.data}
@@ -345,24 +384,27 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
           setGroup={setGroup}
           selected={selected}
           setSelected={setSelected}
-          onAdd={() => setAdding(true)}
+          onAdd={() => openAdd()}
           onLaunch={launchAs}
         />
       ) : view === "launch" ? (
-        <>
-          <LaunchView
-            accounts={accounts.data}
-            picked={picked}
-            setPicked={setPicked}
-            sameServer={sameServer}
-            setSameServer={setSameServer}
-            draft={draft}
-            setDraft={setDraft}
-            step={launchStep}
-            setStep={setLaunchStep}
-          />
-          <RunningPanel accounts={accounts.data} onPick={setPicked} />
-        </>
+        <LaunchView
+          accounts={accounts.data}
+          picked={picked}
+          setPicked={setPicked}
+          sameServer={sameServer}
+          setSameServer={setSameServer}
+          draft={draft}
+          setDraft={setDraft}
+          step={launchStep}
+          setStep={setLaunchStep}
+          onAdd={() => openAdd()}
+          onServers={openServers}
+          onPickFavourite={pickFavourite}
+          onHome={() => setView("dashboard")}
+          onAccounts={showAll}
+          onSettings={() => setView("settings")}
+        />
       ) : view === "servers" ? (
         <ServersView
           accounts={accounts.data}
@@ -383,11 +425,13 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
       ) : view === "performance" ? (
         <PerformanceView settings={settings} />
       ) : (
-        <SettingsView vault={vault} settings={settings} onPerformance={() => setView("performance")} />
+        <SettingsView vault={vault} settings={settings} onPerformance={() => setView("performance")} onRecoveryCode={onRecoveryCode} />
       )}
+      </div>
 
       <AddAccountDialog
         open={adding}
+        startOn={addOn}
         onClose={() => setAdding(false)}
         onAdded={(a) => {
           showAll();
@@ -398,13 +442,14 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
   );
 }
 
-/** Surfaces that turn see-through over a background image (the rest stay solid). */
-const SEE_THROUGH = ["--bg", "--panel", "--raised"];
+/** Surfaces that turn see-through over a background image, and how much of them stays (the rest
+ * stay solid). Panels hold most of the text, so they keep it readable over any picture. */
+const SEE_THROUGH = { "--bg": 50, "--panel": 72 };
 
-/** Text on the accent: ink on a light accent, white on a dark one. */
+/** Text on the accent: whichever of ink and white has the higher contrast (WCAG luminance). */
 function onAccent(hex: string) {
-  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
-  return 0.299 * r + 0.587 * g + 0.114 * b > 150 ? "#0a0b0d" : "#ffffff";
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.18 ? "#0a0b0d" : "#ffffff";
 }
 
 /** Applies the theme to <html>: `data-theme` (dark or light, "system" follows Windows live), the
@@ -413,7 +458,8 @@ function useTheme(s: Settings | undefined) {
   const [dark, setDark] = useState(() => document.documentElement.dataset.theme !== "light");
   const theme = s?.theme;
   const accent = s?.accent ?? "";
-  const dim = s?.backgroundDim ?? 80;
+  // Less than this over a bright picture and no text stays readable.
+  const dim = Math.max(40, s?.backgroundDim ?? 60);
   const bytes = useQuery({ queryKey: qk.background, queryFn: api.backgroundGet, staleTime: Infinity, enabled: !!s }).data;
   const [image, setImage] = useState<string | null>(null);
 
@@ -440,11 +486,11 @@ function useTheme(s: Settings | undefined) {
         delete root.dataset.accent;
       }
       // The window's colour covers the picture by `dim`; panels on top are half see-through.
-      for (const v of SEE_THROUGH) root.style.removeProperty(v);
+      for (const v of Object.keys(SEE_THROUGH)) root.style.removeProperty(v);
       if (image) {
         const css = getComputedStyle(root);
         root.style.setProperty("--bg-dim", `color-mix(in srgb, ${css.getPropertyValue("--bg").trim()} ${dim}%, transparent)`);
-        for (const v of SEE_THROUGH) root.style.setProperty(v, `color-mix(in srgb, ${css.getPropertyValue(v).trim()} 50%, transparent)`);
+        for (const [v, keep] of Object.entries(SEE_THROUGH)) root.style.setProperty(v, `color-mix(in srgb, ${css.getPropertyValue(v).trim()} ${keep}%, transparent)`);
         root.style.setProperty("--bg-image", `url("${image}")`);
         root.dataset.bg = "";
       } else {

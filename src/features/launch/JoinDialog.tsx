@@ -38,7 +38,7 @@ export function JoinDialog({ open, onClose, account, accounts, onPick }: {
   return (
     <Dialog open={open} onClose={onClose} title={account ? t("launch.join.titleAs", { name: accountName(account) }) : t("launch.joinSomeone")} width={480}>
       <div className="p-4 border-b border-line">
-        <label className="flex items-center gap-2 h-[34px] px-2.5 border border-line-strong bg-bg text-dim focus-within:border-[var(--focus)]">
+        <label className="flex items-center gap-2 h-[34px] px-2.5 border border-line-strong bg-bg text-dim focus-within:border-[var(--focus)] has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-[var(--focus)] has-[input:focus-visible]:outline-offset-2">
           <Icon name="search" size={14} />
           <span className="sr-only">{t("launch.join.filterPeople")}</span>
           <input
@@ -85,7 +85,7 @@ export function JoinDialog({ open, onClose, account, accounts, onPick }: {
 
 function Row({ c, account, onPick }: { c: JoinCandidate; account?: AccountSummary; onPick: () => void }) {
   return (
-    <button className="flex items-center gap-3 w-full h-[52px] px-4 border-b border-line text-left hover:bg-hover" onClick={onPick}>
+    <button className="flex items-center gap-3 w-full h-[52px] px-4 border-b border-line text-left hover:bg-hover focus-visible:-outline-offset-2" onClick={onPick}>
       {account ? (
         <Avatar account={account} size={28} />
       ) : (

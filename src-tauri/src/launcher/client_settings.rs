@@ -397,12 +397,13 @@ pub async fn wait_until_read(browser_tracker_id: i64, since: SystemTime, client:
             log = Some((l, Instant::now()));
         }
         if let Some((pid, t)) = client.filter(|&(pid, t)| process::start_time(pid) != Some(t)) {
-            log::info!("Roblox settings: the client (pid {pid}, started {t}) ended before it read them");
             client = None;
-            gone = Some((Instant::now(), tokio::task::spawn_blocking(process::installer_running).await.unwrap_or_else(|e| {
+            let installer = tokio::task::spawn_blocking(process::installer_running).await.unwrap_or_else(|e| {
                 log::debug!("Roblox settings: installer check failed: {e}");
                 false
-            })));
+            });
+            log::info!("Roblox settings: the client (pid {pid}, started {t}) ended before it read them (Roblox's installer running: {installer})");
+            gone = Some((Instant::now(), installer));
         }
         let deadline = match (gone, &log) {
             (Some((at, true)), _) => at + UPDATE_TIMEOUT,

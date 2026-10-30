@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::error::{AppError, Result};
-use crate::model::{Adaptive, MemThrottle, Settings, SettingsPatch};
+use crate::model::{Adaptive, MemThrottle, RenderFlags, Settings, SettingsPatch};
 
 const FORMAT: &str = "roalt-performance";
 const VERSION: u32 = 1;
@@ -34,10 +34,22 @@ pub struct Profile {
     pub lighter_rendering: Option<bool>,
     #[ts(optional)]
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub render_flags: Option<RenderFlags>,
+    #[ts(optional)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub minimize_on_launch: Option<bool>,
     #[ts(optional)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub park_minimized: Option<bool>,
+    #[ts(optional)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub micro_width: Option<u32>,
+    #[ts(optional)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub micro_height: Option<u32>,
+    #[ts(optional)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tiny_on_launch: Option<bool>,
     #[ts(optional)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mem_restart_mb: Option<u32>,
@@ -81,8 +93,12 @@ pub fn of(v: &Settings, preview_fps: Option<u32>, now_ms: i64) -> String {
         fps_cap: Some(v.fps_cap),
         low_graphics: Some(v.low_graphics),
         lighter_rendering: Some(v.lighter_rendering),
+        render_flags: Some(v.render_flags),
         minimize_on_launch: Some(v.minimize_on_launch),
         park_minimized: Some(v.park_minimized),
+        micro_width: Some(v.micro_width),
+        micro_height: Some(v.micro_height),
+        tiny_on_launch: Some(v.tiny_on_launch),
         mem_restart_mb: Some(v.mem_restart_mb),
         mem_throttle: Some(v.mem_throttle),
         trim_every_min: Some(v.trim_every_min),
@@ -105,8 +121,12 @@ fn patch_of(p: &Profile) -> SettingsPatch {
         fps_cap: p.fps_cap,
         low_graphics: p.low_graphics,
         lighter_rendering: p.lighter_rendering,
+        render_flags: p.render_flags,
         minimize_on_launch: p.minimize_on_launch,
         park_minimized: p.park_minimized,
+        micro_width: p.micro_width,
+        micro_height: p.micro_height,
+        tiny_on_launch: p.tiny_on_launch,
         mem_restart_mb: p.mem_restart_mb,
         mem_throttle: p.mem_throttle,
         trim_every_min: p.trim_every_min,

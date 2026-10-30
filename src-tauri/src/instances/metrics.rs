@@ -9,13 +9,14 @@ use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{FILETIME, HANDLE};
 use windows::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX};
+use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows::Win32::System::Threading::{
-    GetProcessIoCounters, GetProcessTimes, IO_COUNTERS, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    GetProcessIoCounters, GetProcessTimes, GetSystemTimes, IO_COUNTERS, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
 };
 
 use super::gpu::{Gpu, Usage};
 use super::process::{open, started};
-use crate::model::{ClientMetrics, Limits};
+use crate::model::{ClientMetrics, Limits, SystemUsage};
 
 /// Samples are reused for this long, so several views polling don't add up.
 const CACHE: Duration = Duration::from_secs(2);
@@ -44,11 +45,28 @@ pub struct Sampler {
     cache: Mutex<Option<(Instant, Vec<ClientMetrics>)>>,
     /// Opened on the first sample; stays None where Windows has no such counters.
     gpu: Mutex<Option<Option<Gpu>>>,
+    /// The PC's last sample and its CPU times (idle, kernel + user), for `system`.
+    system: Mutex<Option<(Instant, SystemUsage, (u64, u64))>>,
 }
 
 impl Sampler {
     pub fn new() -> Sampler {
-        Sampler { last: Mutex::new(HashMap::new()), cache: Mutex::new(None), gpu: Mutex::new(None) }
+        Sampler { last: Mutex::new(HashMap::new()), cache: Mutex::new(None), gpu: Mutex::new(None), system: Mutex::new(None) }
+    }
+
+    /// How busy the whole PC is, reused for `CACHE`; None if Windows doesn't say.
+    pub fn system(&self) -> Option<SystemUsage> {
+        let mut last = self.system.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((at, usage, _)) = last.as_ref()
+            && at.elapsed() < CACHE
+        {
+            return Some(*usage);
+        }
+        let times = cpu_times()?;
+        let (used, total) = memory()?;
+        let usage = SystemUsage { cpu_pct: last.as_ref().and_then(|(_, _, before)| busy_pct(*before, times)), mem_used_mb: used as f64 / MB, mem_total_mb: total as f64 / MB };
+        *last = Some((Instant::now(), usage, times));
+        Some(usage)
     }
 
     /// Metrics of the running clients (id, pid, start time, limits as `Tracker::clients`);
@@ -106,6 +124,33 @@ impl Default for Sampler {
     }
 }
 
+/// All cores' CPU time so far, 100 ns ticks: idle, and kernel (which includes idle) + user.
+fn cpu_times() -> Option<(u64, u64)> {
+    let (mut idle, mut kernel, mut user) = (FILETIME::default(), FILETIME::default(), FILETIME::default());
+    // SAFETY: three local FILETIMEs to write to.
+    unsafe { GetSystemTimes(Some(&mut idle), Some(&mut kernel), Some(&mut user)) }
+        .inspect_err(|e| log::debug!("metrics: system times unreadable: {e}"))
+        .ok()?;
+    Some((ticks(idle), ticks(kernel) + ticks(user)))
+}
+
+/// Physical memory in use and in all, bytes.
+fn memory() -> Option<(u64, u64)> {
+    let mut m = MEMORYSTATUSEX { dwLength: size_of::<MEMORYSTATUSEX>() as u32, ..Default::default() };
+    // SAFETY: a local MEMORYSTATUSEX whose dwLength says its size.
+    unsafe { GlobalMemoryStatusEx(&mut m) }
+        .inspect_err(|e| log::debug!("metrics: memory status unreadable: {e}"))
+        .ok()?;
+    Some((m.ullTotalPhys.saturating_sub(m.ullAvailPhys), m.ullTotalPhys))
+}
+
+/// The share of time not idle between two `cpu_times` (pure); None without any time passing.
+fn busy_pct(before: (u64, u64), now: (u64, u64)) -> Option<f64> {
+    let total = now.1.checked_sub(before.1).filter(|&t| t > 0)?;
+    let idle = now.0.saturating_sub(before.0).min(total);
+    Some((total - idle) as f64 / total as f64 * 100.0)
+}
+
 /// One reading of `pid`, only while it is still the process started at `t0`.
 pub fn read(pid: u32, t0: u64) -> Option<Reading> {
     let h = open(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE)?;
@@ -141,8 +186,11 @@ fn cpu_ticks(h: HANDLE) -> Option<u64> {
     unsafe { GetProcessTimes(h, &mut created, &mut exited, &mut kernel, &mut user) }
         .inspect_err(|e| log::debug!("metrics: CPU time unreadable: {e}"))
         .ok()?;
-    let ticks = |f: FILETIME| (u64::from(f.dwHighDateTime) << 32) | u64::from(f.dwLowDateTime);
     Some(ticks(kernel) + ticks(user))
+}
+
+fn ticks(f: FILETIME) -> u64 {
+    (u64::from(f.dwHighDateTime) << 32) | u64::from(f.dwLowDateTime)
 }
 
 /// How many 10 s memory samples in a row a client has been over the limit, after one more
@@ -202,6 +250,19 @@ mod tests {
         child.wait().unwrap();
         *s.cache.lock().unwrap() = None;
         assert!(s.sample(&clients).is_empty(), "gone");
+    }
+
+    #[test]
+    fn the_pc_is_as_busy_as_its_cores_are_not_idle() {
+        assert_eq!(busy_pct((100, 1_000), (150, 1_200)), Some(75.0));
+        assert_eq!(busy_pct((100, 1_000), (300, 1_200)), Some(0.0));
+        assert_eq!(busy_pct((100, 1_000), (100, 1_000)), None, "no time passed");
+        assert_eq!(busy_pct((100, 1_000), (100, 900)), None, "a clock can't run back");
+        let s = Sampler::new();
+        let first = s.system().expect("Windows says how busy it is");
+        assert!(first.mem_total_mb > first.mem_used_mb && first.mem_used_mb > 0.0, "{first:?}");
+        assert_eq!(first.cpu_pct, None, "nothing to compare with yet");
+        assert_eq!(s.system(), Some(first), "cached");
     }
 
     #[test]

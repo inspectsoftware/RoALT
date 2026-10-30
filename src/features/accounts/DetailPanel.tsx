@@ -3,7 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, asError, type AccountInfo, type AccountPatch, type AccountSummary, type Group, type Presence, type ServerVisit, type VaultMode } from "../../api";
-import { groupColor, qk, useAccountInfo, useUpdateAccount } from "../../data";
+import { groupColor, qk, useAccountInfo, useBulk, useInstances, useMultiStatus, useSettings, useUpdateAccount } from "../../data";
+import { launchBlocked } from "../launch/LaunchView";
 import { NumberField, Switch, TextField } from "../../ui/controls";
 import { Icon } from "../../ui/Icon";
 import { friendly, toast, toastError } from "../../ui/Toast";
@@ -27,18 +28,20 @@ const clip = (text: string, done: string) => writeText(text).then(() => toast(do
 const openLink = (url: string) => openUrl(url).catch(toastError);
 
 /** The parent keys this by account id, so local edits reset when the selection changes. */
-export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, checking, onValidate, onRemove, onLaunch }: {
+export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, checking, playing, onValidate, onRemove, onLaunch }: {
   account: AccountSummary;
   groups: Group[];
   vaultMode: VaultMode;
   clipboardSeconds: number;
   checking: boolean;
+  playing: boolean;
   onValidate: () => void;
   onRemove: () => void;
   onLaunch: () => void;
 }) {
   const qc = useQueryClient();
   const update = useUpdateAccount();
+  const settings = useSettings().data;
   const save = (patch: AccountPatch) => update.mutate({ id: a.id, patch });
   const info = useAccountInfo(a.id);
   const refresh = useMutation({
@@ -64,6 +67,7 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
   const [cookie, setCookie] = useState<string | null>(null);
   const [ask, setAsk] = useState<"reveal" | "copy" | null>(null);
   const [lastAsk, setLastAsk] = useState<"reveal" | "copy">("reveal");
+  const [more, setMore] = useState(false);
   // Only info that belongs to this Roblox user (local ids can be reused after a removal).
   const d = info.data?.userId === a.userId ? info.data : undefined;
   const username = d?.username || a.username;
@@ -105,10 +109,10 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
 
   return (
     <div className="enter flex flex-col">
-      <div className="flex gap-4 items-start p-5 border-b border-line">
+      <div className="flex gap-4 items-start p-5">
         <Avatar account={a} size={72} url={d?.headshotUrl} />
         <div className="min-w-0 flex flex-col gap-1">
-          <div className="text-lg font-semibold tracking-[-0.01em] truncate">{d?.displayName || a.displayName}</div>
+          <div className="text-xl font-semibold tracking-[-0.01em] truncate">{d?.displayName || a.displayName}</div>
           <div className="flex items-center gap-1.5 min-w-0">
             <span className="mono text-dim truncate selectable">@{username}</span>
             <CopyButton label={t("accounts.menu.copyUsername")} onClick={copyName} />
@@ -120,6 +124,56 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
         </div>
       </div>
 
+      <Section>
+        <div className="flex items-center justify-between gap-2">
+          <Status status={a.status} checking={checking} />
+          <span className="mono text-[11px] text-dim">{t("accounts.detail.checked", { when: ago(a.statusCheckedAt) })}</span>
+        </div>
+        {a.status === "valid" ? (
+          <button className="btn btn-primary" title={t("accounts.detail.launchHint")} disabled={playing} onClick={onLaunch}>
+            <Icon name="play" size={12} fill />
+            {playing ? t("play.already") : t("common.launch")}
+          </button>
+        ) : (
+          <button className="btn btn-primary" title={t("accounts.detail.openSessionHint")} disabled={session.isPending} onClick={() => session.mutate()}>
+            <Icon name="external" size={14} />
+            {t("accounts.detail.signInAgain")}
+          </button>
+        )}
+        <button className="btn" onClick={onValidate} disabled={checking}>
+          <Icon name="refresh" size={14} className={checking ? "spin" : ""} />
+          {t("accounts.menu.validate")}
+        </button>
+      </Section>
+
+      <Section>
+        <div className="flex items-center justify-between gap-3">
+          <span className="flex flex-col gap-0.5 min-w-0 break-words">
+            <span className="font-medium">{t("accounts.detail.fullQuality")}</span>
+            <span className="text-[13px] text-dim">{t("accounts.detail.fullQualityHint")}</span>
+          </span>
+          <Switch label={t("accounts.detail.fullQuality")} checked={a.fullQuality} onChange={(fullQuality) => save({ fullQuality })} />
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <span className="flex flex-col gap-0.5 min-w-0 break-words">
+            <span className="font-medium">{t("accounts.detail.bringBack")}</span>
+            <span className="text-[13px] text-dim">{settings && !settings.autoRejoin && !settings.autoRestartOnCrash ? t("accounts.detail.bringBackOff") : t("accounts.detail.bringBackHint")}</span>
+          </span>
+          <Switch label={t("accounts.detail.bringBack")} checked={!a.allowDisconnect} onChange={(v) => save({ allowDisconnect: !v })} />
+        </div>
+      </Section>
+
+      <ServerHistory accountId={a.id} />
+
+      <div className="px-5 pt-3">
+        <button className="btn btn-ghost w-full" aria-expanded={more} onClick={() => setMore(!more)}>
+          {more ? t("accounts.detail.less") : t("accounts.detail.more")}
+          <Icon name="chevron" size={12} className={more ? "rotate-180" : ""} />
+        </button>
+      </div>
+
+      {more && (
+      <div className="enter flex flex-col">
       <div className="flex flex-col gap-1 px-5 py-2.5 border-b border-line">
         <div className="flex items-center justify-between gap-2">
           <span className="mono text-[11px] text-dim">
@@ -133,6 +187,7 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
         {d && d.unavailable.length > 0 && (
           <div className="text-xs text-dim">{t("accounts.detail.unavailable", { parts: fmtList(d.unavailable.map(partName)) })}</div>
         )}
+        <div className="mono text-[11px] text-dim">{t("accounts.detail.addedOn", { date: formatDate(a.createdAt) })}</div>
       </div>
 
       {d ? (
@@ -150,15 +205,6 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
       )}
 
       <Section>
-        <button
-          className="btn btn-primary"
-          disabled={a.status !== "valid"}
-          title={a.status === "valid" ? t("accounts.detail.launchHint") : t("accounts.detail.launchDisabled")}
-          onClick={onLaunch}
-        >
-          <Icon name="play" size={12} fill />
-          {t("common.launch")}
-        </button>
         <div className="grid grid-cols-2 gap-2">
           <ActionButton icon="external" label={t("accounts.menu.openProfile")} onClick={() => openLink(`https://www.roblox.com/users/${a.userId}/profile`)} />
           <ActionButton
@@ -172,20 +218,6 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
           <ActionButton icon="copy" label={t("accounts.menu.copyUsername")} onClick={copyName} />
         </div>
       </Section>
-
-      <Section>
-        <div className="flex items-center justify-between gap-2">
-          <Status status={a.status} checking={checking} />
-          <span className="mono text-[11px] text-dim">{t("accounts.detail.checked", { when: ago(a.statusCheckedAt) })}</span>
-        </div>
-        <div className="mono text-[11px] text-dim">{t("accounts.detail.addedOn", { date: formatDate(a.createdAt) })}</div>
-        <button className="btn" onClick={onValidate} disabled={checking}>
-          <Icon name="refresh" size={14} className={checking ? "spin" : ""} />
-          {t("accounts.menu.validate")}
-        </button>
-      </Section>
-
-      <ServerHistory accountId={a.id} />
 
       <Section>
         <label className="flex flex-col gap-1.5">
@@ -234,7 +266,7 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
               />
             ))}
             <input
-              className="field mono h-7 w-[86px] px-2 text-xs"
+              className="field mono min-h-8 w-[92px] px-2 text-xs"
               aria-label={t("accounts.detail.customColour")}
               placeholder="#rrggbb"
               value={hex}
@@ -255,7 +287,7 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
             <div className="flex flex-wrap gap-1.5" role="group" aria-labelledby="groups-label">
               {groups.map((g) => (
                 <button key={g.id} className="chip chip-sm" aria-pressed={a.groupIds.includes(g.id)} onClick={() => toggleGroup(g.id)}>
-                  <span aria-hidden="true" className="w-1.5 h-1.5" style={{ background: groupColor(g) }} />
+                  <span aria-hidden="true" className="w-2 h-2 rounded-full" style={{ background: groupColor(g) }} />
                   {g.name}
                 </button>
               ))}
@@ -267,14 +299,7 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
           <Switch label={t("accounts.detail.favourite")} checked={a.favourite} onChange={(v) => save({ favourite: v })} />
         </div>
         <div className="flex items-center justify-between gap-2">
-          <span className="flex flex-col gap-0.5">
-            <span>{t("accounts.menu.allowDisconnect")}</span>
-            <span className="text-xs text-dim">{t("accounts.detail.allowDisconnectHint")}</span>
-          </span>
-          <Switch label={t("accounts.menu.allowDisconnect")} checked={a.allowDisconnect} onChange={(v) => save({ allowDisconnect: v })} />
-        </div>
-        <div className="flex items-center justify-between gap-2">
-          <span className="flex flex-col gap-0.5">
+          <span className="flex flex-col gap-0.5 min-w-0 break-words">
             <span>{t("accounts.detail.muteDiscord")}</span>
             <span className="text-xs text-dim">{t("accounts.detail.muteDiscordHint")}</span>
           </span>
@@ -285,20 +310,12 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
           <TextField label={t("accounts.detail.launchArgs")} placeholder={t("accounts.detail.launchArgsDefault")} value={a.launchArgs ?? ""} onCommit={(launchArgs) => update.mutateAsync({ id: a.id, patch: { launchArgs } })} />
         </label>
         <div className="flex items-center justify-between gap-2">
-          <span className="flex flex-col gap-0.5">
+          <span className="flex flex-col gap-0.5 min-w-0 break-words">
             <span>{t("accounts.detail.fpsCap")}</span>
             <span className="text-xs text-dim">{t("accounts.detail.fpsCapHint")}</span>
           </span>
           <NumberField unit={t("accounts.detail.fpsUnit")} short="FPS" min={0} max={360} value={a.fpsCap ?? 0} onCommit={(fpsCap) => save({ fpsCap })} />
         </div>
-        <div className="flex items-center justify-between gap-2">
-          <span className="flex flex-col gap-0.5">
-            <span>{t("accounts.detail.fullQuality")}</span>
-            <span className="text-xs text-dim">{t("accounts.detail.fullQualityHint")}</span>
-          </span>
-          <Switch label={t("accounts.detail.fullQuality")} checked={a.fullQuality} onChange={(fullQuality) => save({ fullQuality })} />
-        </div>
-
       </Section>
 
       <Section>
@@ -309,14 +326,14 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
           </span>
         </div>
         {cookie ? (
-          <div className="enter flex flex-col border border-line-strong">
+          <div className="enter well flex flex-col overflow-hidden">
             <div className="mono text-[11px] leading-snug p-2.5 max-h-28 overflow-auto break-all selectable scroll">{cookie}</div>
             <div className="h-0.5 bg-line">
               <div className="h-full bg-accent-text drain" />
             </div>
           </div>
         ) : (
-          <span className="mono h-[34px] flex items-center px-2.5 border border-line text-dim tracking-[0.1em] overflow-hidden">
+          <span className="field mono flex items-center text-dim tracking-[0.1em] overflow-hidden">
             ••••••••••••••••••••
           </span>
         )}
@@ -338,6 +355,9 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
               : t("accounts.detail.cookieAskHello")}
         </div>
       </Section>
+
+      </div>
+      )}
 
       <div className="p-5">
         <button className="btn btn-danger w-full" onClick={onRemove}>
@@ -379,10 +399,10 @@ function Info({ d }: { d: AccountInfo }) {
           </span>
         ))}
       </div>
-      <div className="grid grid-cols-3 gap-px bg-line border-b border-line">
+      <div className="grid grid-cols-3 gap-px border-b border-line">
         {stats.map(([k, v, title]) => (
-          <div key={k} className="min-w-0 bg-panel px-4 py-3">
-            <div className="label truncate" title={t(k)}>{t(k)}</div>
+          <div key={k} className="min-w-0 px-4 py-3">
+            <div className="text-xs text-dim truncate" title={t(k)}>{t(k)}</div>
             <div className="mono text-[15px] font-medium mt-0.5 truncate" title={v === null ? t(NO_ANSWER) : title}>
               {v ?? "—"}
             </div>
@@ -407,8 +427,8 @@ function num(k: Key, n: number | null): Stat {
 
 type Badge = { label: string; tone?: keyof typeof TONE; title?: string };
 const TONE: Record<"on" | "warn", CSSProperties> = {
-  on: { color: "var(--text)", borderColor: "var(--line-strong)" },
-  warn: { color: "var(--orange)", borderColor: "color-mix(in srgb, var(--orange) 55%, transparent)" },
+  on: { color: "var(--text)" },
+  warn: { color: "var(--orange)" },
 };
 
 function badges(d: AccountInfo): Badge[] {
@@ -448,7 +468,7 @@ function PresenceBlock({ p }: { p: Presence | null }) {
       ) : (
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center gap-2 min-w-0">
-            <span aria-hidden="true" className="w-2 h-2 flex-none bg-accent-text" />
+            <span aria-hidden="true" className="w-2 h-2 flex-none rounded-full bg-accent-text" />
             {p.lastLocation && <span className="sr-only">{t("accounts.detail.inGameSr")}</span>}
             <span className="font-semibold truncate" title={p.lastLocation ?? undefined}>{p.lastLocation ?? t("accounts.presence.inGame")}</span>
           </div>
@@ -511,10 +531,10 @@ function InfoSkeleton() {
           <span key={w} className="skel h-6" style={{ width: w }} />
         ))}
       </div>
-      <div className="grid grid-cols-3 gap-px bg-line border-b border-line">
+      <div className="grid grid-cols-3 gap-px border-b border-line">
         {STATS.map((k) => (
-          <div key={k} className="bg-panel px-4 py-3">
-            <div className="label truncate">{t(k)}</div>
+          <div key={k} className="px-4 py-3">
+            <div className="text-xs text-dim truncate">{t(k)}</div>
             <div className="skel h-[18px] w-12 mt-1" />
           </div>
         ))}
@@ -543,9 +563,9 @@ function ActionButton({ icon, label, title, disabled, onClick }: {
   onClick: () => void;
 }) {
   return (
-    <button className="btn min-w-0 px-2.5" title={title ?? label} disabled={disabled} onClick={onClick}>
+    <button className="btn min-w-0 px-2.5 py-1 whitespace-normal leading-tight" title={title ?? label} disabled={disabled} onClick={onClick}>
       {icon === "copy" && <Icon name="copy" size={12} />}
-      <span className="truncate">{label}</span>
+      <span className="min-w-0">{label}</span>
       {icon === "external" && <Icon name="external" size={12} />}
     </button>
   );
@@ -575,6 +595,11 @@ function ServerHistory({ accountId }: { accountId: number }) {
 function ServerRow({ accountId, visit: v }: { accountId: number; visit: ServerVisit }) {
   const game = useQuery({ queryKey: qk.game(v.placeId), queryFn: () => api.gameInfo(v.placeId) }).data;
   const [busy, setBusy] = useState(false);
+  // With multi-instance off it would end the client that runs.
+  const multi = useMultiStatus().data;
+  const batch = useBulk().data;
+  const others = (useInstances().data ?? []).some((i) => i.state !== "exited" && i.accountId !== accountId);
+  const blocked = launchBlocked(others, multi, batch);
   const rejoin = () => {
     setBusy(true);
     api
@@ -591,7 +616,7 @@ function ServerRow({ accountId, visit: v }: { accountId: number; visit: ServerVi
       {v.private ? (
         <span className="text-xs text-dim">{t("accounts.history.private")}</span>
       ) : (
-        <button className="btn btn-sm" onClick={rejoin} disabled={busy}>
+        <button className="btn btn-sm" onClick={rejoin} disabled={busy || blocked !== null} title={blocked ?? undefined}>
           {t("accounts.history.rejoin")}
         </button>
       )}

@@ -56,10 +56,10 @@ function Sparkline({ values, floor, zero, label, format }: {
 
 function Tile({ label, value, children }: { label: string; value: string; children?: ReactNode }) {
   return (
-    <div className="flex flex-col gap-1 px-5 py-4 border-r border-line last:border-r-0 min-w-0">
-      <span className="label">{label}</span>
-      <div className="flex items-end justify-between gap-3">
-        <span className="text-[22px] font-semibold leading-none whitespace-nowrap">{value}</span>
+    <div className="panel flex flex-col gap-1.5 p-5 min-w-0">
+      <span className="text-[13px] text-dim">{label}</span>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <span className="mono text-[26px] leading-none whitespace-nowrap">{value}</span>
         {children}
       </div>
     </div>
@@ -99,12 +99,12 @@ export function MonitorView({ accounts }: { accounts: AccountSummary[] }) {
   const gpuMemNow = list.some((m) => m.gpuMemMb !== null) ? list.reduce((n, m) => n + (m.gpuMemMb ?? 0), 0) : null;
 
   return (
-    <main className="scroll flex-1 min-w-0 px-10 pt-6 pb-12">
-      <div className="enter max-w-[1000px] flex flex-col">
-        <h1 className="text-xl font-semibold tracking-[-0.01em]">{t("monitor.title")}</h1>
-        <p className="text-dim mt-1">{t("monitor.intro")}</p>
+    <main className="scroll flex-1 min-w-0 px-8 pt-5 pb-12">
+      <div className="enter max-w-[1100px] flex flex-col">
+        <h1 className="page-title">{t("monitor.title")}</h1>
+        <p className="page-sub">{t("monitor.intro")}</p>
 
-        <div className="grid grid-cols-2 lg:grid-cols-5 border border-line mt-5">
+        <div className="grid gap-6 mt-6" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(165px, 1fr))" }}>
           <Tile label={t("monitor.clients")} value={String(running.length)} />
           <Tile label={t("monitor.cpuAll")} value={pct(cpuNow)}>
             {list.length > 0 && <Sparkline values={hist.totals.cpu} floor={10} zero label={t("monitor.cpuAll")} format={pct} />}
@@ -119,7 +119,8 @@ export function MonitorView({ accounts }: { accounts: AccountSummary[] }) {
         {running.length === 0 ? (
           <p className="text-dim mt-6">{t("monitor.empty")}</p>
         ) : (
-          <table className="mono w-full border-collapse text-xs mt-6">
+          <div className="well scroll mt-6 p-3">
+          <table className="mono w-full border-collapse text-xs">
             <thead>
               <tr className="h-8 text-dim text-left">
                 <th className="font-normal border-b border-line">{t("monitor.account")}</th>
@@ -143,21 +144,21 @@ export function MonitorView({ accounts }: { accounts: AccountSummary[] }) {
                 const h = hist.per.get(i.id);
                 const [label, color] = STATES[i.state];
                 return (
-                  <tr key={i.id} className="h-11 border-b border-line" title={`PID ${i.pid}`} style={{ fontVariantNumeric: "tabular-nums" }}>
-                    <td className="pr-3 max-w-0 w-[24%]">
+                  <tr key={i.id} className="h-12 border-b border-line last:border-b-0" title={`PID ${i.pid}`} style={{ fontVariantNumeric: "tabular-nums" }}>
+                    <td className="pr-3 max-w-[180px]">
                       <span className="flex items-center gap-2 min-w-0 font-sans">
                         {a && <Avatar account={a} size={20} />}
-                        <span className="truncate">{a ? accountName(a) : t("monitor.accountId", { id: i.accountId })}</span>
+                        <span className="truncate min-w-[80px]">{a ? accountName(a) : t("monitor.accountId", { id: i.accountId })}</span>
                       </span>
                     </td>
                     <td className="pr-3 whitespace-nowrap">
                       <span className="flex items-baseline gap-1.5">
-                        <span aria-hidden="true" className="w-1.5 h-1.5 flex-none" style={{ background: color }} />
+                        <span aria-hidden="true" className="w-2 h-2 flex-none rounded-full" style={{ background: color }} />
                         {label}
                         {i.note && <span className="text-orange truncate"> · {i.note}</span>}
                       </span>
                     </td>
-                    <td className="pr-3 text-right">{m ? pct(m.cpuPct) : "—"}</td>
+                    <td className="pr-3 text-right whitespace-nowrap">{m ? pct(m.cpuPct) : "—"}</td>
                     <td className="pr-3 hidden xl:table-cell"><Sparkline values={h?.cpu ?? []} floor={10} zero label={t("monitor.cpu")} format={pct} /></td>
                     <td className="pr-3 text-right" title={m ? t("monitor.workingSet", { mb: mb(m.workingSetMb) }) : undefined}>{m ? mb(m.privateMb) : "—"}</td>
                     <td className="pr-3 hidden xl:table-cell"><Sparkline values={h?.mem ?? []} floor={64} label={t("monitor.privateMemory")} format={mb} /></td>
@@ -172,6 +173,7 @@ export function MonitorView({ accounts }: { accounts: AccountSummary[] }) {
               })}
             </tbody>
           </table>
+          </div>
         )}
       </div>
     </main>

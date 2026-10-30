@@ -14,6 +14,9 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+/// The app is exiting and took its limits off: the tracker loop must not put them back.
+static RELEASED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_CPU_RATE_CONTROL, JOB_OBJECT_CPU_RATE_CONTROL_ENABLE,
@@ -112,6 +115,7 @@ impl Limiter {
     /// restarted RoALT, which assumes nothing is set, starts from the client's own state.
     // ponytail: a RoALT killed outright leaves its limits on (a cap until the client closes).
     pub fn release_all(&self) {
+        RELEASED.store(true, std::sync::atomic::Ordering::Relaxed);
         let applied = std::mem::take(&mut *self.applied.lock().unwrap_or_else(|e| e.into_inner()));
         for (id, a) in applied {
             let mut r = Ok(());
@@ -134,6 +138,9 @@ impl Limiter {
     /// (only what changed, plus trims that are due) and forgets instances no longer running.
     /// Limits that failed are not tried again on the same process until they change.
     pub fn sync(&self, clients: &[(String, u32, u64, Limits)]) {
+        if RELEASED.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
         self.applied.lock().unwrap_or_else(|e| e.into_inner()).retain(|id, _| clients.iter().any(|c| c.0 == *id));
         for (id, pid, t0, limits) in clients {
             let failed = {

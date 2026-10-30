@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useEffect, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { t } from "../i18n";
 
 const KEY = "roalt.width.";
@@ -34,6 +34,8 @@ export function Divider({ panel, side, label }: {
   label: string;
 }) {
   const sign = side === "left" ? 1 : -1;
+  // A view switch mid-drag removes this before the pointer comes up.
+  useEffect(() => () => void (document.body.style.cursor = ""), []);
 
   const drag = (e: PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;

@@ -53,9 +53,11 @@ pub fn place_launcher_url(p: &PlaceLaunch) -> String {
 }
 
 /// `roblox-player:1+launchmode:play+gameinfo:<enc ticket>+launchtime:<ms>+placelauncherurl:<enc url>+
-/// browsertrackerid:<id>+robloxLocale:en_us+gameLocale:en_us+LaunchExp:InApp` (no channel:
-/// production). The result holds the ticket, so it is a `Secret`.
-pub fn player_uri(ticket: &Secret, launch_time_ms: i64, p: &PlaceLaunch) -> Secret {
+/// browsertrackerid:<id>+robloxLocale:en_us+gameLocale:en_us+LaunchExp:InApp`. `production` adds an
+/// empty `channel:` before `LaunchExp`: the client then asks for production's version, whatever
+/// channel Roblox left in the registry (research multi-instance M9). The result holds the ticket,
+/// so it is a `Secret`.
+pub fn player_uri(ticket: &Secret, launch_time_ms: i64, p: &PlaceLaunch, production: bool) -> Secret {
     let url = place_launcher_url(p);
     // Sized up front so no reallocation leaves a copy of the ticket behind.
     let mut s = String::with_capacity(3 * (ticket.expose().len() + url.len()) + 256);
@@ -63,7 +65,8 @@ pub fn player_uri(ticket: &Secret, launch_time_ms: i64, p: &PlaceLaunch) -> Secr
     encode_into(&mut s, ticket.expose());
     let _ = write!(s, "+launchtime:{launch_time_ms}+placelauncherurl:");
     encode_into(&mut s, &url);
-    let _ = write!(s, "+browsertrackerid:{}+robloxLocale:en_us+gameLocale:en_us+LaunchExp:InApp", p.browser_tracker_id);
+    let channel = if production { "channel:+" } else { "" };
+    let _ = write!(s, "+browsertrackerid:{}+robloxLocale:en_us+gameLocale:en_us+{channel}LaunchExp:InApp", p.browser_tracker_id);
     Secret::new(s)
 }
 
@@ -121,8 +124,10 @@ mod tests {
         assert_eq!(spec["examples"].as_object().unwrap().len(), joins.len());
         let ticket = Secret::new("<TICKET>");
         for (name, join) in &joins {
-            let uri = player_uri(&ticket, 1792839000000, &launch(join));
+            let uri = player_uri(&ticket, 1792839000000, &launch(join), false);
             assert_eq!(uri.expose(), spec["examples"][name].as_str().unwrap(), "{name}");
+            let production = player_uri(&ticket, 1792839000000, &launch(join), true);
+            assert_eq!(production.expose(), uri.expose().replace("+LaunchExp:", "+channel:+LaunchExp:"), "{name}");
         }
     }
 
@@ -131,7 +136,7 @@ mod tests {
         let join = Join::Game { place_id: 1, launch_data: Some("a b+c&d=e/é!~*'()".into()) };
         let url = place_launcher_url(&launch(&join));
         assert!(url.contains("&placeId=1&launchData=a+b%2Bc%26d%3De%2F%C3%A9!~*'()&isPlayTogetherGame=false&"), "{url}");
-        let uri = player_uri(&Secret::new("a+b c"), 0, &launch(&join));
+        let uri = player_uri(&Secret::new("a+b c"), 0, &launch(&join), false);
         assert!(uri.expose().contains("+gameinfo:a%2Bb%20c+launchtime:0+"));
         assert!(uri.expose().contains("launchData%3Da%2Bb%252Bc%2526d"));
     }

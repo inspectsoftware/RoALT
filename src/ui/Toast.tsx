@@ -28,7 +28,19 @@ function dismiss(id: number) {
 export function toast(text: string, tone: Tone = "ok", sticky = false) {
   const id = ++nextId;
   publish([...items.slice(-3), { id, text, tone }]);
-  if (!sticky) setTimeout(() => dismiss(id), tone === "error" ? 7000 : 4000);
+  if (!sticky) later(id, tone === "error" ? 7000 : 4000);
+}
+
+/** Pointer or focus on a toast holds it: it is being read. */
+const timers = new Map<number, number>();
+function later(id: number, ms: number) {
+  timers.set(id, window.setTimeout(() => dismiss(id), ms));
+}
+function hold(id: number) {
+  clearTimeout(timers.get(id));
+}
+function resume(id: number) {
+  if (timers.has(id)) later(id, 3000);
 }
 
 const FRIENDLY: Record<string, Key> = {
@@ -61,6 +73,10 @@ export function Toaster() {
           key={item.id}
           role={item.tone === "error" ? "alert" : "status"}
           className={`toast enter ${item.tone === "error" ? "toast-error" : ""} ${item.leaving ? "toast-leave" : ""}`}
+          onPointerEnter={() => hold(item.id)}
+          onPointerLeave={() => resume(item.id)}
+          onFocus={() => hold(item.id)}
+          onBlur={() => resume(item.id)}
         >
           <span className="flex-1 min-w-0 pt-0.5 break-words">{item.text}</span>
           <button className="wc w-6 h-6" aria-label={t("common.dismiss")} onClick={() => dismiss(item.id)}>

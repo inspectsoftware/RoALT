@@ -60,14 +60,15 @@ export function DiscordView({ settings }: { settings: Settings }) {
   };
 
   return (
-    <main className="scroll flex-1 min-w-0 px-10 pt-6 pb-12">
-      <div className="enter max-w-[760px] flex flex-col">
-        <h1 className="text-xl font-semibold tracking-[-0.01em] mb-2">Discord</h1>
-        <p className="text-dim max-w-[620px]">
+    <main className="scroll flex-1 min-w-0 px-8 pt-5 pb-12">
+      <div className="enter max-w-[860px] flex flex-col">
+        <h1 className="page-title mb-2">{t("app.nav.discord")}</h1>
+        <p className="text-dim">
           {t("discord.intro")}
         </p>
 
         <Heading id="discord-webhook">{t("discord.webhook")}</Heading>
+        <div className="panel px-5 py-1 mt-3 [&>*:last-child]:border-b-0">
         <Row
           title={t("discord.webhook")}
           hint={
@@ -101,7 +102,10 @@ export function DiscordView({ settings }: { settings: Settings }) {
           </button>
         </form>
 
+        </div>
+
         <Heading id="discord-events">{t("discord.events")}</Heading>
+        <div className="panel px-5 py-1 mt-3 [&>*:last-child]:border-b-0">
         {EVENTS.map(([key, title, hint]) => (
           <Row key={key} title={t(title)} hint={t(hint)}>
             <Switch label={t(title)} checked={events[key]} onChange={(on) => setEvents({ [key]: on })} />
@@ -117,6 +121,7 @@ export function DiscordView({ settings }: { settings: Settings }) {
             onCommit={(statusEveryMin) => setEvents({ statusEveryMin })}
           />
         </Row>
+        </div>
       </div>
     </main>
   );

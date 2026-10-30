@@ -117,8 +117,8 @@ export function DebugView() {
   };
 
   return (
-    <main className="flex-1 min-w-0 flex flex-col px-10 pt-6 pb-6 min-h-0">
-      <h1 className="text-xl font-semibold tracking-[-0.01em]">{t("debug.title")}</h1>
+    <main className="flex-1 min-w-0 flex flex-col px-8 pt-5 pb-6 min-h-0">
+      <h1 className="page-title">{t("debug.title")}</h1>
       <p className="text-dim mt-1">{t("debug.intro")}</p>
 
       <div className="flex flex-wrap items-center gap-2 mt-4">
@@ -127,7 +127,7 @@ export function DebugView() {
             key={lv}
             className="btn btn-sm mono"
             aria-pressed={shown[lv]}
-            style={shown[lv] ? { background: "var(--sel)" } : { opacity: 0.6 }}
+            style={shown[lv] ? undefined : { opacity: 0.6 }}
             onClick={() => setShown((s) => ({ ...s, [lv]: !s[lv] }))}
           >
             <span className={COLOR[lv]}>{t(`debug.level.${lv}`)}</span>
@@ -135,7 +135,7 @@ export function DebugView() {
           </button>
         ))}
         <input
-          className="field h-7 px-2 flex-1 min-w-[160px]"
+          className="field min-h-9 flex-1 min-w-[160px]"
           type="search"
           placeholder={t("debug.filter")}
           aria-label={t("debug.filter")}

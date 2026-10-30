@@ -642,7 +642,7 @@ fn cant_launch(status: AccountStatus) -> Option<String> {
         AccountStatus::Valid => None,
         AccountStatus::Invalid => Some(tr!("its cookie is no longer valid. Sign in to it again.")),
         AccountStatus::Challenged => Some(tr!("Roblox wants a human check. Sign in to it again.")),
-        AccountStatus::Unknown => Some(tr!("its cookie hasn't been checked yet. Validate it first.")),
+        AccountStatus::Unknown => Some(tr!("its sign-in hasn't been checked yet. Check it first.")),
     }
 }
 
@@ -650,7 +650,7 @@ fn cant_launch(status: AccountStatus) -> Option<String> {
 fn stop_reason(e: &AppError, name: &str) -> Option<String> {
     match e {
         AppError::Challenge => {
-            Some(tr!("Roblox wants a human check for {name}. Sign in to it again with Add account > Sign in.", name = name))
+            Some(tr!("Roblox wants a human check for {name}. Sign in to it again with Add account > Sign in with Roblox.", name = name))
         }
         AppError::Locked => Some(tr!("The vault locked. Unlock it.")),
         _ => None,
@@ -767,6 +767,8 @@ mod tests {
             throttled: false,
             micro: false,
             fps_cap: None,
+            relaunching: false,
+            relaunch_problem: None,
             sign_in_problem: false,
         }
     }

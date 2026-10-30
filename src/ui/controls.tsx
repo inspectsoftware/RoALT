@@ -107,6 +107,8 @@ export function NumberField({ label, unit, short, min, max, step = 1, value, onC
         value={text}
         onChange={(e) => setText(e.target.value)}
         onBlur={commit}
+        // The wheel steps a focused number field: scrolling past would change a setting.
+        onWheel={(e) => e.currentTarget.blur()}
         onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
       />
       <span className="text-dim">{short}</span>

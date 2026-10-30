@@ -55,11 +55,17 @@ pub struct App {
     pub network: network::Network,
     /// When the shutdown RoALT scheduled is due (Unix ms; `commands::shutdown_schedule`).
     pub shutdown: Mutex<Option<i64>>,
+    /// Rotated cookies that arrived while the vault was locked, stored at the next unlock.
+    pub rotated_later: Mutex<Vec<(i64, vault::Secret)>>,
 }
 
 impl App {
     /// Roblox handed out a new `.ROBLOSECURITY` for a stored account: keep it.
     pub fn store_rotated(&self, account_id: i64, cookie: Secret) {
+        if self.vault.is_locked() {
+            self.rotated_later.lock().unwrap_or_else(|e| e.into_inner()).push((account_id, cookie));
+            return;
+        }
         let stored = self
             .db
             .account_cookie(account_id)
@@ -210,12 +216,11 @@ fn remove_old_db(data_dir: &Path, old: &Path) -> bool {
     gone
 }
 
-fn main_window(app: &TauriApp, data_dir: &Path) -> tauri::Result<()> {
+fn main_window(app: &TauriApp, data_dir: &Path, skip_splash: bool) -> tauri::Result<()> {
     // The dark theme's --bg (theme.css) in either theme: the splash is dark, and this is what
     // shows before the UI paints and while the window grows.
     let bg = Color(5, 5, 6, 255);
 
-    #[allow(unused_mut)]
     let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
         .title("RoALT")
         .inner_size(splash::DEFAULT.0, splash::DEFAULT.1)
@@ -224,7 +229,12 @@ fn main_window(app: &TauriApp, data_dir: &Path) -> tauri::Result<()> {
         .decorations(false)
         .background_color(bg)
         // The UI's own WebView2 profile; never used for roblox.com.
-        .data_directory(data_dir.join("webview"));
+        .data_directory(data_dir.join("webview"))
+        .on_navigation(in_app);
+    // The splash decides before any setting could reach the UI.
+    if skip_splash {
+        builder = builder.initialization_script("window.__ROALT_SKIP_SPLASH = true;");
+    }
     // Debug builds only: DevTools protocol for automated UI checks on a hidden desktop.
     #[cfg(debug_assertions)]
     if let Ok(port) = std::env::var("ROALT_CDP_PORT") {
@@ -234,7 +244,47 @@ fn main_window(app: &TauriApp, data_dir: &Path) -> tauri::Result<()> {
     }
     let w = builder.build()?;
     webview::log_process_failures(&w);
-    splash::start(app.handle(), &w)
+    splash::start(app.handle(), &w, skip_splash)
+}
+
+/// Only the RoALT window: pages in Roblox windows are never to reach a command, whatever origin
+/// they manage to appear as.
+fn main_only(handler: impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static) -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
+    move |invoke| {
+        if invoke.message.webview_ref().label() != "main" {
+            log::warn!("refused command {} from window {}", invoke.message.command(), invoke.message.webview_ref().label());
+            invoke.resolver.reject("not allowed");
+            return true;
+        }
+        handler(invoke)
+    }
+}
+
+/// The RoALT window stays on the app's own pages.
+fn in_app(url: &url::Url) -> bool {
+    let host = url.host_str();
+    (host == Some("tauri.localhost") && url.port().is_none() && url.username().is_empty() && url.password().is_none())
+        || url.scheme() == "tauri"
+        // `tauri dev`.
+        || (cfg!(debug_assertions) && host == Some("localhost"))
+}
+
+/// Keeps a folder RoALT creates from being writable by other users of the PC: what lands in it
+/// includes the UI's WebView2 profile. A drive without permissions (exFAT) can't, and is left so.
+pub fn restrict_to_user(dir: &Path) {
+    use std::os::windows::process::CommandExt;
+    let root = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| r"C:\Windows".into());
+    let user = std::env::var("USERNAME").unwrap_or_default();
+    let done = std::process::Command::new(root.join(r"System32\icacls.exe"))
+        .arg(dir)
+        .args(["/inheritance:r", "/grant:r", &format!("{user}:(OI)(CI)F"), "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"])
+        .creation_flags(0x0800_0000)
+        .output();
+    match done {
+        Ok(o) if o.status.success() => {}
+        Ok(o) => log::warn!("could not restrict the data folder: icacls exit {:?}", o.status.code()),
+        Err(e) => log::warn!("could not restrict the data folder: {e}"),
+    }
 }
 
 /// Master-password mode: lock after the configured idle time.
@@ -350,6 +400,7 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
         log::info!("multi-instance not active at start: {e}");
     }
     app.manage(App {
+        rotated_later: Mutex::new(Vec::new()),
         db,
         vault,
         api,
@@ -380,9 +431,9 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
     // Before anything else is started, so a newer RoALT is offered as soon as possible.
     self_update::spawn(app.handle().clone());
     app.manage(splash::Pending::default());
-    main_window(app, data_dir).map_err(|e| {
+    main_window(app, data_dir, settings.skip_splash).map_err(|e| {
         tr!(
-            "RoALT can't open its window ({why}).\n\nIt needs the Microsoft Edge WebView2 Runtime: \
+            "RoALT can't open its window ({why}).\n\nIf this PC was very busy, start RoALT again. Otherwise it needs the Microsoft Edge WebView2 Runtime: \
              https://go.microsoft.com/fwlink/p/?LinkId=2124703",
             why = e
         )
@@ -412,7 +463,7 @@ fn remind_bandwidth(handle: AppHandle) {
             commands::notice(
                 &handle,
                 true,
-                tr!("The Roblox bandwidth limit is off: Windows clears it when it restarts. Apply it again in the Performance tab."),
+                tr!("The Roblox bandwidth limit is off: Windows clears it when it restarts. Apply it again in Performance > More settings."),
             );
         }
     });
@@ -484,11 +535,15 @@ fn main() {
             Ok(())
         })
         .on_window_event(on_window_event)
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(main_only(tauri::generate_handler![
             commands::vault_status,
             commands::vault_unlock,
             commands::vault_lock,
             commands::vault_set_mode,
+            commands::vault_recover,
+            commands::vault_recovery_create,
+            commands::vault_recovery_save,
+            commands::vault_recovery_copy,
             commands::app_activity,
             splash::splash_done,
             commands::accounts_list,
@@ -522,6 +577,9 @@ fn main() {
             commands::instance_trim,
             commands::instance_set_anti_afk,
             commands::instances_metrics,
+            commands::system_usage,
+            commands::instance_stop_relaunch,
+            commands::instances_retry_relaunch,
             commands::instance_thumbnail,
             commands::instance_show,
             commands::instances_show_all,
@@ -579,13 +637,16 @@ fn main() {
             commands::settings_get,
             commands::settings_set,
             commands::network_status,
-        ])
+        ]))
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| fatal(&tr!("RoALT failed to start: {why}", why = e)))
         .run(|app, event| {
+            // Before the Exit event: the clipboard plugin has cleaned up by then.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                commands::clear_copied_cookie(app);
+            }
             if let tauri::RunEvent::Exit = event {
                 log::info!("shutting down");
-                commands::clear_copied_cookie(app);
                 // The next start follows the running clients again (`Tracker::readopt`).
                 if let Some(s) = app.try_state::<App>() {
                     s.tracker.persist(&s.db, true);

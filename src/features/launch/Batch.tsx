@@ -92,10 +92,10 @@ export function BatchSection({ accounts, onPick }: { accounts: AccountSummary[];
   };
 
   return (
-    <section aria-labelledby="batch-label" className="enter flex-none flex flex-col border-b border-line">
-      <div className="flex flex-col gap-2.5 px-5 pt-[18px] pb-3.5 border-b border-line">
+    <section aria-labelledby="batch-label" className="enter well flex-none flex flex-col px-4 py-3.5">
+      <div className="flex flex-col gap-2.5 pb-3.5 border-b border-line">
         <div className="flex items-center gap-2.5 min-w-0">
-          <span id="batch-label" className="label">{t("launch.batch.label")}</span>
+          <span id="batch-label" className="font-medium">{t("launch.batch.label")}</span>
           <span className="mono text-xs text-dim truncate" title={target.detail}>{summary}</span>
           {p.done ? (
             <button className="wc w-7 h-7 ml-auto" aria-label={t("launch.batch.dismiss")} title={t("common.dismiss")} onClick={() => dismissBulk(qc, p.batchId)}>
@@ -115,9 +115,9 @@ export function BatchSection({ accounts, onPick }: { accounts: AccountSummary[];
               .join(" · ")}
           </span>
         </div>
-        <div className="h-0.5 bg-line">
-          <div className="h-0.5 bg-accent-text transition-[width] duration-500" style={{ width: `${(ok / (n || 1)) * 100}%` }} />
-        </div>
+        <span className="meter">
+          <span className="transition-[width] duration-500" style={{ width: `${(ok / (n || 1)) * 100}%` }} />
+        </span>
         {p.stopped && (
           <div className="flex flex-col items-start gap-2">
             <p role="alert" className="alert">{p.stopped}</p>
@@ -130,7 +130,7 @@ export function BatchSection({ accounts, onPick }: { accounts: AccountSummary[];
         )}
         {p.note && <p className="text-xs text-dim">{p.note}</p>}
       </div>
-      <div aria-hidden="true" className="mono grid grid-cols-[minmax(0,1fr)_132px] gap-x-4 px-5 pt-2 text-[9px] text-dim">
+      <div aria-hidden="true" className="mono grid grid-cols-[minmax(0,1fr)_132px] gap-x-4 pt-2 text-[9px] text-dim">
         <span />
         <span className="grid grid-cols-4 gap-[3px]">
           {STEPS.map((s) => <span key={s} className="truncate">{t(s)}</span>)}
@@ -147,7 +147,7 @@ export function BatchSection({ accounts, onPick }: { accounts: AccountSummary[];
           return (
             <li
               key={item.accountId}
-              className={`grid grid-cols-[minmax(0,1fr)_132px] items-center gap-x-4 gap-y-1 px-5 py-3 border-b border-line last:border-b-0 ${st.kind === "cancelled" ? "opacity-55" : ""}`}
+              className={`grid grid-cols-[minmax(0,1fr)_132px] items-center gap-x-4 gap-y-1 py-3 border-b border-line last:border-b-0 ${st.kind === "cancelled" ? "opacity-55" : ""}`}
             >
               <span className="flex items-center gap-2.5 min-w-0">
                 {a && <Avatar account={a} size={20} />}

@@ -31,6 +31,8 @@ static RECENT: Mutex<Vec<(i64, VecDeque<Instant>)>> = Mutex::new(Vec::new());
 
 /// How long a relaunch that can't go ahead yet is tried again.
 const RETRY_FOR: Duration = Duration::from_secs(60 * 60);
+/// Wakes the relaunches waiting to try again (`retry_now`).
+static RETRY_NOW: tokio::sync::Notify = tokio::sync::Notify::const_new();
 /// One `launcher::launch_check` at a time, outside `TURN`, so a slow network holds up no launches.
 static CHECK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// When clients waiting for that were last mentioned, and how often: an outage holds up all of them.
@@ -87,8 +89,14 @@ pub fn handle(app: &AppHandle, rejoins: Vec<Rejoin>) {
             let from = r.from.clone();
             rejoin(&app, r, user_id).await;
             app.state::<App>().tracker.end_relaunch(&from);
+            commands::instances_changed(&app);
         });
     }
+}
+
+/// Relaunches waiting to try again do so now, say once the network is back.
+pub fn retry_now() {
+    RETRY_NOW.notify_waiters();
 }
 
 /// Disconnects follow auto-rejoin; crashes and hangs auto-restart; memory the memory limit.
@@ -112,9 +120,15 @@ async fn rejoin(app: &AppHandle, r: Rejoin, user_id: Option<i64>) {
     let (mut closed, mut tries) = (false, 0);
     // The waits are outside `attempt`'s turn, so one account's don't hold up the rest.
     let mut wait = jittered(backoff(v.launch_delay_ms, n));
+    let mut press = RETRY_NOW.notified();
     loop {
-        tokio::time::sleep(wait).await;
+        // Ok: `retry_now`; Err: the wait is over.
+        let _ = tokio::time::timeout(wait, press).await;
+        // From here: a press during the attempt counts for the wait after it.
+        press = RETRY_NOW.notified();
         let Some(why) = attempt(app, &s, &r, user_id, kills, &mut closed).await else { return };
+        s.tracker.set_relaunch_problem(&r.from, Some(why.clone()));
+        commands::instances_changed(app);
         let again = if r.cause == CrashKind::Disconnect { "rejoin" } else { "restart" };
         log::info!("auto-{again} of instance {} waits (try {}): {why}", r.from, tries + 1);
         if since.elapsed() >= RETRY_FOR {
@@ -149,7 +163,7 @@ fn give_up(s: &App, r: &Rejoin, closed: bool, note: String) {
 /// One go at the relaunch; `Some(why)` when it may work later, None when it is over one way or
 /// another. It is dropped silently when Kill all was pressed or it is no longer wanted
 /// (`Tracker::relaunch_wanted`). A public network waits. A client still open stays so until
-/// `launcher::update::bootstrapper_hold` and `launcher::launch_check` pass; both go before the turn,
+/// `launcher::update::update_hold` and `launcher::launch_check` pass; both go before the turn,
 /// so waiting on the network holds up no launches. Then, in its turn and in flight
 /// (`Bulk::begin_rejoin`), whether it is still wanted is asked again; skip it (`skip_reason`;
 /// logged, plus an `app://notice`, unless it may pass); give up (note "Gave up after N ...", error
@@ -195,7 +209,7 @@ async fn attempt(app: &AppHandle, s: &App, r: &Rejoin, user_id: Option<i64>, kil
             return None;
         }
         // All those waiting go anyway, so they don't wait for each other.
-        let hold = crate::launcher::update::bootstrapper_hold(s, s.tracker.relaunches_open()).await;
+        let hold = crate::launcher::update::update_hold(s, s.tracker.relaunches_open()).await;
         if over(*closed) {
             return None;
         }

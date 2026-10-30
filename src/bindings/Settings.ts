@@ -4,6 +4,7 @@ import type { AntiAfk } from "./AntiAfk";
 import type { Density } from "./Density";
 import type { DiscordEvents } from "./DiscordEvents";
 import type { MemThrottle } from "./MemThrottle";
+import type { RenderFlags } from "./RenderFlags";
 import type { Theme } from "./Theme";
 
 /**
@@ -71,6 +72,10 @@ launchArgs: string,
  */
 closeToTray: boolean, 
 /**
+ * Open at full size, without the start-up animation (`splash`); from the next start.
+ */
+skipSplash: boolean, 
+/**
  * Restart a client whose private memory stays over this many MB (3 samples, 10 s apart),
  * within the breaker; 0: off, else 512..=65 536.
  */
@@ -133,15 +138,23 @@ fpsCap: number,
  */
 lowGraphics: boolean, 
 /**
- * Start clients with Roblox's allowed lightweight rendering flags: lowest textures, no
- * anti-aliasing or grass, low geometry detail (`launcher::client_settings::flags`).
+ * Start clients with Roblox's allowed lightweight rendering flags (`launcher::flags`): low
+ * geometry detail and what `render_flags` picks.
  */
-lighterRendering: boolean, 
+lighterRendering: boolean, renderFlags: RenderFlags, 
 /**
  * RoALT's minimize moves a client off-screen instead (`instances::window`): its preview stays
  * live, but it keeps using the GPU, which a minimized client doesn't.
  */
 parkMinimized: boolean, 
+/**
+ * Width and height "Make it tiny" and "Tile tiny windows" use.
+ */
+microWidth: number, microHeight: number, 
+/**
+ * Each new client goes tiny as soon as it has a window, unless its account is Full quality.
+ */
+tinyOnLaunch: boolean, 
 /**
  * Launch on a Public network too (`network`); off: refused. On by default.
  */

@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState, type Dispatch, type FormEvent, type ReactNode, type SetStateAction } from "react";
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { api, asError, type AccountSummary, type GameInfo, type LaunchTarget, type ServerOrder } from "../../api";
-import { qk, useBulk, useMultiStatus, useRobloxClient, useSettings } from "../../data";
+import { qk, useBulk, useInstances, useMultiStatus, useRobloxClient, useSettings } from "../../data";
 import { Segmented, Switch } from "../../ui/controls";
 import { Icon } from "../../ui/Icon";
 import { friendly } from "../../ui/Toast";
 import { fmtNum, t, tx, type Key } from "../../i18n";
 import { accountName, avatarColor } from "../accounts/shared";
 import { launchBlocked, launched, launchFailed } from "../launch/LaunchView";
-import { useNow } from "../launch/Running";
+import { isRunning, MultiNotice, useNow } from "../launch/Running";
 import { PrivateTable, PublicTable, short, type Pick } from "./ServerTables";
 
 const PAGE = 25;
@@ -36,6 +36,7 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
   const qc = useQueryClient();
   const multi = useMultiStatus().data;
   const batch = useBulk().data;
+  const instances = useInstances().data ?? [];
   const delayMs = useSettings().data?.launchDelayMs ?? 6000;
   const [text, setText] = useState(place === null ? "" : String(place));
   const [textError, setTextError] = useState<string | null>(null);
@@ -108,10 +109,12 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
   const askerName = chosen[0] ? accountName(chosen[0]) : "";
   const restricted = !!privPick && !!priv.data?.pages.some((p) => p.joinRestricted);
   const noJoin = t("servers.noJoin", { name: askerName });
-  const blocked = launchBlocked(n > 1, multi, batch) ?? (restricted && n === 1 ? noJoin : null);
+  const replaces = n === 1 && instances.some((i) => isRunning(i) && i.accountId !== chosen[0].id);
+  const blocked = launchBlocked(n > 1 || (replaces && !!multi?.enabled), multi, batch) ?? (restricted && n === 1 ? noJoin : null);
+  // Multi-instance has its own notice, with the way out.
   const warning =
     [
-      blocked ?? (restricted ? noJoin : null),
+      (batch && !batch.done ? t("launch.batchRunning") : null) ?? (restricted ? noJoin : null),
       privPick && n > 1 ? t("servers.accessCheckedFor", { name: askerName }) : null,
       free !== null && n > free ? t("servers.onlyFreeSlots", { count: free, accounts: t("servers.nAccounts", { count: n }) }) : null,
       n > 1 && client?.outdated ? t("servers.outdated") : null,
@@ -181,11 +184,11 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
   const gameError = game.error && asError(game.error);
 
   return (
-    <main className="flex-1 min-w-0 flex flex-col">
-      <div className="flex-none flex flex-wrap items-center gap-x-5 gap-y-3 px-6 py-5 border-b border-line bg-panel">
-        {g ? <GameHead game={g} /> : <h1 className="text-xl font-semibold tracking-[-0.01em]">{t("servers.title")}</h1>}
-        <form className="flex flex-col gap-1.5 ml-auto flex-[0_1_340px] min-w-[220px]" onSubmit={(e) => void load(e)}>
-          <div className="flex">
+    <main className="scroll flex-1 min-w-0 flex flex-col">
+      <div className="flex-none flex flex-wrap items-center gap-x-5 gap-y-3 px-8 pt-3 pb-4">
+        {g ? <GameHead game={g} /> : <h1 className="page-title">{t("servers.title")}</h1>}
+        <form className="flex flex-col gap-1.5 ml-auto flex-[0_1_260px] min-w-[220px]" onSubmit={(e) => void load(e)}>
+          <div className="flex gap-2">
             <label htmlFor="servers-game" className="sr-only">{t("servers.gameInput")}</label>
             <input
               id="servers-game"
@@ -202,7 +205,7 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
                 setTextError(null);
               }}
             />
-            <button className="btn border-l-0" disabled={loading}>{loading ? t("common.loading") : t("servers.load")}</button>
+            <button className="btn" disabled={loading}>{loading ? t("common.loading") : t("servers.load")}</button>
           </div>
           {textError && <p id="servers-game-error" role="alert" className="alert">{textError}</p>}
         </form>
@@ -212,7 +215,7 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
         <Note>{t("servers.pastePrompt")}</Note>
       ) : game.isPending ? (
         <Note>
-          <span className="flex items-center gap-2"><span aria-hidden="true" className="w-2 h-2 bg-dim pulse" />{t("servers.loadingGame")}</span>
+          <span className="flex items-center gap-2"><span aria-hidden="true" className="w-2 h-2 rounded-full bg-dim pulse" />{t("servers.loadingGame")}</span>
         </Note>
       ) : gameError ? (
         <Note>
@@ -223,7 +226,7 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
         </Note>
       ) : (
         <>
-          <div className="flex-none flex flex-wrap items-center gap-3 px-6 py-3.5">
+          <div className="flex-none flex flex-wrap items-center gap-3 px-8 pb-4">
             <Segmented
               label={t("servers.serverType")}
               value={view}
@@ -266,7 +269,7 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
             </span>
           </div>
 
-          <div className="scroll flex-1 min-h-0 border-t border-line">
+          <div className="panel scroll flex-1 min-h-[160px] mx-8 p-2">
             {view === "public" && needsAccount && !pub.data ? (
               <p className="px-6 py-4 text-dim">{t("servers.pickAccountSort")}</p>
             ) : view === "public" ? (
@@ -304,15 +307,16 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
             </div>
           </div>
 
-          <div className="flex-none px-6 py-3 border-t border-line-strong bg-raised">
+          <MultiNotice wanted={n > 1} replaces={replaces} className="flex-none mx-8 mt-4" />
+          <div className="well flex-none mx-8 mt-4 mb-6 px-4 py-3">
             <div className="flex flex-wrap items-center gap-2.5">
               <span className="mono font-medium">{summary}</span>
               <span aria-hidden="true" className="text-dim">{t("servers.send")}</span>
               {valid.length ? (
-                <div role="group" aria-label={t("servers.accountsToSend")} className="flex flex-wrap gap-1.5">
+                <div role="group" aria-label={t("servers.accountsToSend")} className="scroll flex flex-wrap gap-1.5 flex-[1_1_240px] min-w-0 max-h-[84px] p-1 -m-1">
                   {valid.map((a) => (
                     <button key={a.id} type="button" className="chip chip-sm" aria-pressed={picked.includes(a.id)} onClick={() => toggle(a.id)}>
-                      <span aria-hidden="true" className="w-2 h-2" style={{ background: avatarColor(a) }} />
+                      <span aria-hidden="true" className="w-2 h-2 rounded-full" style={{ background: avatarColor(a) }} />
                       {accountName(a)}
                     </button>
                   ))}
@@ -351,15 +355,15 @@ function GameHead({ game: g }: { game: GameInfo }) {
   return (
     <div className="flex items-center gap-5 min-w-0">
       {g.iconUrl ? (
-        <img src={g.iconUrl} alt="" className="w-16 h-16 flex-none object-cover border border-line-strong" />
+        <img src={g.iconUrl} alt="" className="w-16 h-16 flex-none rounded-2xl object-cover" />
       ) : (
-        <div aria-hidden="true" className="gridbg w-16 h-16 flex-none grid place-content-center border border-line-strong" style={{ backgroundSize: "8px 8px" }}>
+        <div aria-hidden="true" className="well w-16 h-16 flex-none grid place-content-center">
           <span className="mono text-[10px] text-dim">{t("servers.icon")}</span>
         </div>
       )}
       <div className="flex flex-col gap-1 min-w-0">
         <div className="flex items-baseline gap-2 min-w-0">
-          <h1 className="text-xl font-semibold tracking-[-0.01em] truncate min-w-0">{g.name}</h1>
+          <h1 className="page-title truncate min-w-0">{g.name}</h1>
           <span className="text-dim truncate flex-none max-w-[40%]">{t("servers.byCreator", { creator: g.creator })}</span>
         </div>
         <span className="mono text-xs text-dim selectable">{t("servers.placeUniverse", { place: g.placeId, universe: g.universeId })}</span>

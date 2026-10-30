@@ -21,6 +21,8 @@ pub struct VaultStatus {
     pub locked: bool,
     pub accounts: u32,
     pub auto_lock_minutes: u32,
+    /// A recovery code exists for the master password.
+    pub has_recovery: bool,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
@@ -206,6 +208,8 @@ pub struct Settings {
     pub launch_args: String,
     /// Closing the window hides it; the tray icon brings it back or quits.
     pub close_to_tray: bool,
+    /// Open at full size, without the start-up animation (`splash`); from the next start.
+    pub skip_splash: bool,
     /// Restart a client whose private memory stays over this many MB (3 samples, 10 s apart),
     /// within the breaker; 0: off, else 512..=65 536.
     pub mem_restart_mb: u32,
@@ -242,12 +246,18 @@ pub struct Settings {
     pub fps_cap: u32,
     /// Start clients at Roblox's lowest graphics quality (`launcher::client_settings`).
     pub low_graphics: bool,
-    /// Start clients with Roblox's allowed lightweight rendering flags: lowest textures, no
-    /// anti-aliasing or grass, low geometry detail (`launcher::client_settings::flags`).
+    /// Start clients with Roblox's allowed lightweight rendering flags (`launcher::flags`): low
+    /// geometry detail and what `render_flags` picks.
     pub lighter_rendering: bool,
+    pub render_flags: RenderFlags,
     /// RoALT's minimize moves a client off-screen instead (`instances::window`): its preview stays
     /// live, but it keeps using the GPU, which a minimized client doesn't.
     pub park_minimized: bool,
+    /// Width and height "Make it tiny" and "Tile tiny windows" use.
+    pub micro_width: u32,
+    pub micro_height: u32,
+    /// Each new client goes tiny as soon as it has a window, unless its account is Full quality.
+    pub tiny_on_launch: bool,
     /// Launch on a Public network too (`network`); off: refused. On by default.
     pub allow_public_networks: bool,
     /// UI and message language (`i18n::LANGS`), or "" to follow Windows' display language.
@@ -279,6 +289,63 @@ pub struct MemThrottle {
 impl Default for MemThrottle {
     fn default() -> Self {
         Self { mb: 0, cpu_cap: 10 }
+    }
+}
+
+/// Anti-aliasing samples; `Default` leaves it to Roblox.
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum Msaa {
+    Default,
+    #[default]
+    X1,
+    X2,
+    X4,
+}
+
+/// Roblox's texture detail tiers; `Default` leaves it to Roblox.
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum TextureQuality {
+    Default,
+    #[default]
+    Lowest,
+    Low,
+    Medium,
+    High,
+}
+
+/// The graphics backend to ask for. Roblox can ignore it: client 0.745 stayed on Direct3D 11 when
+/// asked for Vulkan or OpenGL.
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum RenderMode {
+    #[default]
+    Default,
+    D3d11,
+    Vulkan,
+    Opengl,
+}
+
+/// What `lighter_rendering` writes (`launcher::flags`). The default is what it has always done.
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export)]
+pub struct RenderFlags {
+    pub msaa: Msaa,
+    pub texture: TextureQuality,
+    pub mode: RenderMode,
+    pub gray_sky: bool,
+    pub no_grass: bool,
+    pub lowest_frm: bool,
+}
+
+impl Default for RenderFlags {
+    fn default() -> Self {
+        Self { msaa: Msaa::X1, texture: TextureQuality::Lowest, mode: RenderMode::Default, gray_sky: false, no_grass: true, lowest_frm: true }
     }
 }
 
@@ -370,7 +437,7 @@ impl Default for Settings {
         Self {
             theme: Theme::Dark,
             accent: String::new(),
-            background_dim: 80,
+            background_dim: 60,
             density: Density::Detailed,
             auto_lock_minutes: 15,
             clipboard_clear_seconds: 30,
@@ -385,6 +452,7 @@ impl Default for Settings {
             close_grace_s: 5,
             launch_args: String::new(),
             close_to_tray: false,
+            skip_splash: false,
             mem_restart_mb: 0,
             mem_throttle: MemThrottle::default(),
             trim_every_min: 0,
@@ -402,7 +470,11 @@ impl Default for Settings {
             fps_cap: 0,
             low_graphics: true,
             lighter_rendering: true,
+            render_flags: RenderFlags::default(),
             park_minimized: false,
+            micro_width: 320,
+            micro_height: 240,
+            tiny_on_launch: false,
             allow_public_networks: true,
             language: String::new(),
         }
@@ -446,6 +518,8 @@ pub struct SettingsPatch {
     #[ts(optional)]
     pub close_to_tray: Option<bool>,
     #[ts(optional)]
+    pub skip_splash: Option<bool>,
+    #[ts(optional)]
     pub mem_restart_mb: Option<u32>,
     #[ts(optional)]
     pub mem_throttle: Option<MemThrottle>,
@@ -478,7 +552,15 @@ pub struct SettingsPatch {
     #[ts(optional)]
     pub lighter_rendering: Option<bool>,
     #[ts(optional)]
+    pub render_flags: Option<RenderFlags>,
+    #[ts(optional)]
     pub park_minimized: Option<bool>,
+    #[ts(optional)]
+    pub micro_width: Option<u32>,
+    #[ts(optional)]
+    pub micro_height: Option<u32>,
+    #[ts(optional)]
+    pub tiny_on_launch: Option<bool>,
     #[ts(optional)]
     pub allow_public_networks: Option<bool>,
     #[ts(optional)]
@@ -776,6 +858,12 @@ pub struct Instance {
     pub micro: bool,
     /// The FPS cap its launch asked for (`LaunchInfo::fps_cap`); a rejoin uses it again.
     pub fps_cap: Option<u32>,
+    /// RoALT is working on relaunching it (`instances::rejoin`). Not kept over a restart of RoALT.
+    #[serde(default, skip_deserializing)]
+    pub relaunching: bool,
+    /// Why that relaunch has to wait, while it does.
+    #[serde(default, skip_deserializing)]
+    pub relaunch_problem: Option<String>,
     /// Its note is "Signed in as another account" or "Roblox wants a human check" (the note
     /// itself is translated, so the UI can't match its text).
     #[serde(default)]
@@ -797,6 +885,17 @@ pub struct Limits {
     /// (or its share with `Settings.auto_spread`).
     #[ts(type = "number | null")]
     pub affinity: Option<u64>,
+}
+
+/// How busy the whole PC is (`system_usage`), sampled at most every 2 s.
+#[derive(Serialize, TS, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SystemUsage {
+    /// Of all cores; None on the first sample, which has nothing to compare with.
+    pub cpu_pct: Option<f64>,
+    pub mem_used_mb: f64,
+    pub mem_total_mb: f64,
 }
 
 /// What one running client uses (`instances_metrics`), sampled at most every 2 s.

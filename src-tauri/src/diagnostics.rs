@@ -46,13 +46,23 @@ fn mask_uuids(line: &str) -> String {
     out + rest
 }
 
+/// Where `key` (lowercase ASCII) first is in `text`, ignoring ASCII case.
+fn find_ascii_ci(text: &str, key: &str) -> Option<usize> {
+    text.as_bytes().windows(key.len()).position(|w| w.eq_ignore_ascii_case(key.as_bytes()))
+}
+
 /// `C:\Users\name\x` to `C:\Users\…\x`, for every such path.
 fn mask_user_folder(line: &str) -> String {
     let (mut out, mut rest) = (String::new(), line);
-    while let Some(i) = rest.to_ascii_lowercase().find(r"\users\") {
+    // Only as far as the next match: the whole line for every match is quadratic on a long one.
+    while let Some(i) = find_ascii_ci(rest, r"\users\") {
         let (head, tail) = rest.split_at(i + r"\users\".len());
         out.push_str(head);
+        // `{:?}` doubles the backslashes.
+        let sep = tail.len() - tail.trim_start_matches(['\\', '/']).len();
+        out.push_str(&tail[..sep]);
         out.push('…');
+        let tail = &tail[sep..];
         // A user name can have spaces, so a space doesn't end it: masking too much is the safe way.
         rest = &tail[tail.find(['\\', '/', '"', ',']).unwrap_or(tail.len())..];
     }
@@ -62,7 +72,7 @@ fn mask_user_folder(line: &str) -> String {
 /// What follows `key` (case-insensitive), up to a space or comma, masked.
 fn mask_after(line: &str, key: &str) -> String {
     let (mut out, mut rest) = (String::new(), line);
-    while let Some(i) = rest.to_ascii_lowercase().find(key) {
+    while let Some(i) = find_ascii_ci(rest, key) {
         let (head, tail) = rest.split_at(i + key.len());
         out.push_str(head);
         out.push('…');

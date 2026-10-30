@@ -281,7 +281,9 @@ impl Outbox {
         for e in events.into_iter().rev() {
             self.queue.push_front(e);
         }
-        self.queue.truncate(MAX_QUEUED);
+        while self.queue.len() > MAX_QUEUED {
+            self.queue.pop_front();
+        }
         self.not_before = Some(now + after.max(GAP));
     }
 }
@@ -463,7 +465,8 @@ pub fn batch_done(app: &AppHandle, p: &BulkProgress) {
             in_game: count(|s| *s == BulkStage::InGame),
             done: count(|s| *s == BulkStage::Done),
             failed: count(|s| matches!(s, BulkStage::Failed { .. })),
-            stopped: p.stopped.clone(),
+            // Its text names accounts by alias, and also muted ones.
+            stopped: None,
         },
     );
 }
@@ -498,6 +501,11 @@ async fn deliver(s: &App, events: Vec<Event>) {
         Ok(Some(wait)) => {
             log::info!("discord: rate limited, waiting {} s", wait.as_secs());
             s.discord.outbox().retry(events, now, wait);
+        }
+        // An outage is when the alerts matter most: they go when it's over.
+        Err(AppError::Network(e)) => {
+            log::warn!("discord: message not sent, trying again: {e}");
+            s.discord.outbox().retry(events, now, Duration::from_secs(30));
         }
         Err(e) => {
             log::warn!("discord: message not sent: {e}");
@@ -616,6 +624,8 @@ mod tests {
             throttled: false,
             micro: false,
             fps_cap: None,
+            relaunching: false,
+            relaunch_problem: None,
             sign_in_problem: false,
         }
     }

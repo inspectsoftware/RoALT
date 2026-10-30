@@ -5,6 +5,9 @@
 //! - `Dpapi`: `DPAPI(data key)` for the current Windows user; opens without a prompt.
 //! - `Master`: `DPAPI(seal(Argon2id(password, salt), data key))`; locked until `unlock`.
 //!
+//! A master vault may also have a recovery record, the same wrap under a one-use code:
+//! `DPAPI(seal(Argon2id(code, salt), data key))`. The code itself is never stored.
+//!
 //! Switching mode only re-wraps the data key.
 
 pub mod backup;
@@ -67,6 +70,13 @@ pub struct VaultRecord {
     pub kdf: Option<Kdf>,
 }
 
+/// The `vault_recovery` table row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecoveryRecord {
+    pub wrapped_key: Vec<u8>,
+    pub kdf: Kdf,
+}
+
 struct Inner {
     mode: VaultMode,
     key: Option<Zeroizing<[u8; 32]>>,
@@ -82,6 +92,8 @@ pub const MIN_MASTER_PASSWORD: usize = 8;
 
 /// AAD for the sealed data key in master mode.
 const KEY_AAD: &[u8] = b"roalt.vault.key";
+/// AAD for the sealed data key in a recovery record.
+const RECOVERY_AAD: &[u8] = b"roalt.vault.recovery";
 
 type Key = Zeroizing<[u8; 32]>;
 
@@ -165,11 +177,7 @@ impl Vault {
     ) -> Result<VaultRecord> {
         let key = self.key()?;
         let new_password = match mode {
-            VaultMode::Master => Some(
-                new_password.filter(|p| p.chars().count() >= MIN_MASTER_PASSWORD).ok_or_else(|| {
-                    AppError::Invalid(tr!("Use at least {min} characters for the master password.", min = MIN_MASTER_PASSWORD))
-                })?,
-            ),
+            VaultMode::Master => Some(long_enough(new_password)?),
             VaultMode::Dpapi => None,
         };
         if rec.mode == VaultMode::Master {
@@ -179,6 +187,12 @@ impl Vault {
             Some(pw) => wrap_master(&key, pw),
             None => wrap_dpapi(&key),
         }
+    }
+
+    /// A new recovery code for the (unlocked) data key, and the record it opens. Saving the record
+    /// replaces the old one, which revokes the old code.
+    pub fn seal_recovery(&self) -> Result<(Secret, RecoveryRecord)> {
+        wrap_recovery(&*self.key()?)
     }
 
     /// Switches the in-memory mode; call only after the record from `rewrap` is saved.
@@ -215,6 +229,34 @@ impl Vault {
     pub fn idle(&self) -> Duration {
         self.guard().last_activity.elapsed()
     }
+}
+
+/// Opens `rec` with `code` and re-wraps the data key: under `new_password`, and under a fresh code
+/// since this one is now used. Returns the new vault record, code and recovery record; nothing
+/// changes until those are saved. `WrongPassword` when `code` does not open it.
+pub fn recover(rec: &RecoveryRecord, code: &str, new_password: &str) -> Result<(VaultRecord, Secret, RecoveryRecord)> {
+    let new_password = long_enough(Some(new_password))?;
+    let code = master::normalize_code(code).ok_or(AppError::WrongPassword)?;
+    let sealed = dpapi::unprotect(&rec.wrapped_key)?;
+    let kek = master::derive_key(code.expose(), &rec.kdf)?;
+    let key = to_key(&master::open(&kek, RECOVERY_AAD, &sealed).map_err(|_| AppError::WrongPassword)?)?;
+    let vault = wrap_master(&key, new_password)?;
+    let (new_code, recovery) = wrap_recovery(&key)?;
+    Ok((vault, new_code, recovery))
+}
+
+fn long_enough(password: Option<&str>) -> Result<&str> {
+    password.filter(|p| p.chars().count() >= MIN_MASTER_PASSWORD).ok_or_else(|| {
+        AppError::Invalid(tr!("Use at least {min} characters for the master password.", min = MIN_MASTER_PASSWORD))
+    })
+}
+
+fn wrap_recovery(key: &[u8; 32]) -> Result<(Secret, RecoveryRecord)> {
+    let code = master::recovery_code();
+    let kdf = master::new_recovery_kdf();
+    let kek = master::derive_key(code.expose(), &kdf)?;
+    let sealed = master::seal(&kek, RECOVERY_AAD, key)?;
+    Ok((code, RecoveryRecord { wrapped_key: dpapi::protect(&sealed)?, kdf }))
 }
 
 fn wrap_dpapi(key: &[u8; 32]) -> Result<VaultRecord> {
@@ -302,5 +344,77 @@ mod tests {
         reopened.set_mode(back.mode);
         assert_eq!((reopened.mode(), back.mode, back.kdf.is_none()), (VaultMode::Dpapi, VaultMode::Dpapi, true));
         assert_eq!(Vault::open(&back).unwrap().decrypt(AAD, &blob).unwrap().as_slice(), b"cookie");
+    }
+
+    /// A master vault holding one secret, locked again, with the record its code opens.
+    fn locked_with_code() -> (VaultRecord, Vec<u8>, Secret, RecoveryRecord) {
+        let (v, rec) = Vault::create().unwrap();
+        let blob = v.encrypt(AAD, b"cookie").unwrap();
+        let rec = v.rewrap(&rec, VaultMode::Master, None, Some("forgotten one")).unwrap();
+        let (code, recovery) = v.seal_recovery().unwrap();
+        (rec, blob, code, recovery)
+    }
+
+    fn opens(rec: &VaultRecord, password: &str, blob: &[u8]) -> bool {
+        let v = Vault::open(rec).unwrap();
+        v.unlock(rec, password).is_ok() && v.decrypt(AAD, blob).unwrap().as_slice() == b"cookie"
+    }
+
+    #[test]
+    fn recover_round_trip() {
+        let (rec, blob, code, recovery) = locked_with_code();
+
+        let wrong = if code.expose() == "222-222-222" { "333-333-333" } else { "222-222-222" };
+        assert!(matches!(recover(&recovery, wrong, "brand new pass"), Err(AppError::WrongPassword)));
+        assert!(matches!(recover(&recovery, "not a code", "brand new pass"), Err(AppError::WrongPassword)));
+        assert!(matches!(recover(&recovery, code.expose(), "short"), Err(AppError::Invalid(_))));
+
+        let typed = code.expose().replace('-', " ").to_lowercase();
+        let (new_rec, new_code, new_recovery) = recover(&recovery, &typed, "brand new pass").unwrap();
+        assert_eq!(new_rec.mode, VaultMode::Master);
+        assert!(opens(&new_rec, "brand new pass", &blob), "new password and the data key work");
+        assert!(!opens(&new_rec, "forgotten one", &blob), "old password is void");
+        assert!(opens(&rec, "forgotten one", &blob), "nothing changes until the records are saved");
+
+        assert_ne!(new_code.expose(), code.expose());
+        assert!(matches!(recover(&new_recovery, code.expose(), "another pass"), Err(AppError::WrongPassword)), "old code is void");
+        let (again, _, _) = recover(&new_recovery, new_code.expose(), "another pass").unwrap();
+        assert!(opens(&again, "another pass", &blob), "the fresh code works");
+    }
+
+    #[test]
+    fn password_change_keeps_the_code_working() {
+        let (rec, blob, code, recovery) = locked_with_code();
+        let v = Vault::open(&rec).unwrap();
+        v.unlock(&rec, "forgotten one").unwrap();
+        let changed = v.rewrap(&rec, VaultMode::Master, Some("forgotten one"), Some("changed password")).unwrap();
+        assert!(opens(&changed, "changed password", &blob));
+        let (recovered, _, _) = recover(&recovery, code.expose(), "brand new pass").unwrap();
+        assert!(opens(&recovered, "brand new pass", &blob));
+    }
+
+    #[test]
+    fn replacing_revokes_the_old_code() {
+        let (rec, blob, old_code, _) = locked_with_code();
+        let v = Vault::open(&rec).unwrap();
+        v.unlock(&rec, "forgotten one").unwrap();
+        let (new_code, replaced) = v.seal_recovery().unwrap();
+        assert!(matches!(recover(&replaced, old_code.expose(), "brand new pass"), Err(AppError::WrongPassword)));
+        let (recovered, _, _) = recover(&replaced, new_code.expose(), "brand new pass").unwrap();
+        assert!(opens(&recovered, "brand new pass", &blob));
+    }
+
+    #[test]
+    fn a_locked_vault_cannot_seal_a_code() {
+        let (rec, ..) = locked_with_code();
+        assert!(matches!(Vault::open(&rec).unwrap().seal_recovery(), Err(AppError::Locked)));
+    }
+
+    #[test]
+    fn a_password_wrap_is_not_a_recovery_wrap() {
+        let (_, _, code, recovery) = locked_with_code();
+        let kek = master::derive_key(code.expose(), &recovery.kdf).unwrap();
+        let sealed = dpapi::unprotect(&recovery.wrapped_key).unwrap();
+        assert!(master::open(&kek, KEY_AAD, &sealed).is_err(), "bound to its own AAD");
     }
 }

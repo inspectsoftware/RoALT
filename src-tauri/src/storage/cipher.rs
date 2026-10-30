@@ -132,12 +132,21 @@ pub fn resume(db: &Path) -> Result<()> {
     if !plain.exists() {
         return Ok(());
     }
+    // Only the original is left: put it back, the next start encrypts it again.
+    if !db.exists() && !enc.exists() {
+        std::fs::rename(&plain, db)?;
+        return Ok(());
+    }
     (|| -> Result<()> {
         if !db.exists() && enc.exists() {
             std::fs::rename(&enc, db)?;
         }
         if key_new.exists() {
             std::fs::rename(&key_new, beside(db, ".key"))?;
+        }
+        // Without its key the encrypted copy is unreadable: the original stays.
+        if !beside(db, ".key").exists() {
+            return Err(AppError::Storage("the database's key is missing".into()));
         }
         remove(&plain)?;
         remove_journal(&plain)

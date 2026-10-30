@@ -9,7 +9,7 @@ import { ConfirmDialog, Dialog } from "../../ui/Dialog";
 import { fmtDate, fmtNum, LANGUAGES, t, tx, type Key } from "../../i18n";
 import { Icon } from "../../ui/Icon";
 import { friendly, toast, toastError } from "../../ui/Toast";
-import { useMultiToggle } from "../launch/Running";
+import { MultiNotice, useMultiToggle } from "../launch/Running";
 import { PasswordDialog } from "../vault/PasswordDialog";
 import { unhideUpdate } from "./UpdateBanner";
 
@@ -64,11 +64,13 @@ const cancelled = () => ({ kind: "cancelled", message: "" });
 
 type VaultDialog = "set" | "change" | "remove" | "export";
 
-export function SettingsView({ vault, settings, onPerformance }: { vault: VaultStatus; settings: Settings; onPerformance: () => void }) {
+export function SettingsView({ vault, settings, onPerformance, onRecoveryCode }: { vault: VaultStatus; settings: Settings; onPerformance: () => void; onRecoveryCode: (code: string) => void }) {
   const qc = useQueryClient();
   const set = useSetSettings();
   const master = vault.mode === "master";
   const [dlg, setDlg] = useState<VaultDialog | null>(null);
+  // Apart from `dlg`: the offer opens as the "set" dialog closes.
+  const [recoveryAsk, setRecoveryAsk] = useState<"offer" | "create" | null>(null);
   const [importPath, setImportPath] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const multi = useMultiStatus().data;
@@ -122,11 +124,20 @@ export function SettingsView({ vault, settings, onPerformance }: { vault: VaultS
   }
 
   return (
-    <main className="scroll flex-1 min-w-0 px-10 pt-6 pb-12">
-      <div className="enter max-w-[760px] flex flex-col">
-        <h1 className="text-xl font-semibold tracking-[-0.01em] mb-2">{t("settings.title")}</h1>
+    <main className="scroll flex-1 min-w-0 px-8 pt-5 pb-12">
+      <div className="enter max-w-[860px] flex flex-col">
+        <header className="flex flex-wrap items-start justify-between gap-3 mb-2">
+          <h1 className="page-title">{t("settings.title")}</h1>
+          <dl aria-label={t("settings.section.about")} className="panel grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 px-3.5 py-2 text-[13px] max-w-[280px]">
+            <dt className="text-dim">RoALT</dt>
+            <dd className="mono truncate">{import.meta.env.APP_VERSION}</dd>
+            <dt className="text-dim">Roblox</dt>
+            <dd className="mono truncate" title={client?.version ?? undefined}>{client?.version ?? t("settings.versionUnknown")}</dd>
+          </dl>
+        </header>
 
         <Heading id="general">{t("settings.section.general")}</Heading>
+        <div className="panel px-5 py-1 mt-3 [&>*:last-child]:border-b-0">
         <Row title={t("settings.theme")} hint={t("settings.themeHint")}>
           <Segmented
             label={t("settings.theme")}
@@ -166,8 +177,13 @@ export function SettingsView({ vault, settings, onPerformance }: { vault: VaultS
         <Row title={t("settings.closeToTray")} hint={t("settings.closeToTrayHint")}>
           <Switch label={t("settings.closeToTray")} checked={settings.closeToTray} onChange={(closeToTray) => set.mutate({ closeToTray })} />
         </Row>
+        <Row title={t("settings.skipSplash")} hint={t("settings.skipSplashHint")}>
+          <Switch label={t("settings.skipSplash")} checked={settings.skipSplash} onChange={(skipSplash) => set.mutate({ skipSplash })} />
+        </Row>
+        </div>
 
         <Heading id="launching">{t("settings.section.launching")}</Heading>
+        <div className="panel px-5 py-1 mt-3 [&>*:last-child]:border-b-0">
         <Row
           title={t("settings.multi")}
           hint={t("settings.multiHint")}
@@ -175,6 +191,7 @@ export function SettingsView({ vault, settings, onPerformance }: { vault: VaultS
           <Switch label={t("settings.multi")} checked={multi?.enabled ?? settings.multiInstance} onChange={multiToggle.toggle} />
           {multiToggle.dialog}
         </Row>
+        <MultiNotice wanted={false} />
         <Row
           title={t("settings.protectLogin")}
           hint={t("settings.protectLoginHint")}
@@ -291,8 +308,10 @@ export function SettingsView({ vault, settings, onPerformance }: { vault: VaultS
         >
           <Switch label={t("settings.autoUpdate")} checked={settings.autoUpdate} onChange={(autoUpdate) => set.mutate({ autoUpdate })} />
         </Row>
+        </div>
 
         <Heading id="automation">{t("settings.section.automation")}</Heading>
+        <div className="panel px-5 py-1 mt-3 [&>*:last-child]:border-b-0">
         <Row
           title={t("settings.panic")}
           hint={t("settings.panicHint")}
@@ -315,8 +334,10 @@ export function SettingsView({ vault, settings, onPerformance }: { vault: VaultS
             <Switch label={t("settings.cleanLogs")} checked={settings.cleanLogs} onChange={(cleanLogs) => set.mutate({ cleanLogs })} />
           </div>
         </Row>
+        </div>
 
         <Heading id="security">{t("settings.section.security")}</Heading>
+        <div className="panel px-5 py-1 mt-3 [&>*:last-child]:border-b-0">
         <Row
           title={t("settings.encryption")}
           hint={
@@ -336,6 +357,11 @@ export function SettingsView({ vault, settings, onPerformance }: { vault: VaultS
           <>
             <Row title={t("settings.masterPassword")} hint={t("settings.masterPasswordHint")}>
               <button className="btn" onClick={() => setDlg("change")}>{t("settings.change")}</button>
+            </Row>
+            <Row title={t("vault.recovery.code")} hint={vault.hasRecovery ? t("vault.recovery.rowHintOn") : t("vault.recovery.rowHintOff")}>
+              <button className="btn" onClick={() => setRecoveryAsk("create")}>
+                {vault.hasRecovery ? t("vault.recovery.replace") : t("vault.recovery.create")}
+              </button>
             </Row>
             <Row title={t("settings.autoLock")} hint={t("settings.autoLockHint")}>
               <Segmented
@@ -362,8 +388,10 @@ export function SettingsView({ vault, settings, onPerformance }: { vault: VaultS
           />
         </Row>
         <PublicNetworkRow settings={settings} />
+        </div>
 
         <Heading id="data">{t("settings.section.data")}</Heading>
+        <div className="panel px-5 py-1 mt-3 [&>*:last-child]:border-b-0">
         <Row title={t("settings.dataFolder")} hint={dataDir ? <PathHint path={dataDir.path} /> : ""}>
           <div className="flex flex-wrap gap-2">
             <button className="btn" onClick={() => api.dataDirOpen().catch(toastError)}>{t("common.open")}</button>
@@ -396,8 +424,10 @@ export function SettingsView({ vault, settings, onPerformance }: { vault: VaultS
             </button>
           </div>
         </Row>
+        </div>
 
         <Heading id="shortcuts">{t("settings.section.shortcuts")}</Heading>
+        <div className="panel px-5 py-1 mt-3 [&>*:last-child]:border-b-0">
         <table className="w-full border-collapse mt-2">
           <tbody>
             {SHORTCUTS.map(([what, key]) => (
@@ -408,8 +438,10 @@ export function SettingsView({ vault, settings, onPerformance }: { vault: VaultS
             ))}
           </tbody>
         </table>
+        </div>
 
         <Heading id="about">{t("settings.section.about")}</Heading>
+        <div className="panel px-5 py-1 mt-3 [&>*:last-child]:border-b-0">
         <SelfUpdateRow on={settings.selfUpdate} onChange={(selfUpdate) => set.mutate({ selfUpdate })} />
         <Row title={<>RoALT <span className="mono">{import.meta.env.APP_VERSION}</span></>} hint={t("settings.aboutHint")} last>
           <button className="btn" onClick={() => openUrl(RELEASES).catch(toastError)}>
@@ -417,6 +449,7 @@ export function SettingsView({ vault, settings, onPerformance }: { vault: VaultS
             <Icon name="external" size={12} />
           </button>
         </Row>
+        </div>
       </div>
 
       <PasswordDialog
@@ -427,13 +460,29 @@ export function SettingsView({ vault, settings, onPerformance }: { vault: VaultS
         submitLabel={t("settings.setMasterSubmit")}
         next
         nextLabel={t("settings.masterPassword")}
-        onSubmit={({ next }) => setMode("master", undefined, next, t("settings.setMasterDone"))}
+        onSubmit={async ({ next }) => {
+          await setMode("master", undefined, next, t("settings.setMasterDone"));
+          setRecoveryAsk("offer");
+        }}
+      />
+      <PasswordDialog
+        open={!!recoveryAsk}
+        onClose={() => setRecoveryAsk(null)}
+        title={recoveryAsk === "offer" ? t("vault.recovery.offerTitle") : vault.hasRecovery ? t("vault.recovery.replaceTitle") : t("vault.recovery.createTitle")}
+        text={recoveryAsk === "offer" ? t("vault.recovery.offerText") : vault.hasRecovery ? t("vault.recovery.replaceText") : t("vault.recovery.createText")}
+        submitLabel={vault.hasRecovery ? t("vault.recovery.replace") : t("vault.recovery.create")}
+        cancelLabel={recoveryAsk === "offer" ? t("vault.recovery.skip") : undefined}
+        current
+        onSubmit={async ({ current }) => {
+          onRecoveryCode(await api.vaultRecoveryCreate(current));
+          qc.invalidateQueries({ queryKey: qk.vault });
+        }}
       />
       <PasswordDialog
         open={dlg === "change"}
         onClose={() => setDlg(null)}
         title={t("settings.changeMasterTitle")}
-        text={t("settings.changeMasterText")}
+        text={vault.hasRecovery ? `${t("settings.changeMasterText")} ${t("vault.recovery.changeReminder")}` : t("settings.changeMasterText")}
         submitLabel={t("settings.changeMasterSubmit")}
         current
         currentLabel={t("settings.currentPassword")}
@@ -518,10 +567,10 @@ function ImportDialog({ open, path, onClose }: { open: boolean; path: string; on
     <Dialog open={open} onClose={onClose} title={t("settings.importTitle")}>
       {report ? (
         <div className="enter flex flex-col">
-          <div className="grid grid-cols-3 border-b border-line">
-            {(["added", "updated", "skipped"] as const).map((k) => (
+          <div className="grid grid-cols-4 border-b border-line">
+            {(["added", "updated", "skipped", "failed"] as const).map((k) => (
               <div key={k} className="px-5 py-4 border-r border-line last:border-r-0">
-                <div className="label">{t(({ added: "settings.importAdded", updated: "settings.importUpdated", skipped: "settings.importSkipped" } as const)[k])}</div>
+                <div className="label">{t(({ added: "settings.importAdded", updated: "settings.importUpdated", skipped: "settings.importSkipped", failed: "settings.importFailed" } as const)[k])}</div>
                 <div className="mono text-[22px] font-medium mt-0.5">{report[k]}</div>
               </div>
             ))}
@@ -532,7 +581,7 @@ function ImportDialog({ open, path, onClose }: { open: boolean; path: string; on
         </div>
       ) : (
         <form onSubmit={submit} className="flex flex-col gap-4 p-5">
-          <div className="mono text-xs text-dim break-all border border-line px-2.5 py-2 selectable">{path.split(/[\\/]/).pop()}</div>
+          <div className="well mono text-xs text-dim break-all px-3 py-2.5 selectable">{path.split(/[\\/]/).pop()}</div>
           <label className="flex flex-col gap-1.5">
             <span className="label">{t("settings.backupPassword")}</span>
             <input
@@ -717,6 +766,7 @@ function PublicNetworkRow({ settings }: { settings: Settings }) {
   return (
     <>
       <Row
+        last
         title={t("settings.public")}
         hint={
           <>
@@ -773,7 +823,7 @@ function CleanLogsButton() {
 }
 
 export function Heading({ id, children }: { id: string; children: ReactNode }) {
-  return <h2 id={id} className="label mt-8 first-of-type:mt-6 scroll-mt-6">{children}</h2>;
+  return <h2 id={id} className="section-title mt-8 first-of-type:mt-5 scroll-mt-3">{children}</h2>;
 }
 
 function PathHint({ path }: { path: string }) {
@@ -927,7 +977,7 @@ function ClientStatus({ client }: { client: RobloxClient }) {
 function AccentPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const custom = !!value && !ACCENTS.some(([v]) => v === value);
   return (
-    <div role="group" aria-label={t("settings.accentColour")} className="flex flex-wrap items-center gap-1.5">
+    <div role="group" aria-label={t("settings.accentColour")} className="flex flex-wrap items-center gap-2">
       {ACCENTS.map(([v, name]) => (
         <button
           key={name}
@@ -935,12 +985,12 @@ function AccentPicker({ value, onChange }: { value: string; onChange: (v: string
           title={t(name)}
           aria-label={t(name)}
           aria-pressed={v === value}
-          className={`w-6 h-6 border ${v === value ? "border-text outline outline-1 outline-text outline-offset-1" : "border-line-strong"}`}
+          className={`w-7 h-7 rounded-full border forced-color-adjust-none ${v === value ? "border-text outline-2 outline-text outline-offset-2 focus-visible:outline-[var(--focus)]" : "border-line-strong"}`}
           style={{ background: v || "#c6f432" }}
           onClick={() => v !== value && onChange(v)}
         />
       ))}
-      <label title={t("settings.anyColour")} className={`relative w-6 h-6 border cursor-pointer ${custom ? "border-text outline outline-1 outline-text outline-offset-1" : "border-line-strong"}`}
+      <label title={t("settings.anyColour")} className={`relative w-7 h-7 rounded-full overflow-hidden border cursor-pointer has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-[var(--focus)] has-[:focus-visible]:outline-offset-2 ${custom ? "border-text outline-2 outline-text outline-offset-2" : "border-line-strong"}`}
         style={{ background: custom ? value : "conic-gradient(red, yellow, lime, cyan, blue, magenta, red)" }}>
         <span className="sr-only">{t("settings.customColour")}</span>
         <input type="color" className="absolute inset-0 opacity-0 cursor-pointer" value={value || "#c6f432"} onChange={(e) => onChange(e.target.value)} />
@@ -965,7 +1015,7 @@ function BackgroundRow({ dim, onDim }: { dim: number; onDim: (v: number) => void
           <Segmented
             label={t("settings.backgroundDim")}
             value={dim}
-            options={[50, 70, 80, 90].map((v) => ({ value: v, label: `${v}%`, title: t("settings.backgroundCovers", { n: v }) }))}
+            options={[40, 60, 80].map((v) => ({ value: v, label: `${v}%`, title: t("settings.backgroundCovers", { n: v }) }))}
             onChange={onDim}
             mono
           />
@@ -981,8 +1031,8 @@ export function Row({ title, hint, children, last }: { title: ReactNode; hint: R
   return (
     <div className={`flex flex-wrap items-center gap-x-6 gap-y-2 py-4 ${last ? "" : "border-b border-line"}`}>
       <div className="flex-[1_1_280px] min-w-0 flex flex-col gap-0.5">
-        <span>{title}</span>
-        <span className="text-xs text-dim">{hint}</span>
+        <span className="font-medium">{title}</span>
+        <span className="text-[13px] text-dim">{hint}</span>
       </div>
       {children}
     </div>

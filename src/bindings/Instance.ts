@@ -42,6 +42,14 @@ micro: boolean,
  */
 fpsCap: number | null, 
 /**
+ * RoALT is working on relaunching it (`instances::rejoin`). Not kept over a restart of RoALT.
+ */
+relaunching: boolean, 
+/**
+ * Why that relaunch has to wait, while it does.
+ */
+relaunchProblem: string | null, 
+/**
  * Its note is "Signed in as another account" or "Roblox wants a human check" (the note
  * itself is translated, so the UI can't match its text).
  */

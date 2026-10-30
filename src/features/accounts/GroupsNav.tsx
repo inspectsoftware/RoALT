@@ -8,8 +8,8 @@ import { toast } from "../../ui/Toast";
 import { t, tx } from "../../i18n";
 import { SWATCHES } from "./shared";
 
-/** Sidebar group list: click filters, right-click or the pencil edits, "+" creates. */
-export function GroupsNav({ groups, accounts, active, onPick }: {
+/** Group keys over the accounts list: click filters, right-click or the pencil edits, "+" creates. */
+export function GroupChips({ groups, accounts, active, onPick }: {
   groups: Group[];
   accounts: AccountSummary[];
   active: number | null;
@@ -33,26 +33,11 @@ export function GroupsNav({ groups, accounts, active, onPick }: {
   });
 
   return (
-    <div className="flex flex-col gap-0.5">
-      <div className="flex items-center justify-between pl-3 pt-5 pb-1.5">
-        <span className="label">{t("accounts.groups.title")}</span>
-        <button className="wc w-7 h-7" aria-label={t("accounts.groups.new")} title={t("accounts.groups.new")} onClick={() => setEditing("new")}>
-          <Icon name="plus" size={12} />
-        </button>
-      </div>
-      {groups.map((g) =>
-        editing === g.id ? (
-          <GroupEditor
-            key={g.id}
-            group={g}
-            groups={groups}
-            onDone={() => setEditing(null)}
-            onDelete={() => {
-              setDeleting(g);
-              setDeleteOpen(true);
-            }}
-          />
-        ) : (
+    <>
+      {/* Capped, so many groups can't push the list off the window. */}
+      <div className="scroll min-w-0 flex flex-wrap items-center gap-3 max-h-[132px] p-2 -m-2">
+        <button className="chip" aria-pressed={active === null} onClick={() => onPick(null)}>{t("accounts.filter.all")}</button>
+        {groups.map((g) => (
           <div
             key={g.id}
             className="group relative"
@@ -61,15 +46,15 @@ export function GroupsNav({ groups, accounts, active, onPick }: {
               setEditing(g.id);
             }}
           >
-            <button className="nav-item" aria-pressed={active === g.id} onClick={() => onPick(active === g.id ? null : g.id)}>
-              <span aria-hidden="true" className="w-2 h-2 flex-none" style={{ background: groupColor(g) }} />
-              <span className="flex-1 truncate">{g.name}</span>
-              <span className="mono text-xs group-hover:opacity-0 group-focus-within:opacity-0">
+            <button className="chip pr-9" aria-pressed={active === g.id} onClick={() => onPick(active === g.id ? null : g.id)}>
+              <span aria-hidden="true" className="w-2.5 h-2.5 flex-none rounded-full" style={{ background: groupColor(g) }} />
+              <span className="max-w-[180px] truncate">{g.name}</span>
+              <span className="mono absolute right-3 text-xs text-dim group-hover:opacity-0 group-has-[.wc:focus-visible]:opacity-0">
                 {accounts.filter((a) => a.groupIds.includes(g.id)).length}
               </span>
             </button>
             <button
-              className="wc w-8 h-8 absolute right-0.5 top-0.5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              className="wc w-8 h-8 absolute right-1 top-1.5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
               aria-label={t("accounts.groups.edit", { name: g.name })}
               title={t("accounts.groups.editHint")}
               onClick={() => setEditing(g.id)}
@@ -77,13 +62,29 @@ export function GroupsNav({ groups, accounts, active, onPick }: {
               <Icon name="pencil" size={12} />
             </button>
           </div>
-        ),
-      )}
-      {editing === "new" && <GroupEditor groups={groups} onDone={() => setEditing(null)} />}
-      {groups.length === 0 && editing !== "new" && (
-        <button className="sub text-xs" onClick={() => setEditing("new")}>
-          {t("accounts.groups.empty")}
+        ))}
+        <button className="chip" aria-label={t("accounts.groups.new")} title={groups.length ? t("accounts.groups.new") : t("accounts.groups.empty")} onClick={() => setEditing("new")}>
+          <Icon name="plus" size={14} />
+          {groups.length === 0 && t("accounts.groups.new")}
         </button>
+      </div>
+      {editing !== null && (
+        <div className="basis-full">
+          {editing === "new" ? (
+            <GroupEditor key="new" groups={groups} onDone={() => setEditing(null)} />
+          ) : (
+            <GroupEditor
+              key={editing}
+              group={groups.find((g) => g.id === editing)}
+              groups={groups}
+              onDone={() => setEditing(null)}
+              onDelete={() => {
+                setDeleting(groups.find((g) => g.id === editing) ?? null);
+                setDeleteOpen(true);
+              }}
+            />
+          )}
+        </div>
       )}
 
       <ConfirmDialog
@@ -95,7 +96,7 @@ export function GroupsNav({ groups, accounts, active, onPick }: {
         text={tx("accounts.groups.deleteText", { name: <span className="text-text font-medium">{deleting?.name}</span> })}
         confirmLabel={t("accounts.groups.delete")}
       />
-    </div>
+    </>
   );
 }
 
@@ -129,11 +130,11 @@ function GroupEditor({ group, groups, onDone, onDelete }: {
           onDone();
         }
       }}
-      className="enter flex flex-col gap-2 p-2 my-0.5 border border-line-strong bg-bg"
+      className="enter well flex flex-wrap items-center gap-3 p-3"
     >
       <input
         autoFocus
-        className="field h-8"
+        className="field flex-[1_1_200px] w-auto"
         aria-label={t("accounts.groups.name")}
         placeholder={t("accounts.groups.name")}
         maxLength={32}
@@ -150,7 +151,7 @@ function GroupEditor({ group, groups, onDone, onDelete }: {
           <button
             key={c}
             type="button"
-            className="swatch w-4 h-4"
+            className="swatch"
             style={{ background: c }}
             aria-label={t("accounts.groups.colourValue", { color: c })}
             aria-pressed={c === color}
@@ -158,13 +159,13 @@ function GroupEditor({ group, groups, onDone, onDelete }: {
           />
         ))}
       </div>
-      <div className="flex gap-1.5">
+      <div className="flex flex-wrap gap-2">
         <button type="submit" className="btn btn-primary btn-sm" disabled={save.isPending}>
           {group ? t("common.save") : t("accounts.groups.create")}
         </button>
         <button type="button" className="btn btn-sm" onClick={onDone}>{t("common.cancel")}</button>
         {onDelete && (
-          <button type="button" className="btn btn-sm btn-danger ml-auto px-2" aria-label={t("accounts.groups.delete")} title={t("accounts.groups.delete")} onClick={onDelete}>
+          <button type="button" className="btn btn-sm btn-danger px-2" aria-label={t("accounts.groups.delete")} title={t("accounts.groups.delete")} onClick={onDelete}>
             <Icon name="trash" size={12} />
           </button>
         )}

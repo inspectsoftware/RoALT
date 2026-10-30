@@ -501,7 +501,7 @@ impl Client {
         let (url, web) = self.target(url)?;
         let (mut rotated, mut csrf_retried, mut attempts) = (None::<Secret>, false, 0);
         loop {
-            self.wait_turn(route).await;
+            self.wait_turn(route).await?;
             let current = rotated.as_ref().or(cookie);
             let mut req = http.request(method.clone(), url.clone());
             if let Some(current) = current {
@@ -520,9 +520,8 @@ impl Client {
                 req = req.json(body);
             }
 
-            let resp = req.send().await.map_err(network)?;
+            let mut resp = req.send().await.map_err(network)?;
             let (status, headers) = (resp.status(), resp.headers().clone());
-            let bytes = resp.bytes().await.map_err(network)?;
             let limits = RateLimit::parse(&headers);
             if let (Some(remaining), Some(reset)) = (limits.remaining, limits.reset_secs()) {
                 self.set_window(route, remaining, reset);
@@ -536,15 +535,23 @@ impl Client {
                 }
                 rotated = Some(new);
             }
+            // After the headers: a body that fails must not lose a rotated cookie.
+            let mut bytes = Vec::new();
+            while let Some(chunk) = resp.chunk().await.map_err(network)? {
+                if bytes.len() + chunk.len() > MAX_BODY {
+                    return Err(AppError::Roblox(tr!("Roblox's answer was too large.")));
+                }
+                bytes.extend_from_slice(&chunk);
+            }
 
             if status.is_success() {
-                return Ok((headers, bytes.to_vec(), rotated));
+                return Ok((headers, bytes, rotated));
             }
             if status == StatusCode::TOO_MANY_REQUESTS {
                 attempts += 1;
                 let wait = limits.reset.or(limits.retry_after).unwrap_or(1 << (attempts - 1)).max(1);
                 self.set_window(route, 0, wait);
-                if attempts >= MAX_ATTEMPTS {
+                if attempts >= MAX_ATTEMPTS || wait > MAX_WAIT_SECS {
                     log::warn!("rate limited on {route} {attempts} times, giving up");
                     return Err(AppError::RateLimited(wait));
                 }
@@ -587,7 +594,8 @@ impl Client {
     }
 
     /// Waits while `route`'s window is used up, else takes one request from it.
-    async fn wait_turn(&self, route: &'static str) {
+    /// A longer wait than `MAX_WAIT_SECS` fails instead: callers hold launch locks.
+    async fn wait_turn(&self, route: &'static str) -> Result<()> {
         loop {
             let wait = {
                 let mut windows = lock(&self.windows);
@@ -596,20 +604,30 @@ impl Client {
                     Some(w) if now < w.reset_at && w.remaining == 0 => w.reset_at - now,
                     Some(w) if now < w.reset_at => {
                         w.remaining -= 1;
-                        return;
+                        return Ok(());
                     }
-                    _ => return,
+                    _ => return Ok(()),
                 }
             };
+            if wait.as_secs() > MAX_WAIT_SECS {
+                return Err(AppError::RateLimited(wait.as_secs()));
+            }
             tokio::time::sleep(wait).await;
         }
     }
 
     fn set_window(&self, route: &'static str, remaining: u64, reset_secs: u64) {
-        let reset_at = Instant::now() + Duration::from_secs(reset_secs);
+        // The value is whatever the header says; the longest real window is an hour.
+        let reset_at = Instant::now() + Duration::from_secs(reset_secs.min(3600));
         lock(&self.windows).insert(route, Window { remaining, reset_at });
     }
 }
+
+/// The most a call waits for its rate-limit window before failing with `RateLimited`.
+const MAX_WAIT_SECS: u64 = 60;
+/// The largest answer read. Real ones are far smaller; a failed allocation would end the app.
+const MAX_BODY: usize = 16 << 20;
+const COOKIE_MARK: &str = "_|WARNING:-DO-NOT-SHARE-THIS.";
 
 /// The `x-ratelimit-*` and `retry-after` headers of one answer.
 #[derive(Debug, Default, PartialEq)]
@@ -654,7 +672,10 @@ fn rotated_cookie(h: &HeaderMap) -> Option<Secret> {
     let parse = |v: &str| {
         let mut parts = v.split(';');
         let value = parts.next()?.trim().strip_prefix(".ROBLOSECURITY=")?.trim();
-        let deleted = value.is_empty()
+        // Only what is shaped like one may replace the stored cookie: "deleted" isn't.
+        let deleted = !value.starts_with(COOKIE_MARK)
+            || value.len() > 8192
+            || !value.bytes().all(|b| b.is_ascii_graphic())
             || parts.any(|a| {
                 let a = a.trim().to_ascii_lowercase();
                 a == "max-age=0" || a.starts_with("max-age=-") || (a.starts_with("expires=") && a.contains("1970"))
@@ -770,7 +791,7 @@ fn sort_thumbnails(page: Thumbnails, out: &mut HashMap<i64, String>) -> Vec<i64>
                 out.insert(t.target_id, url);
             }
             ("Pending", _) => pending.push(t.target_id),
-            (state, _) => log::debug!("thumbnail for {} dropped ({state})", t.target_id),
+            (state, _) => log::debug!("thumbnail for {} dropped ({:?})", t.target_id, state.chars().take(64).collect::<String>()),
         }
     }
     pending
@@ -795,7 +816,7 @@ fn enabled_methods(config: TwoStepConfig) -> Vec<String> {
         .filter_map(|m| {
             let n = name(&m.media_type);
             if n.is_none() {
-                log::debug!("2-step: unknown mediaType {}", m.media_type);
+                log::debug!("2-step: unknown mediaType {:?}", m.media_type.to_string().chars().take(64).collect::<String>());
             }
             n
         })

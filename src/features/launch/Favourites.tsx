@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useId, useEffect, useRef, useState, type FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, asError, type AccountSummary, type Favourite, type LaunchTarget } from "../../api";
 import { qk, useFavourites } from "../../data";
@@ -9,8 +9,8 @@ import { Icon } from "../../ui/Icon";
 import { friendly, toast } from "../../ui/Toast";
 import { accountName, Avatar, Status } from "../accounts/shared";
 
-/** Sidebar list: click fills the Launch view; right-click (or the pencil) renames or deletes. */
-export function FavouritesNav({ accounts, active, onPick }: {
+/** A row of keys on Play: click fills the target; right-click (or the pencil) renames or deletes. */
+export function FavouritesRow({ accounts, active, onPick }: {
   accounts: AccountSummary[];
   active: number | null;
   onPick: (f: Favourite) => void;
@@ -39,28 +39,27 @@ export function FavouritesNav({ accounts, active, onPick }: {
   };
 
   return (
-    <div className="flex flex-col gap-0.5">
-      <div className="flex items-center h-7 pl-3 mt-5 mb-1.5">
-        <span className="label">{t("launch.fav.title")}</span>
-      </div>
-      {favs.isError && <span className="px-3 text-xs text-dim">{t("launch.fav.loadFailed")}</span>}
-      {favs.data?.length === 0 && <span className="px-3 text-xs text-dim">{t("launch.fav.empty")}</span>}
+    <div className="flex flex-col gap-2.5">
+      <span className="text-[13px] text-dim">{t("launch.fav.title")}</span>
+      {favs.isError && <span className="text-[13px] text-dim">{t("launch.fav.loadFailed")}</span>}
+      {favs.data?.length === 0 && <span className="text-[13px] text-dim">{t("launch.fav.empty")}</span>}
+      <div className="flex flex-wrap gap-3">
       {favs.data?.map((f) => (
         <div
           key={f.id}
-          className="group relative"
+          className="group relative max-w-full"
           style={{ anchorName: `--fav-${f.id}` }}
           onContextMenu={(e) => {
             e.preventDefault();
             openMenu(f);
           }}
         >
-          <button className="nav-item" aria-pressed={active === f.id} onClick={() => onPick(f)}>
-            <Icon name="star" size={12} fill />
-            <span className="flex-1 truncate" title={f.name}>{f.name}</span>
+          <button className="btn max-w-full pr-10" aria-pressed={active === f.id} onClick={() => onPick(f)}>
+            <Icon name="star" size={14} fill />
+            <span className="truncate max-w-[260px]" title={f.name}>{f.name}</span>
           </button>
           <button
-            className="wc w-8 h-8 absolute right-0.5 top-0.5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+            className="wc w-8 h-8 absolute right-1.5 top-1.5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
             aria-label={t("launch.fav.renameOrDeleteName", { name: f.name })}
             title={t("launch.fav.renameOrDelete")}
             onClick={() => openMenu(f)}
@@ -69,6 +68,7 @@ export function FavouritesNav({ accounts, active, onPick }: {
           </button>
         </div>
       ))}
+      </div>
 
       <div ref={menu} id="fav-menu" popover="auto" className="menu" style={{ positionAnchor: menuFor ? `--fav-${menuFor.id}` : undefined }}>
         <button
@@ -130,6 +130,7 @@ export function FavouriteDialog({ open, onClose, accounts, initial, resolve, onS
   onSaved?: (f: Favourite) => void;
 }) {
   const qc = useQueryClient();
+  const accountsLabel = useId();
   const [name, setName] = useState("");
   const [ids, setIds] = useState<number[]>([]);
   const [tray, setTray] = useState(false);
@@ -184,11 +185,11 @@ export function FavouriteDialog({ open, onClose, accounts, initial, resolve, onS
           />
         </label>
         <div className="flex flex-col gap-1.5">
-          <span className="label" id="fav-accounts-label">{t("launch.fav.defaultAccounts")}</span>
-          <div role="group" aria-labelledby="fav-accounts-label" className="scroll max-h-[208px] border border-line">
+          <span className="label" id={accountsLabel}>{t("launch.fav.defaultAccounts")}</span>
+          <div role="group" aria-labelledby={accountsLabel} className="well scroll max-h-[208px] p-1.5">
             {accounts.length === 0 && <p className="p-3 text-dim">{t("launch.fav.noAccounts")}</p>}
             {accounts.map((a) => (
-              <label key={a.id} className="flex items-center gap-2.5 h-[38px] px-3 border-b border-line last:border-b-0 cursor-pointer hover:bg-hover has-[:checked]:bg-sel">
+              <label key={a.id} className="flex items-center gap-2.5 min-h-11 px-2.5 rounded-[10px] cursor-pointer hover:bg-hover has-[:checked]:bg-sel">
                 <input type="checkbox" className="cb" checked={ids.includes(a.id)} onChange={() => toggle(a.id)} />
                 <Avatar account={a} size={20} />
                 <span className="flex-1 min-w-0 truncate">{accountName(a)}</span>

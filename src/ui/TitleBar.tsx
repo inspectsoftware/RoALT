@@ -23,7 +23,7 @@ export function TitleBar({ dark, onToggleTheme, onLock, onRefresh }: {
   }, [win]);
 
   return (
-    <header data-tauri-drag-region="deep" className="h-10 flex-none flex items-center gap-2.5 pl-3.5 border-b border-line bg-panel">
+    <header data-tauri-drag-region="deep" className="h-11 flex-none flex items-center gap-2.5 pl-[18px]">
       <Logo />
       <span className="font-bold tracking-[0.02em]">RoALT</span>
       <div className="ml-auto flex items-center">

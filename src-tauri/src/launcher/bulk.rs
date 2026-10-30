@@ -425,7 +425,7 @@ impl Run {
             self.set_stage(i, BulkStage::Ticket);
             let target = target_for(&req.target, server.as_ref());
             let favourite = if started { None } else { req.favourite_id };
-            match crate::commands::launch_tracked(&self.app, &s, a.id, target, favourite, Some(req.delay_ms), req.fps_cap).await {
+            match crate::commands::launch_tracked(&self.app, &s, a.id, target, favourite, Some(req.delay_ms), req.fps_cap, true).await {
                 Ok((info, inst)) => {
                     started = true;
                     self.update(|p| {
@@ -1040,6 +1040,7 @@ mod tests {
             allow_disconnect: false,
             launch_args: None,
             discord_muted: false,
+            full_quality: false,
             fps_cap: None,
 
         };

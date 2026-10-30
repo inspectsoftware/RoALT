@@ -96,6 +96,7 @@ export function MonitorView({ accounts }: { accounts: AccountSummary[] }) {
   const cpuNow = list.some((m) => m.cpuPct !== null) ? list.reduce((n, m) => n + (m.cpuPct ?? 0), 0) : null;
   const memNow = list.reduce((n, m) => n + m.privateMb, 0);
   const ioNow = list.some((m) => m.readBps !== null) ? list.reduce((n, m) => n + (m.readBps ?? 0) + (m.writeBps ?? 0), 0) : null;
+  const gpuMemNow = list.some((m) => m.gpuMemMb !== null) ? list.reduce((n, m) => n + (m.gpuMemMb ?? 0), 0) : null;
 
   return (
     <main className="scroll flex-1 min-w-0 px-10 pt-6 pb-12">
@@ -103,7 +104,7 @@ export function MonitorView({ accounts }: { accounts: AccountSummary[] }) {
         <h1 className="text-xl font-semibold tracking-[-0.01em]">{t("monitor.title")}</h1>
         <p className="text-dim mt-1">{t("monitor.intro")}</p>
 
-        <div className="grid grid-cols-2 lg:grid-cols-4 border border-line mt-5">
+        <div className="grid grid-cols-2 lg:grid-cols-5 border border-line mt-5">
           <Tile label={t("monitor.clients")} value={String(running.length)} />
           <Tile label={t("monitor.cpuAll")} value={pct(cpuNow)}>
             {list.length > 0 && <Sparkline values={hist.totals.cpu} floor={10} zero label={t("monitor.cpuAll")} format={pct} />}
@@ -111,6 +112,7 @@ export function MonitorView({ accounts }: { accounts: AccountSummary[] }) {
           <Tile label={t("monitor.privateMemory")} value={mb(memNow)}>
             {list.length > 0 && <Sparkline values={hist.totals.mem} floor={64} label={t("monitor.privateMemoryAll")} format={mb} />}
           </Tile>
+          <Tile label={t("monitor.gpuMemory")} value={gpuMemNow === null ? "—" : mb(gpuMemNow)} />
           <Tile label={t("monitor.io")} value={rate(ioNow)} />
         </div>
 
@@ -123,9 +125,11 @@ export function MonitorView({ accounts }: { accounts: AccountSummary[] }) {
                 <th className="font-normal border-b border-line">{t("monitor.account")}</th>
                 <th className="font-normal border-b border-line">{t("monitor.state")}</th>
                 <th className="font-normal border-b border-line text-right pr-3">{t("monitor.cpu")}</th>
-                <th className="font-normal border-b border-line"><span className="sr-only">{t("monitor.cpuTrend")}</span></th>
+                <th className="font-normal border-b border-line hidden xl:table-cell"><span className="sr-only">{t("monitor.cpuTrend")}</span></th>
                 <th className="font-normal border-b border-line text-right pr-3" title={t("monitor.memoryHint")}>{t("monitor.memory")}</th>
-                <th className="font-normal border-b border-line"><span className="sr-only">{t("monitor.memoryTrend")}</span></th>
+                <th className="font-normal border-b border-line hidden xl:table-cell"><span className="sr-only">{t("monitor.memoryTrend")}</span></th>
+                <th className="font-normal border-b border-line text-right pr-3" title={t("monitor.gpuHint")}>{t("monitor.gpu")}</th>
+                <th className="font-normal border-b border-line text-right pr-3" title={t("monitor.gpuMemoryHint")}>{t("monitor.gpuMem")}</th>
                 <th className="font-normal border-b border-line text-right pr-3">{t("monitor.read")}</th>
                 <th className="font-normal border-b border-line text-right pr-3">{t("monitor.write")}</th>
                 <th className="font-normal border-b border-line text-right pr-3">{t("monitor.up")}</th>
@@ -154,9 +158,11 @@ export function MonitorView({ accounts }: { accounts: AccountSummary[] }) {
                       </span>
                     </td>
                     <td className="pr-3 text-right">{m ? pct(m.cpuPct) : "—"}</td>
-                    <td className="pr-3"><Sparkline values={h?.cpu ?? []} floor={10} zero label={t("monitor.cpu")} format={pct} /></td>
+                    <td className="pr-3 hidden xl:table-cell"><Sparkline values={h?.cpu ?? []} floor={10} zero label={t("monitor.cpu")} format={pct} /></td>
                     <td className="pr-3 text-right" title={m ? t("monitor.workingSet", { mb: mb(m.workingSetMb) }) : undefined}>{m ? mb(m.privateMb) : "—"}</td>
-                    <td className="pr-3"><Sparkline values={h?.mem ?? []} floor={64} label={t("monitor.privateMemory")} format={mb} /></td>
+                    <td className="pr-3 hidden xl:table-cell"><Sparkline values={h?.mem ?? []} floor={64} label={t("monitor.privateMemory")} format={mb} /></td>
+                    <td className="pr-3 text-right whitespace-nowrap">{m ? pct(m.gpuPct) : "—"}</td>
+                    <td className="pr-3 text-right whitespace-nowrap">{m && m.gpuMemMb !== null ? mb(m.gpuMemMb) : "—"}</td>
                     <td className="pr-3 text-right whitespace-nowrap">{m ? rate(m.readBps) : "—"}</td>
                     <td className="pr-3 text-right whitespace-nowrap">{m ? rate(m.writeBps) : "—"}</td>
                     <td className="pr-3 text-right whitespace-nowrap">{uptime(i.startedAt, now)}</td>

@@ -133,7 +133,17 @@ fpsCap: number,
  */
 lowGraphics: boolean, 
 /**
- * Launch on a Public network too (`network`); off: refused.
+ * Start clients with Roblox's allowed lightweight rendering flags: lowest textures, no
+ * anti-aliasing or grass, low geometry detail (`launcher::client_settings::flags`).
+ */
+lighterRendering: boolean, 
+/**
+ * RoALT's minimize moves a client off-screen instead (`instances::window`): its preview stays
+ * live, but it keeps using the GPU, which a minimized client doesn't.
+ */
+parkMinimized: boolean, 
+/**
+ * Launch on a Public network too (`network`); off: refused. On by default.
  */
 allowPublicNetworks: boolean, 
 /**

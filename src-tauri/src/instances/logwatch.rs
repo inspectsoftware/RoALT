@@ -21,6 +21,9 @@ pub struct LogFacts {
     pub user_id: Option<i64>,
     /// `Replicator created` after the latest join.
     pub in_game: bool,
+    /// In a game, Roblox started a teleport (`doTeleport`), until the next join. Its disconnect
+    /// line isn't trouble meanwhile (`tracker::state_of`; a teleport that fails times out).
+    pub teleporting: bool,
     /// Disconnect / lost connection / kick after the latest join.
     pub disconnected: bool,
     /// That disconnect was the player's own (`client_initiated`: Leave, or signed in elsewhere).
@@ -42,6 +45,11 @@ const SINCE_SLACK: Duration = Duration::from_secs(5);
 const HEAD_BYTES: u64 = 256 * 1024;
 
 const JOINING: &str = "! Joining game '";
+/// A log line holding one of these (lowercase) is never reported or shared.
+pub const SENSITIVE: [&str; 7] = ["gameinfo", "ticket", "placelauncher", "roblosecurity", "cookie", "accesscode", "linkcode"];
+/// As Bloxstrap reads it (`ActivityWatcher.cs`); not captured from a log here. If Roblox stops
+/// logging it, a teleport looks like a disconnect again, nothing worse.
+const TELEPORT: &str = "UgcExperienceController: doTeleport";
 const DISCONNECTS: [&str; 6] = [
     "Disconnection Notification",
     "Lost connection with reason",
@@ -182,10 +190,7 @@ pub fn problem_of(line: &str) -> Option<&str> {
         return None;
     }
     let lower = line.to_ascii_lowercase();
-    if ["gameinfo", "ticket", "placelauncher", "roblosecurity", "cookie", "accesscode", "linkcode", "http"]
-        .iter()
-        .any(|w| lower.contains(w))
-    {
+    if SENSITIVE.iter().any(|w| lower.contains(w)) || lower.contains("http") {
         return None;
     }
     let rest = line[start..].trim_end();
@@ -203,12 +208,15 @@ pub fn parse_line(line: &str, facts: &mut LogFacts) {
             facts.job_id = Some(job.to_owned());
             facts.place_id = number_after(rest, " place ");
             facts.in_game = false;
+            facts.teleporting = false;
             facts.disconnected = false;
             facts.left = false;
             facts.reason = None;
         }
     } else if line.contains("[FLog::Network] Replicator created") || line.contains("[FLog::Network] serverId:") {
         facts.in_game = true;
+    } else if facts.in_game && line.contains(TELEPORT) {
+        facts.teleporting = true;
     } else if let Some(m) = DISCONNECTS.iter().find(|m| line.contains(*m)) {
         facts.disconnected = true;
         facts.left |= client_initiated(line);
@@ -358,6 +366,20 @@ mod tests {
         assert_eq!(done, crate::model::LogsCleaned { files: 1, bytes: CLEAN_BYTES + 1 });
         assert!(!dir.join("big.log").exists() && dir.join("small.log").exists() && dir.join("live.log").exists());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_teleport_isnt_a_disconnect_until_it_fails() {
+        let mut f = LogFacts::default();
+        parse_line("x [FLog::UgcExperienceController] UgcExperienceController: doTeleport: joinScriptUrl = ...", &mut f);
+        assert!(!f.teleporting, "only from inside a game");
+        f.in_game = true;
+        parse_line("x [FLog::UgcExperienceController] UgcExperienceController: doTeleport: joinScriptUrl = ...", &mut f);
+        assert!(f.teleporting);
+        parse_line("x [FLog::Network] Time to disconnect replication data: 0.1", &mut f);
+        assert!(f.teleporting && f.disconnected && !f.left);
+        parse_line("x [FLog::Output] ! Joining game '0d6c3f4e-5b2a-4c1d-9e8f-7a6b5c4d3e2f' place 1818 at 1.2.3.4", &mut f);
+        assert!(!f.teleporting && !f.disconnected);
     }
 
     #[test]

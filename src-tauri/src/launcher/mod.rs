@@ -6,6 +6,7 @@ pub mod authenticode;
 pub mod bulk;
 pub mod client;
 pub mod client_settings;
+pub mod flags;
 pub mod target;
 pub mod update;
 pub mod uri;
@@ -163,24 +164,41 @@ pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget, fps_cap: Op
     let (browser_tracker_id, started_at) = (uri::new_browser_tracker_id(), crate::commands::now_ms());
     let place = uri::PlaceLaunch { join: &join, browser_tracker_id, join_attempt_id: Uuid::new_v4() };
     let settings = s.db.settings()?;
-    let fps = fps_cap.or(s.db.account(account_id)?.fps_cap).unwrap_or(settings.fps_cap);
-    let undo = client_settings::apply(&s.db, fps, settings.low_graphics);
+    let account = s.db.account(account_id)?;
+    let fps = fps_cap.or(account.fps_cap).unwrap_or(settings.fps_cap);
+    let undo = client_settings::apply(&s.db, fps, settings.low_graphics && !account.full_quality);
+    let flags = match (settings.lighter_rendering && !account.full_quality, exe.bootstrapper) {
+        (false, _) => None,
+        (true, true) => {
+            log::info!("lighter rendering skipped for account {account_id}: a bootstrapper manages Roblox's flags");
+            None
+        }
+        (true, false) => flags::apply(&exe.path),
+    };
+    let waiting = undo.is_some() || flags.is_some();
+    let put_back = move || {
+        if let Some(undo) = undo {
+            undo.put_back();
+        }
+        if let Some(flags) = flags {
+            flags.put_back();
+        }
+    };
     let since = std::time::SystemTime::now();
     let started = client::start(&exe, &uri::player_uri(&ticket, started_at, &place), &args);
-    match (undo, &started) {
-        (Some(undo), Ok((pid, pid_start))) => {
+    match &started {
+        Ok((pid, pid_start)) if waiting => {
             // A bootstrapper's own process exits by design: only the log tells then.
             let client = (!exe.bootstrapper).then_some((*pid, *pid_start));
             tauri::async_runtime::spawn(async move {
                 client_settings::wait_until_read(browser_tracker_id, since, client).await;
-                if let Err(e) = tokio::task::spawn_blocking(move || undo.put_back()).await {
+                if let Err(e) = tokio::task::spawn_blocking(put_back).await {
                     log::warn!("Roblox settings: putting the user's own back failed: {e}");
                 }
                 drop(held);
             });
         }
-        (Some(undo), Err(_)) => undo.put_back(),
-        (None, _) => {}
+        _ => put_back(),
     }
     let (pid, pid_start) = started?;
 
@@ -199,6 +217,17 @@ pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget, fps_cap: Op
 }
 
 /// The account's decrypted cookie (`Locked` when the vault is locked).
+/// Would `launch` get past Roblox now? Everything it asks for before starting a client, the login
+/// ticket too (unused, it just expires). For a relaunch, before the old client is closed for it.
+pub async fn launch_check(s: &App, account_id: i64, target: &LaunchTarget) -> Result<()> {
+    let cookie = account_cookie(s, account_id)?;
+    client::find()?;
+    args_for(s, account_id)?;
+    resolve(&s.api, account_id, &cookie, target).await?;
+    let assertion = s.api.client_assertion(account_id, &cookie).await.ok();
+    s.api.authentication_ticket(account_id, &cookie, assertion.as_ref()).await.map(drop)
+}
+
 pub(crate) fn account_cookie(s: &App, account_id: i64) -> Result<Secret> {
     let (user_id, blob) = s.db.account_cookie(account_id)?;
     s.vault.decrypt_secret(&cookie_aad(user_id), &blob)

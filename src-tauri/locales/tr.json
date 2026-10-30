@@ -215,7 +215,9 @@
   "RoALT can't open its vault on this Windows account ({why}).\n\nIf this data folder came from another PC or Windows account, rename {path} and import a .roalt backup.": "RoALT bu Windows hesabında kasasını açamıyor ({why}).\n\nBu veri klasörü başka bir bilgisayardan veya Windows hesabından geldiyse {path} öğesini yeniden adlandırın ve bir .roalt yedeğini içe aktarın.",
   "{why} The panic hotkey is off; change it in Settings, Automation.": "{why} Panik kısayolu kapalı; Ayarlar, Otomasyon'dan değiştirin.",
   "RoALT can't open its window ({why}).\n\nIt needs the Microsoft Edge WebView2 Runtime: https://go.microsoft.com/fwlink/p/?LinkId=2124703": "RoALT penceresini açamıyor ({why}).\n\nMicrosoft Edge WebView2 Runtime gerekiyor: https://go.microsoft.com/fwlink/p/?LinkId=2124703",
-  "The Roblox bandwidth limit is off: Windows clears it when it restarts. Apply it again in Settings, Performance.": "Roblox bant genişliği sınırı kapalı: Windows yeniden başladığında onu temizler. Ayarlar, Performans'tan tekrar uygulayın.",
+  "The Roblox bandwidth limit is off: Windows clears it when it restarts. Apply it again in the Performance tab.": "Roblox bant genişliği sınırı kapalı: Windows yeniden başlarken onu siler. Performans sekmesinde yeniden uygulayın.",
+  "This isn't a RoALT performance profile.": "Bu bir RoALT performans profili değil.",
+  "This profile was made by a newer RoALT; update RoALT first.": "Bu profil daha yeni bir RoALT ile oluşturulmuş; önce RoALT'ı güncelleyin.",
   "RoALT can't create its data folder {path}: {why}": "RoALT {path} veri klasörünü oluşturamıyor: {why}",
   "RoALT failed to start: {why}": "RoALT başlatılamadı: {why}",
   "You're on a public network. RoALT doesn't launch there; join a private network, or allow public networks in Settings, Security.": "Herkese açık bir ağdasınız. RoALT orada başlatma yapmaz; özel bir ağa bağlanın veya Ayarlar, Güvenlik'ten herkese açık ağlara izin verin.",
@@ -322,5 +324,13 @@
   "{n} alts · {games} games": {
     "one": "{n} alt · {games} oyun",
     "other": "{n} alt · {games} oyun"
-  }
+  },
+  "Roblox has an update, and your bootstrapper (e.g. Bloxstrap) would close every running client to install it. Close your clients first, then launch.": "Roblox için bir güncelleme var ve bootstrapper'ınız (ör. Bloxstrap) bunu kurmak için çalışan tüm istemcileri kapatır. Önce istemcilerinizi kapatın, sonra başlatın.",
+  "A client closed unexpectedly and wasn't relaunched: {rejoin} only covers disconnects. To relaunch crashed clients too, turn on {restart} in Settings.": "Bir istemci beklenmedik şekilde kapandı ve yeniden başlatılmadı: {rejoin} yalnızca bağlantı kopmalarını kapsar. Çöken istemcileri de yeniden başlatmak için Ayarlar'da {restart} seçeneğini açın.",
+  "Auto-rejoin": "Otomatik yeniden katılma",
+  "Auto-restart after a crash": "Çökmeden sonra otomatik yeniden başlat",
+  "Gave up after {minutes} minutes of trying": "{minutes} dakika denedikten sonra vazgeçildi",
+  "{name} wasn't rejoined after {minutes} minutes of trying: {why}": "{name}, {minutes} dakika denemeye rağmen yeniden katılamadı: {why}",
+  "{name} wasn't restarted after {minutes} minutes of trying: {why}": "{name}, {minutes} dakika denemeye rağmen yeniden başlatılamadı: {why}",
+  "Waiting to relaunch clients. RoALT keeps trying for up to {minutes} minutes. Last problem: {why}": "İstemcileri yeniden başlatmak için bekleniyor. RoALT {minutes} dakikaya kadar denemeye devam eder. Son sorun: {why}"
 }

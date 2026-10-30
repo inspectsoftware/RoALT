@@ -29,4 +29,8 @@ discordMuted: boolean,
 /**
  * Target FPS for its launches, used instead of `Settings.fps_cap`; None: the default.
  */
-fpsCap: number | null, };
+fpsCap: number | null, 
+/**
+ * Its clients keep the user's own graphics: no lowest graphics or lighter rendering.
+ */
+fullQuality: boolean, };

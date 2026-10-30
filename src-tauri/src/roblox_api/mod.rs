@@ -447,6 +447,13 @@ impl Client {
         client_version_of(&body)
     }
 
+    /// `client_version` of a release channel (Roblox puts some PCs on a test channel).
+    pub async fn client_version_on(&self, channel: &str) -> Result<String> {
+        let url = format!("{}/channel/{channel}", endpoints::CLIENT_VERSION);
+        let (_, body, _) = self.request(Method::GET, endpoints::CLIENT_VERSION, &url, None, 0, None).await?;
+        client_version_of(&body)
+    }
+
     /// Downloads `url` (no cookie, no redirects) in at most 5 minutes; refused when it is over
     /// `max` bytes (by `Content-Length` before, or while reading). `progress(received, total)`
     /// after each chunk.

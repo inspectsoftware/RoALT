@@ -9,32 +9,21 @@ import { t } from "../../i18n";
 import { accountName, Avatar } from "../accounts/shared";
 import { isRunning, KillAllButton, STATES, uptime, useNow } from "../launch/Running";
 import { mb, pct } from "../monitor/MonitorView";
+import { PREVIEW_FPS, usePreviewFps, type PreviewFps } from "./previewFps";
 
 const CAPS = [0, 50, 25, 10, 5];
-/** Live preview frame rates; the choice is remembered on this PC. */
-const PREVIEW_FPS = [15, 30, 60] as const;
-type PreviewFps = (typeof PREVIEW_FPS)[number];
-const FPS_KEY = "roalt.previewFps";
 /** How often a hidden RoALT window looks again whether it is shown. */
 const HIDDEN_MS = 500;
-
-function storedFps(): PreviewFps {
-  try {
-    const n = Number(localStorage.getItem(FPS_KEY));
-    return PREVIEW_FPS.find((f) => f === n) ?? 15;
-  } catch {
-    return 15;
-  }
-}
 
 /** Draws the client's window on `canvas` `fps` times a second while the RoALT window is
  * visible, one picture in flight at a time (a slow capture lowers the rate, never queues);
  * true / false once it is known whether there is a picture (false: minimized or no window
- * yet), null before. */
-// ponytail: a fresh PrintWindow and an uncompressed RGBA frame each time (~0.7 MB at 480 px);
-// cache the GDI objects per window or switch to Windows.Graphics.Capture if many clients at 60 FPS lag.
+ * yet), null before; `painted`: the canvas holds a picture, the last one while `shown` is false;
+ * `parked`: it is off-screen, not minimized. */
 function useThumbnail(id: string, canvas: React.RefObject<HTMLCanvasElement | null>, fps: PreviewFps) {
   const [shown, setShown] = useState<boolean | null>(null);
+  const [painted, setPainted] = useState(false);
+  const [parked, setParked] = useState(false);
   useEffect(() => {
     let stop = false;
     let timer: number | undefined;
@@ -47,15 +36,19 @@ function useThumbnail(id: string, canvas: React.RefObject<HTMLCanvasElement | nu
         try {
           const buf = await api.instanceThumbnail(id, Math.min(480, Math.max(160, Math.round(el.clientWidth * devicePixelRatio))));
           if (stop) return;
-          if (buf.byteLength < 8) setShown(false);
-          else {
+          if (buf.byteLength < 12) {
+            setShown(false);
+            setParked(false);
+          } else {
             const head = new DataView(buf);
             const [w, h] = [head.getUint32(0, true), head.getUint32(4, true)];
             // Resizing clears the canvas and costs a reallocation: only when the size changes.
             if (el.width !== w) el.width = w;
             if (el.height !== h) el.height = h;
-            el.getContext("2d")?.putImageData(new ImageData(new Uint8ClampedArray(buf, 8, w * h * 4), w, h), 0, 0);
+            el.getContext("2d")?.putImageData(new ImageData(new Uint8ClampedArray(buf, 12, w * h * 4), w, h), 0, 0);
             setShown(true);
+            setPainted(true);
+            setParked(head.getUint32(8, true) === 1);
           }
         } catch {
           // Ended or not started: the card goes with the next instances list.
@@ -69,10 +62,10 @@ function useThumbnail(id: string, canvas: React.RefObject<HTMLCanvasElement | nu
       clearTimeout(timer);
     };
   }, [id, canvas, fps]);
-  return shown;
+  return { shown, painted, parked };
 }
 
-type MenuAt = { inst: Instance; shown: boolean | null; x: number; y: number; from: HTMLElement };
+type MenuAt = { inst: Instance; hidden: boolean; x: number; y: number; from: HTMLElement };
 
 /** The game's name for a card, from the shared game cache. */
 function GameName({ placeId }: { placeId: number | null }) {
@@ -91,7 +84,8 @@ function ClientCard({ inst: i, account: a, metrics: m, now, afkOn, fps, onMenu }
   onMenu: (at: MenuAt) => void;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
-  const shown = useThumbnail(i.id, canvas, fps);
+  const { shown, painted, parked } = useThumbnail(i.id, canvas, fps);
+  const hidden = shown === false || parked;
   const name = a ? accountName(a) : t("dashboard.account", { id: i.accountId });
   const [label, color] = STATES[i.state];
   const focus = () => api.instanceShow(i.id, "focus").catch(toastError);
@@ -102,6 +96,7 @@ function ClientCard({ inst: i, account: a, metrics: m, now, afkOn, fps, onMenu }
     ...(i.limits.eco ? [[t("dashboard.efficiency")] as [string]] : []),
     ...(afkOn && i.antiAfk ? [[t("dashboard.antiAfk"), i.afkAt !== null ? t("dashboard.lastKeyPress", { time: uptime(i.afkAt, now) }) : t("dashboard.noKeyPress")] as [string, string]] : []),
     ...(i.micro ? [[t("dashboard.micro")] as [string]] : []),
+    ...(parked ? [[t("dashboard.parked"), t("settings.parkMinimizedHint")] as [string, string]] : []),
     ...(i.fpsCap ? [[t("dashboard.fps", { fps: i.fpsCap }), t("dashboard.launchFpsCap")] as [string, string]]
       : a?.fpsCap ? [[t("dashboard.fps", { fps: a.fpsCap }), t("dashboard.accountFpsCap")] as [string, string]] : []),
 
@@ -122,17 +117,22 @@ function ClientCard({ inst: i, account: a, metrics: m, now, afkOn, fps, onMenu }
         if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
           e.preventDefault();
           const r = e.currentTarget.getBoundingClientRect();
-          onMenu({ inst: i, shown, x: r.left + 12, y: r.top + 12, from: e.currentTarget });
+          onMenu({ inst: i, hidden, x: r.left + 12, y: r.top + 12, from: e.currentTarget });
         }
       }}
       onContextMenu={(e) => {
         e.preventDefault();
-        onMenu({ inst: i, shown, x: e.clientX, y: e.clientY, from: e.currentTarget });
+        onMenu({ inst: i, hidden, x: e.clientX, y: e.clientY, from: e.currentTarget });
       }}
     >
       <div className="relative aspect-[4/3] bg-bg border-b border-line overflow-hidden">
-        <canvas ref={canvas} aria-hidden="true" className={`w-full h-full object-contain ${shown ? "" : "invisible"}`} />
-        {!shown && (
+        <canvas ref={canvas} aria-hidden="true" className={`w-full h-full object-contain ${shown || painted ? "" : "invisible"} ${shown === false ? "opacity-50" : ""}`} />
+        {shown === false && painted && (
+          <span className="mono absolute top-2 left-2 px-1.5 py-0.5 text-[11px] bg-bg border border-line" title={t("dashboard.lastPictureHint")}>
+            {t("dashboard.minimized")}
+          </span>
+        )}
+        {!shown && !painted && (
           <span className="mono absolute inset-0 grid place-items-center text-xs text-dim">
             {shown === false ? (i.state === "starting" ? t("dashboard.starting") : t("dashboard.minimized")) : ""}
           </span>
@@ -216,7 +216,7 @@ function ClientMenu({ at, onClose, afkOn }: { at: MenuAt | null; onClose: () => 
   const items: Item[] = i
     ? [
         { icon: "external", label: t("dashboard.focus"), run: () => show("focus") },
-        at.shown === false ? { label: t("dashboard.restore"), run: () => show("restore") } : { label: t("dashboard.minimize"), run: () => show("minimize") },
+        at.hidden ? { label: t("dashboard.restore"), run: () => show("restore") } : { label: t("dashboard.minimize"), run: () => show("minimize") },
         { icon: "grid", label: i.micro ? t("dashboard.normalSize") : t("dashboard.microWindow"), run: micro },
         null,
         { icon: "refresh", label: t("dashboard.trimMemory"), run: trim },
@@ -299,15 +299,7 @@ export function DashboardView({ accounts, onLaunch }: { accounts: AccountSummary
   const [menu, setMenu] = useState<MenuAt | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
   const [busy, setBusy] = useState(false);
-  const [fps, setFpsState] = useState(storedFps);
-  const setFps = (f: PreviewFps) => {
-    setFpsState(f);
-    try {
-      localStorage.setItem(FPS_KEY, String(f));
-    } catch {
-      // No storage: this view keeps the choice until it closes.
-    }
-  };
+  const [fps, setFps] = usePreviewFps();
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const byInst = new Map(metrics.map((m) => [m.instanceId, m]));
   const inGame = running.filter((i) => i.state === "inGame").length;

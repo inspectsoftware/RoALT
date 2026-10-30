@@ -215,7 +215,9 @@
   "RoALT can't open its vault on this Windows account ({why}).\n\nIf this data folder came from another PC or Windows account, rename {path} and import a .roalt backup.": "RoALT kan inte öppna sitt valv på det här Windows-kontot ({why}).\n\nOm datamappen kommer från en annan dator eller ett annat Windows-konto, byt namn på {path} och importera en .roalt-säkerhetskopia.",
   "{why} The panic hotkey is off; change it in Settings, Automation.": "{why} Paniktangenten är av; ändra den i Inställningar, Automatisering.",
   "RoALT can't open its window ({why}).\n\nIt needs the Microsoft Edge WebView2 Runtime: https://go.microsoft.com/fwlink/p/?LinkId=2124703": "RoALT kan inte öppna sitt fönster ({why}).\n\nDet behöver Microsoft Edge WebView2 Runtime: https://go.microsoft.com/fwlink/p/?LinkId=2124703",
-  "The Roblox bandwidth limit is off: Windows clears it when it restarts. Apply it again in Settings, Performance.": "Roblox bandbreddsgräns är av: Windows rensar den vid omstart. Tillämpa den igen i Inställningar, Prestanda.",
+  "The Roblox bandwidth limit is off: Windows clears it when it restarts. Apply it again in the Performance tab.": "Roblox bandbreddsgräns är av: Windows rensar den när datorn startas om. Tillämpa den igen under fliken Prestanda.",
+  "This isn't a RoALT performance profile.": "Det här är ingen prestandaprofil från RoALT.",
+  "This profile was made by a newer RoALT; update RoALT first.": "Den här profilen skapades av en nyare RoALT; uppdatera RoALT först.",
   "RoALT can't create its data folder {path}: {why}": "RoALT kan inte skapa sin datamapp {path}: {why}",
   "RoALT failed to start: {why}": "RoALT kunde inte starta: {why}",
   "You're on a public network. RoALT doesn't launch there; join a private network, or allow public networks in Settings, Security.": "Du är på ett offentligt nätverk. RoALT startar inget där; anslut till ett privat nätverk, eller tillåt offentliga nätverk under Inställningar, Säkerhet.",
@@ -322,5 +324,13 @@
   "{n} alts · {games} games": {
     "one": "{n} alt · {games} spel",
     "other": "{n} alts · {games} spel"
-  }
+  },
+  "Roblox has an update, and your bootstrapper (e.g. Bloxstrap) would close every running client to install it. Close your clients first, then launch.": "Roblox har en uppdatering, och din bootstrapper (t.ex. Bloxstrap) skulle stänga alla klienter som körs för att installera den. Stäng dina klienter först och starta sedan.",
+  "A client closed unexpectedly and wasn't relaunched: {rejoin} only covers disconnects. To relaunch crashed clients too, turn on {restart} in Settings.": "En klient stängdes oväntat och startades inte om: {rejoin} gäller bara frånkopplingar. Slå på {restart} i Inställningar för att även starta om kraschade klienter.",
+  "Auto-rejoin": "Automatisk återanslutning",
+  "Auto-restart after a crash": "Starta om automatiskt efter en krasch",
+  "Gave up after {minutes} minutes of trying": "Gav upp efter {minutes} minuters försök",
+  "{name} wasn't rejoined after {minutes} minutes of trying: {why}": "{name} återanslöt inte efter {minutes} minuters försök: {why}",
+  "{name} wasn't restarted after {minutes} minutes of trying: {why}": "{name} startades inte om efter {minutes} minuters försök: {why}",
+  "Waiting to relaunch clients. RoALT keeps trying for up to {minutes} minutes. Last problem: {why}": "Väntar på att starta om klienter. RoALT fortsätter försöka i upp till {minutes} minuter. Senaste problem: {why}"
 }

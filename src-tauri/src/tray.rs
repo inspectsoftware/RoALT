@@ -219,7 +219,7 @@ async fn launch(app: &AppHandle, id: i64) -> Result<()> {
         }
         1 => {
             let _single = s.bulk.begin_single_launch()?;
-            commands::launch_tracked(app, &s, ids[0], fav.target, Some(fav.id), None, None).await?;
+            commands::launch_tracked(app, &s, ids[0], fav.target, Some(fav.id), None, None, true).await?;
         }
         _ => {
             let delay_ms = s.db.settings()?.launch_delay_ms;

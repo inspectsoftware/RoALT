@@ -87,6 +87,8 @@ pub struct AccountSummary {
     pub discord_muted: bool,
     /// Target FPS for its launches, used instead of `Settings.fps_cap`; None: the default.
     pub fps_cap: Option<u32>,
+    /// Its clients keep the user's own graphics: no lowest graphics or lighter rendering.
+    pub full_quality: bool,
 }
 
 /// Partial update from the UI; `None` leaves a field as it is.
@@ -115,6 +117,8 @@ pub struct AccountPatch {
     /// `Some(0)` goes back to the default from Settings; else 5..=360.
     #[ts(optional)]
     pub fps_cap: Option<u32>,
+    #[ts(optional)]
+    pub full_quality: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
@@ -238,7 +242,13 @@ pub struct Settings {
     pub fps_cap: u32,
     /// Start clients at Roblox's lowest graphics quality (`launcher::client_settings`).
     pub low_graphics: bool,
-    /// Launch on a Public network too (`network`); off: refused.
+    /// Start clients with Roblox's allowed lightweight rendering flags: lowest textures, no
+    /// anti-aliasing or grass, low geometry detail (`launcher::client_settings::flags`).
+    pub lighter_rendering: bool,
+    /// RoALT's minimize moves a client off-screen instead (`instances::window`): its preview stays
+    /// live, but it keeps using the GPU, which a minimized client doesn't.
+    pub park_minimized: bool,
+    /// Launch on a Public network too (`network`); off: refused. On by default.
     pub allow_public_networks: bool,
     /// UI and message language (`i18n::LANGS`), or "" to follow Windows' display language.
     pub language: String,
@@ -391,7 +401,9 @@ impl Default for Settings {
             clean_logs: false,
             fps_cap: 0,
             low_graphics: true,
-            allow_public_networks: false,
+            lighter_rendering: true,
+            park_minimized: false,
+            allow_public_networks: true,
             language: String::new(),
         }
     }
@@ -463,6 +475,10 @@ pub struct SettingsPatch {
     pub fps_cap: Option<u32>,
     #[ts(optional)]
     pub low_graphics: Option<bool>,
+    #[ts(optional)]
+    pub lighter_rendering: Option<bool>,
+    #[ts(optional)]
+    pub park_minimized: Option<bool>,
     #[ts(optional)]
     pub allow_public_networks: Option<bool>,
     #[ts(optional)]
@@ -799,6 +815,10 @@ pub struct ClientMetrics {
     /// Disk and network reads and writes, bytes per second since the previous sample.
     pub read_bps: Option<f64>,
     pub write_bps: Option<f64>,
+    /// 3D GPU use, percent of one engine set (None when Windows can't say).
+    pub gpu_pct: Option<f64>,
+    /// Dedicated GPU memory, MB (None when Windows can't say).
+    pub gpu_mem_mb: Option<f64>,
 }
 
 /// The Roblox bandwidth limit (`bandwidth_status`).
@@ -1096,6 +1116,21 @@ impl CrashKind {
             }
         }
     }
+}
+
+/// A server an account's client reached (the newest 50 per account are kept).
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ServerVisit {
+    pub place_id: i64,
+    pub job_id: String,
+    /// Can't be joined by its id alone (a private server, whose code isn't kept, or wherever a
+    /// teleport led): listed only.
+    pub private: bool,
+    /// Unix ms.
+    #[ts(type = "number")]
+    pub joined_at: i64,
 }
 
 /// One client that crashed, was disconnected or hung (the newest 200 are kept).

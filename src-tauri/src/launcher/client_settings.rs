@@ -36,15 +36,17 @@ const KEYS: [(&str, &str); 3] = [("int", "FramerateCap"), ("int", "GraphicsQuali
 /// What a missing file starts as (Roblox writes its own when a client closes).
 const EMPTY: &str = "<roblox version=\"4\">\n\t<Item class=\"UserGameSettings\" referent=\"RBX0\">\n\t\t<Properties>\n\t\t</Properties>\n\t</Item>\n</roblox>\n";
 
-/// The line a client logs once its renderer is up, after it has read the settings file (measured
-/// on 0.745: put back at this line, the client still ran at the launch's cap). A game join is
-/// logged earlier than this, so it proves nothing.
-const READ_MARK: &[u8] = b"SceneManager: resizing main targets";
+/// Lines a client logs only after it has read the settings file: its renderer is up (measured on
+/// 0.745: put back at this line, the client still ran at the launch's cap), or it is in a game
+/// (its replicator exists, seconds after the join line). A launch into a game may never log the
+/// first (seen in the wild: every launch waited out `MARK_TIMEOUT`), so the second counts too.
+/// The join line itself is logged earlier than the read, so it proves nothing.
+const READ_MARKS: [&[u8]; 2] = [b"SceneManager: resizing main targets", b"[FLog::Network] Replicator created"];
 /// A margin after that line before the user's values go back.
 const AFTER_READ: Duration = Duration::from_secs(1);
 /// The longest a launch waits for its client's log (a bootstrapper takes a while) ...
 const LOG_TIMEOUT: Duration = Duration::from_secs(60);
-/// ... and then for `READ_MARK`, which comes seconds in; then the user's values go back anyway.
+/// ... and then for one of `READ_MARKS`, which comes seconds in; then the user's values go back anyway.
 const MARK_TIMEOUT: Duration = Duration::from_secs(15);
 /// After the client ended before reading: how long a new client may take to show up when
 /// Roblox's installer runs (it updates the client and starts it again) ...
@@ -170,7 +172,7 @@ fn save(db: &Db, kept: &Kept) {
 
 /// `f`, tried again a few times while Windows refuses it for a moment: access denied, or
 /// another process has the file open (sharing violation, 32).
-fn retry<T>(mut f: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+pub(super) fn retry<T>(mut f: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
     let mut tries = 1;
     loop {
         match f() {
@@ -201,7 +203,7 @@ fn read_file(file: &Path) -> std::io::Result<Option<(String, Stamp)>> {
 
 // Windows: this only clears or sets the read-only attribute.
 #[allow(clippy::permissions_set_readonly_false)]
-fn set_readonly(file: &Path, on: bool) -> std::io::Result<()> {
+pub(super) fn set_readonly(file: &Path, on: bool) -> std::io::Result<()> {
     let mut p = std::fs::metadata(file)?.permissions();
     p.set_readonly(on);
     std::fs::set_permissions(file, p)
@@ -343,9 +345,9 @@ fn apply_at(db: &Db, file: PathBuf, fps: u32, low: bool) -> Option<Undo> {
     None
 }
 
-/// Whether `log` has `READ_MARK` (pure).
+/// Whether `log` has one of `READ_MARKS` (pure).
 fn shows_read(log: &[u8]) -> bool {
-    log.windows(READ_MARK.len()).any(|w| w == READ_MARK)
+    READ_MARKS.iter().any(|m| log.windows(m.len()).any(|w| w == *m))
 }
 
 /// Whether the log at `path` shows its client has read the file (its first 4 MB; the mark comes
@@ -356,7 +358,7 @@ fn has_read(path: &Path) -> bool {
 }
 
 /// Waits until the client launched with `browser_tracker_id` at `since` has read the settings
-/// file: the newest log naming that id (`logwatch::find_log`) shows `READ_MARK`. `client` (pid,
+/// file: the newest log naming that id (`logwatch::find_log`) shows one of `READ_MARKS`. `client` (pid,
 /// start time; None under a bootstrapper, which exits by design) ending first ends the wait,
 /// unless Roblox's installer runs: it updates the client and starts it again, with a new log.
 pub async fn wait_until_read(browser_tracker_id: i64, since: SystemTime, client: Option<(u32, u64)>) {
@@ -696,5 +698,6 @@ mod tests {
         assert!(!shows_read(b"[FLog::FlagFetchingStarterModule] Successfully loaded flags"));
         assert!(!shows_read(b"x ! Joining game 'abc' place 1818 at 1.2.3.4"), "a join comes before the read");
         assert!(shows_read(b"x [FLog::Graphics] SceneManager: resizing main targets to 1004x758"));
+        assert!(shows_read(b"x [FLog::Network] Replicator created: 000000007A26CF00"), "in a game");
     }
 }

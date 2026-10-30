@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { save as saveFile } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { api, events } from "../../api";
 import { Icon } from "../../ui/Icon";
@@ -99,6 +100,21 @@ export function DebugView() {
 
   const copy = () =>
     writeText(visible.map((l) => l.text).join("\n")).then(() => toast(t("debug.copied")), toastError);
+  const copyReport = () =>
+    api
+      .diagnosticsText()
+      .then(writeText)
+      .then(() => toast(t("debug.reportCopied")), toastError);
+  const saveReport = async () => {
+    try {
+      const path = await saveFile({ defaultPath: `RoALT-diagnostics-${new Date().toISOString().slice(0, 10)}.txt`, filters: [{ name: t("debug.reportFilter"), extensions: ["txt"] }] });
+      if (!path) return;
+      await api.diagnosticsSave(path);
+      toast(t("debug.reportSaved"));
+    } catch (e) {
+      toastError(e);
+    }
+  };
 
   return (
     <main className="flex-1 min-w-0 flex flex-col px-10 pt-6 pb-6 min-h-0">
@@ -140,6 +156,14 @@ export function DebugView() {
         <button className="btn btn-sm" onClick={() => api.logsOpen().catch(toastError)}>
           <Icon name="external" />
           {t("debug.openFolder")}
+        </button>
+        <button className="btn btn-sm" title={t("debug.reportHint")} onClick={copyReport}>
+          <Icon name="copy" />
+          {t("debug.copyReport")}
+        </button>
+        <button className="btn btn-sm" title={t("debug.reportHint")} onClick={saveReport}>
+          <Icon name="download" />
+          {t("debug.saveReport")}
         </button>
       </div>
 

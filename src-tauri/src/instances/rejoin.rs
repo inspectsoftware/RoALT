@@ -4,10 +4,13 @@
 //! `settings.mem_restart_mb` (memory) on, each still open is closed and the account launched again into the same target after a backoff
 //! (`launcher::bulk::jittered(backoff(settings.launch_delay_ms, recent))`), within the crash
 //! breaker: at most `settings.breaker_max` relaunches of one account per
-//! `settings.breaker_window_min` minutes.
+//! `settings.breaker_window_min` minutes. A client stays open until the launch looks possible, and
+//! what may pass by itself (no network, Roblox down, a batch, a locked vault) is tried again for
+//! `RETRY_FOR`: a short outage disconnects every client at once, and must not end them all.
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Manager};
@@ -15,6 +18,7 @@ use tauri::{AppHandle, Manager};
 use super::tracker::Rejoin;
 use crate::App;
 use crate::commands::{self, notice};
+use crate::error::AppError;
 use crate::launcher::bulk::{jittered, name_of};
 use crate::model::{AccountStatus, AccountSummary, CrashKind, Instance, InstanceState, Settings};
 
@@ -25,19 +29,21 @@ static TURN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// only while holding `TURN`.
 static RECENT: Mutex<Vec<(i64, VecDeque<Instant>)>> = Mutex::new(Vec::new());
 
+/// How long a relaunch that can't go ahead yet is tried again.
+const RETRY_FOR: Duration = Duration::from_secs(60 * 60);
+/// One `launcher::launch_check` at a time, outside `TURN`, so a slow network holds up no launches.
+static CHECK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// When clients waiting for that were last mentioned, and how often: an outage holds up all of them.
+static WAITING_SAID: Mutex<Option<Instant>> = Mutex::new(None);
+const WAITING_SAY_EVERY: Duration = Duration::from_secs(5 * 60);
+/// Once per run, since closing Roblox's window by hand looks like a crash too.
+static CRASH_HINT_SAID: AtomicBool = AtomicBool::new(false);
+
 /// Called by the tracker loop after each poll with what `take_rejoins` returned. Drops those
 /// whose setting is off (`enabled`) or whose account allows disconnects, silently. Otherwise,
-/// per rejoin, on the async runtime: wait the backoff; drop it silently when it is no longer a
-/// rejoin case (`still_wants_rejoin`: back in a game, responding again, closed by the user,
-/// cleared); mark it in flight (`Bulk::begin_rejoin`); skip it (logged, plus an `app://notice`)
-/// when its setting was turned off meanwhile, the vault is locked, a batch is running, the
-/// account is gone, allows disconnects, is no longer the same user or its cookie isn't valid,
-/// or the account has another client starting, joining or in game; give up (note "Gave up
-/// after N ...", error notice) when the breaker trips; else close the old client if it still
-/// runs (graceful for `close_grace_s`, then forced; marked as closed by RoALT), then
-/// `commands::launch_tracked(account, target, no favourite, the old client's FPS cap)` and
-/// `tracker.set_rejoins(new id, r.rejoins)`. A failed launch is an `app://notice` (error) and
-/// is not retried here (its client never started, so it can't end unexpectedly).
+/// per rejoin, on the async runtime: wait the backoff, then go through `attempt`, again after
+/// `retry_wait` for as long as it says the problem may pass (at most `RETRY_FOR`, then note "Gave
+/// up after ..." and an error notice). A crash with only auto-rejoin on is said once per run.
 pub fn handle(app: &AppHandle, rejoins: Vec<Rejoin>) {
     if rejoins.is_empty() {
         return;
@@ -50,7 +56,14 @@ pub fn handle(app: &AppHandle, rejoins: Vec<Rejoin>) {
             return;
         }
     };
-    for r in rejoins.into_iter().filter(|r| enabled(&v, r.cause)) {
+    let (on, off): (Vec<Rejoin>, Vec<Rejoin>) = rejoins.into_iter().partition(|r| enabled(&v, r.cause));
+    if v.auto_rejoin
+        && off.iter().any(|r| r.cause == CrashKind::Crash && s.db.account(r.account_id).is_ok_and(|a| !a.allow_disconnect))
+        && !CRASH_HINT_SAID.swap(true, Ordering::Relaxed)
+    {
+        notice(app, true, tr!("A client closed unexpectedly and wasn't relaunched: {rejoin} only covers disconnects. To relaunch crashed clients too, turn on {restart} in Settings.", rejoin = tr!("Auto-rejoin"), restart = tr!("Auto-restart after a crash")));
+    }
+    for r in on {
         // Who the account is now, so an id removed and reused during the wait is told apart.
         let account = s
             .db
@@ -64,9 +77,17 @@ pub fn handle(app: &AppHandle, rejoins: Vec<Rejoin>) {
         if account.as_ref().is_some_and(|a| a.allow_disconnect) {
             continue;
         }
+        // One is at work on it already (the client recovered for a moment and got into trouble again).
+        if !s.tracker.begin_relaunch(&r.from, commands::now_ms()) {
+            continue;
+        }
         let user_id = account.map(|a| a.user_id);
         let app = app.clone();
-        tauri::async_runtime::spawn(async move { rejoin(&app, r, user_id).await });
+        tauri::async_runtime::spawn(async move {
+            let from = r.from.clone();
+            rejoin(&app, r, user_id).await;
+            app.state::<App>().tracker.end_relaunch(&from);
+        });
     }
 }
 
@@ -87,25 +108,69 @@ async fn rejoin(app: &AppHandle, r: Rejoin, user_id: Option<i64>) {
     });
     let window = Duration::from_secs(u64::from(v.breaker_window_min) * 60);
     let n = with_recent(r.account_id, |t| recent(t, Instant::now(), window));
-    // The backoff is waited before taking a turn, so one account's doesn't hold up the rest.
-    tokio::time::sleep(jittered(backoff(v.launch_delay_ms, n))).await;
-    let _turn = TURN.lock().await;
-    // Until the launch is done, batches and single launches wait (DESIGN §6: one at a time).
-    // A Roblox install waits out first: after `busy` is set, one starting now sees this rejoin.
-    let wait_until = Instant::now() + crate::launcher::update::INSTALL_TIMEOUT;
-    let busy = loop {
-        let busy = s.bulk.begin_rejoin();
-        if busy.is_none() || !s.update.installing() || Instant::now() > wait_until {
-            break busy;
+    let (kills, since) = (s.bulk.kills(), Instant::now());
+    let (mut closed, mut tries) = (false, 0);
+    // The waits are outside `attempt`'s turn, so one account's don't hold up the rest.
+    let mut wait = jittered(backoff(v.launch_delay_ms, n));
+    loop {
+        tokio::time::sleep(wait).await;
+        let Some(why) = attempt(app, &s, &r, user_id, kills, &mut closed).await else { return };
+        let again = if r.cause == CrashKind::Disconnect { "rejoin" } else { "restart" };
+        log::info!("auto-{again} of instance {} waits (try {}): {why}", r.from, tries + 1);
+        if since.elapsed() >= RETRY_FOR {
+            let minutes = RETRY_FOR.as_secs() / 60;
+            give_up(&s, &r, closed, tr!("Gave up after {minutes} minutes of trying", minutes = minutes));
+            commands::instances_changed(app);
+            let name = s.db.account(r.account_id).map_or_else(|_| tr!("An account"), |a| name_of(&a));
+            let text = if r.cause == CrashKind::Disconnect {
+                tr!("{name} wasn't rejoined after {minutes} minutes of trying: {why}", name = name, minutes = minutes, why = why)
+            } else {
+                tr!("{name} wasn't restarted after {minutes} minutes of trying: {why}", name = name, minutes = minutes, why = why)
+            };
+            notice(app, true, text);
+            return;
         }
-        drop(busy);
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    };
-    // Back in a game (the player pressed Reconnect), responding again, closed by the user or
-    // cleared: nothing to do.
-    if !s.tracker.still_wants_rejoin(&r.from) {
-        return;
+        if say_waiting(Instant::now()) {
+            notice(app, false, tr!("Waiting to relaunch clients. RoALT keeps trying for up to {minutes} minutes. Last problem: {why}", minutes = RETRY_FOR.as_secs() / 60, why = why));
+        }
+        wait = retry_wait(tries);
+        tries += 1;
     }
+}
+
+/// `Tracker::give_up`, with the note shown also when RoALT itself closed the client (`closed`).
+fn give_up(s: &App, r: &Rejoin, closed: bool, note: String) {
+    if closed {
+        s.tracker.clear_closing(&r.from);
+    }
+    s.tracker.give_up(&r.from, note);
+}
+
+/// One go at the relaunch; `Some(why)` when it may work later, None when it is over one way or
+/// another. It is dropped silently when Kill all was pressed or it is no longer wanted
+/// (`Tracker::relaunch_wanted`). A public network waits. A client still open stays so until
+/// `launcher::update::bootstrapper_hold` and `launcher::launch_check` pass; both go before the turn,
+/// so waiting on the network holds up no launches. Then, in its turn and in flight
+/// (`Bulk::begin_rejoin`), whether it is still wanted is asked again; skip it (`skip_reason`;
+/// logged, plus an `app://notice`, unless it may pass); give up (note "Gave up after N ...", error
+/// notice) when the breaker trips; close the client (graceful for `close_grace_s`, then forced;
+/// marked as closed by RoALT); `commands::launch_tracked(account, target, no favourite, the old
+/// client's FPS cap)` and `tracker.set_rejoins(new id, r.rejoins)`. Only a launch that happened
+/// counts for the breaker. `closed`: the old client was closed by an earlier go too.
+async fn attempt(app: &AppHandle, s: &App, r: &Rejoin, user_id: Option<i64>, kills: u64, closed: &mut bool) -> Option<String> {
+    let v = s.db.settings().unwrap_or_else(|e| {
+        log::warn!("auto-rejoin of instance {}: could not read settings, using defaults: {e}", r.from);
+        Settings::default()
+    });
+    let window = Duration::from_secs(u64::from(v.breaker_window_min) * 60);
+    // Kill all, Close all, cleared, or back in a game (the player pressed Reconnect), responding
+    // again or closed by the user: nothing to do.
+    let over = |closed: bool| s.bulk.kills() != kills || !s.tracker.relaunch_wanted(&r.from, closed);
+    if over(*closed) {
+        return None;
+    }
+    // The client may have recovered and got into other trouble during the wait: its setting counts.
+    let r = &Rejoin { cause: if *closed { r.cause } else { s.tracker.cause_of(&r.from).unwrap_or(r.cause) }, ..r.clone() };
     let account = s
         .db
         .account(r.account_id)
@@ -119,8 +184,58 @@ async fn rejoin(app: &AppHandle, r: Rejoin, user_id: Option<i64>) {
     let name = account.as_ref().map_or_else(|| tr!("An account"), name_of);
     let rejoin = r.cause == CrashKind::Disconnect;
     let again = if rejoin { "rejoins" } else { "restarts" };
-    let kills = s.bulk.kills();
-    if let Some(why) = skip_reason(&s, &r, account.as_ref(), busy.is_none()) {
+    if let Some(why) = crate::network::blocked(s) {
+        return Some(why);
+    }
+    // Before anything is closed: the relaunch would be refused, and the old client gone for nothing.
+    let open = |s: &App| s.tracker.get(&r.from).is_some_and(|i| i.state != InstanceState::Exited);
+    if open(s) && account.is_some() {
+        let _one = CHECK.lock().await;
+        if over(*closed) {
+            return None;
+        }
+        // All those waiting go anyway, so they don't wait for each other.
+        let hold = crate::launcher::update::bootstrapper_hold(s, s.tracker.relaunches_open()).await;
+        if over(*closed) {
+            return None;
+        }
+        if hold.is_some() {
+            return hold;
+        }
+        let check = crate::launcher::launch_check(s, r.account_id, &r.target).await;
+        if over(*closed) {
+            return None;
+        }
+        if let Err(e) = check {
+            if let Err(e) = commands::record_cookie_error(app, s, r.account_id, &e) {
+                log::warn!("auto-{again}: could not record account {}'s cookie problem: {e}", r.account_id);
+            }
+            return failed(app, &name, rejoin, &e);
+        }
+    }
+    let _turn = TURN.lock().await;
+    // Until the launch is done, batches and single launches wait (DESIGN §6: one at a time).
+    // A Roblox install waits out first: after `busy` is set, one starting now sees this rejoin.
+    let wait_until = Instant::now() + crate::launcher::update::INSTALL_TIMEOUT;
+    let busy = loop {
+        let busy = s.bulk.begin_rejoin();
+        if busy.is_none() || !s.update.installing() || s.bulk.kills() != kills || Instant::now() > wait_until {
+            break busy;
+        }
+        drop(busy);
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    };
+    // Things may have moved during those waits; from here to the close nothing waits.
+    if over(*closed) {
+        return None;
+    }
+    if s.update.installing() {
+        return Some(commands::installing());
+    }
+    if let Some((why, passes)) = skip_reason(s, r, account.as_ref(), busy.is_none()) {
+        if passes {
+            return Some(format!("{why}."));
+        }
         log::info!("auto-{again} of instance {} skipped: {why}", r.from);
         let text = if rejoin {
             tr!("{name} wasn't rejoined: {why}.", name = name, why = why)
@@ -128,7 +243,7 @@ async fn rejoin(app: &AppHandle, r: Rejoin, user_id: Option<i64>) {
             tr!("{name} wasn't restarted: {why}.", name = name, why = why)
         };
         notice(app, false, text);
-        return;
+        return None;
     }
     let n = with_recent(r.account_id, |t| recent(t, Instant::now(), window));
     if n >= v.breaker_max {
@@ -156,31 +271,32 @@ async fn rejoin(app: &AppHandle, r: Rejoin, user_id: Option<i64>) {
                 ),
             )
         };
-        s.tracker.give_up(&r.from, note);
+        give_up(s, r, *closed, note);
         commands::instances_changed(app);
         notice(app, true, text);
         if !account.as_ref().is_some_and(|a| a.discord_muted) {
             let name = crate::discord::name_of(account.as_ref(), r.account_id);
             crate::discord::notify(app, crate::discord::Event::Breaker { name, count: n, window_min: v.breaker_window_min });
         }
-        return;
+        return None;
     }
-    with_recent(r.account_id, |t| t.push_back(Instant::now()));
+    *closed |= open(s);
     // The client stuck on its disconnect dialog or hung; its exit is ours, not unexpected.
     if let Some((pid, started)) = s.tracker.mark_restart(&r.from, Some(r.cause)) {
         let grace = Duration::from_secs(u64::from(v.close_grace_s));
-        let closed =
+        let ended =
             tauri::async_runtime::spawn_blocking(move || crate::instances::process::close(pid, started, false, grace)).await;
-        if let Ok(Err(e)) | Err(e) = closed.map_err(|e| crate::error::AppError::Internal(e.to_string())) {
+        if let Ok(Err(e)) | Err(e) = ended.map_err(|e| crate::error::AppError::Internal(e.to_string())) {
             log::warn!("auto-{again}: closing instance {} failed: {e}", r.from);
             s.tracker.clear_closing(&r.from);
+            *closed = false;
             let text = if rejoin {
                 tr!("{name} couldn't be rejoined: its old client didn't close.", name = name)
             } else {
                 tr!("{name} couldn't be restarted: its old client didn't close.", name = name)
             };
             notice(app, true, text);
-            return;
+            return None;
         }
         // A hung client is still live in the tracker until the next poll ends it; launching
         // before that would be refused as "already running".
@@ -192,15 +308,28 @@ async fn rejoin(app: &AppHandle, r: Rejoin, user_id: Option<i64>) {
             log::debug!("auto-{again}: instance {} still not exited after 5 s; launching anyway", r.from);
         }
     }
-    // Kill all pressed while the old client was closing.
-    if s.bulk.kills() != kills {
-        log::debug!("auto-{again} of instance {} dropped: Kill all was pressed", r.from);
-        return;
+    // Kill all or Close all pressed while the old client was closing.
+    if over(*closed) {
+        log::debug!("auto-{again} of instance {} dropped: Kill all or Close all was pressed", r.from);
+        return None;
     }
     // The launch's own FPS cap carries over.
     let fps_cap = s.tracker.get(&r.from).and_then(|i| i.fps_cap);
-    match commands::launch_tracked(app, &s, r.account_id, r.target, None, None, fps_cap).await {
+    match commands::launch_tracked(app, s, r.account_id, r.target.clone(), None, None, fps_cap, !*closed).await {
+        // Close all pressed during the launch: this client goes too.
+        Ok((_, inst)) if !s.tracker.is_relaunching(&r.from) => {
+            log::debug!("auto-{again} of instance {} dropped during the launch: closing {}", r.from, inst.id);
+            if let Some((pid, started)) = s.tracker.mark_closing(&inst.id) {
+                match tauri::async_runtime::spawn_blocking(move || crate::instances::process::close(pid, started, true, Duration::ZERO)).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => log::warn!("could not close client {pid} started during close all: {e}"),
+                    Err(e) => log::warn!("close of client {pid} started during close all failed: {e}"),
+                }
+            }
+            None
+        }
         Ok((_, inst)) => {
+            with_recent(r.account_id, |t| t.push_back(Instant::now()));
             s.tracker.set_rejoins(&inst.id, r.rejoins);
             commands::instances_changed(app);
             log::info!("auto-{again} ({}/{} in the window): instance {} relaunched as {}", n + 1, v.breaker_max, r.from, inst.id);
@@ -208,17 +337,46 @@ async fn rejoin(app: &AppHandle, r: Rejoin, user_id: Option<i64>) {
                 let name = crate::discord::name_of(account.as_ref(), r.account_id);
                 crate::discord::notify(app, crate::discord::Event::Restart { name, cause: r.cause });
             }
+            None
         }
+        // Kill all during the launch: dropped, as above.
+        Err(_) if s.bulk.kills() != kills => None,
         Err(e) => {
             log::warn!("auto-{again} of instance {} failed: {e}", r.from);
-            let text = if rejoin {
-                tr!("{name} couldn't be rejoined: {why}", name = name, why = e.message())
-            } else {
-                tr!("{name} couldn't be restarted: {why}", name = name, why = e.message())
-            };
-            notice(app, true, text);
+            failed(app, &name, rejoin, &e)
         }
     }
+}
+
+/// A launch (or its check) failed: `Some(why)` when it may work later; else the user is told. Roblox
+/// missing counts as passing: its updater swaps the install, and that closes clients too.
+fn failed(app: &AppHandle, name: &str, rejoin: bool, e: &AppError) -> Option<String> {
+    let why = e.message();
+    if e.temporary() || crate::launcher::client::find().is_err() {
+        return Some(why);
+    }
+    let text = if rejoin {
+        tr!("{name} couldn't be rejoined: {why}", name = name, why = why)
+    } else {
+        tr!("{name} couldn't be restarted: {why}", name = name, why = why)
+    };
+    notice(app, true, text);
+    None
+}
+
+/// The wait before trying again after `tries` retries: 15 s, doubling up to 2 minutes (pure).
+fn retry_wait(tries: u32) -> Duration {
+    Duration::from_secs(15 << tries.min(3))
+}
+
+/// Whether waiting clients should be mentioned now; at most every `WAITING_SAY_EVERY`.
+fn say_waiting(now: Instant) -> bool {
+    let mut said = WAITING_SAID.lock().unwrap_or_else(|e| e.into_inner());
+    if said.is_some_and(|t| now.saturating_duration_since(t) < WAITING_SAY_EVERY) {
+        return false;
+    }
+    *said = Some(now);
+    true
 }
 
 /// Runs `f` on the account's relaunch times.
@@ -248,9 +406,9 @@ fn backoff(delay_ms: u32, recent: u32) -> u32 {
     delay_ms.saturating_mul(1 << recent.min(16))
 }
 
-/// Why the rejoin can't go ahead now (None: launch it). `account` is None when it was removed
-/// or its id now belongs to another user; `batch`: a batch is running.
-fn skip_reason(s: &App, r: &Rejoin, account: Option<&AccountSummary>, batch: bool) -> Option<String> {
+/// Why the rejoin can't go ahead now, and whether that may pass by itself (None: launch it).
+/// `account` is None when it was removed or its id now belongs to another user; `batch`: a batch is running.
+fn skip_reason(s: &App, r: &Rejoin, account: Option<&AccountSummary>, batch: bool) -> Option<(String, bool)> {
     let busy = |i: &Instance| {
         i.id != r.from
             && i.account_id == r.account_id
@@ -258,26 +416,29 @@ fn skip_reason(s: &App, r: &Rejoin, account: Option<&AccountSummary>, batch: boo
     };
     let others = |i: &Instance| i.id != r.from && i.state != InstanceState::Exited;
     if !s.db.settings().inspect_err(|e| log::warn!("auto-rejoin of instance {}: could not read settings: {e}", r.from)).is_ok_and(|v| enabled(&v, r.cause)) {
-        Some(match r.cause {
-            CrashKind::Disconnect => tr!("auto-rejoin was turned off"),
-            CrashKind::Mem => tr!("the memory restart was turned off"),
-            _ => tr!("auto-restart was turned off"),
-        })
+        Some((
+            match r.cause {
+                CrashKind::Disconnect => tr!("auto-rejoin was turned off"),
+                CrashKind::Mem => tr!("the memory restart was turned off"),
+                _ => tr!("auto-restart was turned off"),
+            },
+            false,
+        ))
     } else if s.vault.is_locked() {
-        Some(tr!("the vault is locked"))
+        Some((tr!("the vault is locked"), true))
     } else if batch {
-        Some(tr!("a batch is running"))
+        Some((tr!("a batch is running"), true))
     } else if account.is_none() {
-        Some(tr!("it was removed"))
+        Some((tr!("it was removed"), false))
     } else if account.is_some_and(|a| a.allow_disconnect) {
-        Some(tr!("it is set to allow disconnects"))
+        Some((tr!("it is set to allow disconnects"), false))
     } else if account.is_some_and(|a| a.status != AccountStatus::Valid) {
-        Some(tr!("its cookie isn't valid. Sign in to it again"))
+        Some((tr!("its cookie isn't valid. Sign in to it again"), false))
     } else if s.tracker.list().iter().any(busy) {
-        Some(tr!("it already has a client running"))
+        Some((tr!("it already has a client running"), false))
     } else if !s.multi.is_active() && s.tracker.list().iter().any(others) {
         // Without the multi-instance lock the new client would replace the running one.
-        Some(tr!("another client is running and multi-instance is off"))
+        Some((tr!("another client is running and multi-instance is off"), false))
     } else {
         None
     }
@@ -304,6 +465,34 @@ mod tests {
         assert_eq!(times.front(), Some(&(t0 + 8 * min)));
         assert_eq!(recent(&mut times, t0 + 60 * min, window), 0);
         assert!(times.is_empty());
+    }
+
+    #[test]
+    fn retries_slow_down_to_two_minutes() {
+        let secs: Vec<u64> = [0, 1, 2, 3, 4, 40].map(|t| retry_wait(t).as_secs()).to_vec();
+        assert_eq!(secs, [15, 30, 60, 120, 120, 120]);
+        // The whole hour fits many tries, so a short outage is outlasted.
+        assert!(RETRY_FOR > 10 * retry_wait(3));
+    }
+
+    #[test]
+    fn says_it_is_waiting_once_per_outage_not_once_per_client() {
+        let t0 = Instant::now();
+        assert!(say_waiting(t0));
+        assert!(!say_waiting(t0 + Duration::from_secs(1)));
+        assert!(!say_waiting(t0 + WAITING_SAY_EVERY - Duration::from_secs(1)));
+        assert!(say_waiting(t0 + WAITING_SAY_EVERY));
+    }
+
+    #[test]
+    fn only_what_can_pass_by_itself_is_tried_again() {
+        let passing = [AppError::Network("x".into()), AppError::RateLimited(5), AppError::Roblox("HTTP 503".into()), AppError::Roblox("no ticket".into()), AppError::Locked, AppError::Wait("x".into())];
+        for e in passing {
+            assert!(e.temporary(), "{e}");
+        }
+        for e in [AppError::CookieInvalid, AppError::Challenge, AppError::BoundSessionRequired, AppError::NotFound, AppError::Invalid("x".into()), AppError::Roblox("HTTP 403".into())] {
+            assert!(!e.temporary(), "{e}");
+        }
     }
 
     #[test]

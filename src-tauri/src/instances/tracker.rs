@@ -18,6 +18,8 @@ use crate::model::{CrashKind, Instance, InstanceState, LaunchInfo, LaunchTarget,
 /// not have started yet.
 const REBIND_MS: i64 = 120_000;
 const MAX_ENDED: usize = 30;
+/// How long a teleport may take to reach its next game; then it failed (`LogFacts::teleporting`).
+const TELEPORT_MS: i64 = 60_000;
 /// How far a client's start may be from its log file's creation, in seconds.
 const LOG_SKEW_SECS: u64 = 3;
 // Notes are made in the current language and compared against these (a note made before a
@@ -117,10 +119,17 @@ struct Entry {
     hung_polls: u32,
     /// RoALT gave up restarting it (the crash breaker): its note from then on.
     gave_up: Option<String>,
+    /// Unix ms `rejoin` started working on relaunching it, which can take an hour: the one task for
+    /// it, it isn't pruned, and Close all ends it (`cancel_relaunches`).
+    relaunching: Option<i64>,
     /// Unix ms the bootstrapper of a not yet adopted entry was first seen gone.
     gone_at: Option<i64>,
     /// Handed out by `take_rejoins` (or ended): not again until it is back in a game.
     rejoin_seen: bool,
+    /// Unix ms a teleport was first seen under way.
+    teleport_at: Option<i64>,
+    /// The server last handed out by `take_servers`.
+    server_seen: Option<String>,
     /// Memory samples in a row over `Settings.mem_restart_mb` (`check_memory`).
     mem_strikes: u32,
     /// Its private memory at the last sample, MB.
@@ -150,8 +159,11 @@ impl Entry {
             in_game_at: None,
             hung_polls: 0,
             gave_up: None,
+            relaunching: None,
             gone_at: None,
             rejoin_seen: false,
+            teleport_at: None,
+            server_seen: None,
             mem_strikes: 0,
             mem_mb: 0,
             mem_restart: false,
@@ -329,6 +341,23 @@ impl Tracker {
     }
 
     /// Clients that ended badly since the last call, oldest first.
+    /// The servers clients reached since the last call: (account id, what to record). A teleport
+    /// counts as a new one; a client followed again after a restart is sorted out by `add_server`.
+    pub fn take_servers(&self) -> Vec<(i64, crate::model::ServerVisit)> {
+        let mut out = Vec::new();
+        for e in self.entries().iter_mut().filter(|e| e.facts.in_game && !e.facts.teleporting) {
+            if let (Some(job), Some(place)) = (&e.facts.job_id, e.facts.place_id)
+                && e.server_seen.as_ref() != Some(job)
+            {
+                // Where a teleport leads may need a code too, and its log doesn't say.
+                let private = e.server_seen.is_some() || matches!(e.inst.target, LaunchTarget::PrivateLink { .. } | LaunchTarget::PrivateAccess { .. });
+                out.push((e.inst.account_id, crate::model::ServerVisit { place_id: place, job_id: job.clone(), private, joined_at: crate::commands::now_ms() }));
+                e.server_seen = Some(job.clone());
+            }
+        }
+        out
+    }
+
     pub fn take_crashes(&self) -> Vec<Ended> {
         std::mem::take(&mut *self.crashes.lock().unwrap_or_else(|e| e.into_inner()))
     }
@@ -462,6 +491,52 @@ impl Tracker {
         self.entries().iter().any(|e| e.inst.id == id && !e.closing && e.cause().is_some())
     }
 
+    /// Still to be relaunched, after a check that took a while: `still_wants_rejoin` (`closed`: RoALT
+    /// closed it for this, so only that it isn't cleared), unless Close all stopped the relaunch or
+    /// the account was launched since it began.
+    pub fn relaunch_wanted(&self, id: &str, closed: bool) -> bool {
+        let entries = self.entries();
+        let Some(me) = entries.iter().find(|e| e.inst.id == id) else { return false };
+        let Some(began) = me.relaunching else { return false };
+        (closed || (!me.closing && me.cause().is_some()))
+            && !entries.iter().any(|e| e.inst.id != id && e.inst.account_id == me.inst.account_id && e.inst.started_at > began)
+    }
+
+    /// A relaunch of this client starts (`now`: Unix ms); false if one is at work already.
+    pub fn begin_relaunch(&self, id: &str, now: i64) -> bool {
+        self.entries().iter_mut().find(|e| e.inst.id == id).is_some_and(|e| e.relaunching.replace(e.relaunching.unwrap_or(now)).is_none())
+    }
+
+    /// Not stopped by Close all or a clear (it is over when its task ends).
+    pub fn is_relaunching(&self, id: &str) -> bool {
+        self.entries().iter().any(|e| e.inst.id == id && e.relaunching.is_some())
+    }
+
+    pub fn end_relaunch(&self, id: &str) {
+        if let Some(e) = self.entries().iter_mut().find(|e| e.inst.id == id) {
+            e.relaunching = None;
+        }
+    }
+
+    /// What is wrong with the client now, if it is still a rejoin case.
+    pub fn cause_of(&self, id: &str) -> Option<CrashKind> {
+        self.entries().iter().find(|e| e.inst.id == id).and_then(Entry::cause)
+    }
+
+    /// Close all: no relaunch still waiting goes ahead, and an ended client handed out but not yet
+    /// picked up counts as closed by the user.
+    pub fn cancel_relaunches(&self) {
+        for e in self.entries().iter_mut() {
+            e.relaunching = None;
+            e.closing |= e.inst.state == InstanceState::Exited;
+        }
+    }
+
+    /// Clients still open that are only waiting to be closed and relaunched.
+    pub fn relaunches_open(&self) -> usize {
+        self.entries().iter().filter(|e| e.relaunching.is_some() && !e.closing && e.inst.state != InstanceState::Exited && e.cause().is_some()).count()
+    }
+
     /// Clients that got disconnected, crashed or hung since the last call and may be relaunched
     /// (`wants_rejoin`), each returned once per trouble (again after it got back into a game or
     /// responds again). Drained whether or not auto-rejoin or auto-restart is on, so turning
@@ -471,8 +546,10 @@ impl Tracker {
         for e in self.entries().iter_mut() {
             let trouble = e.hung() || e.mem_high() || matches!(e.inst.state, InstanceState::Disconnected | InstanceState::Exited);
             if !trouble {
-                // Reconnected, teleported or responding again: later trouble counts again.
+                // Reconnected, teleported or responding again: later trouble counts again, and
+                // an earlier "Gave up" no longer says anything about it.
                 e.rejoin_seen = false;
+                e.gave_up = None;
             } else if !e.rejoin_seen {
                 e.rejoin_seen = true;
                 if let Some(cause) = e.cause() {
@@ -601,7 +678,7 @@ impl Tracker {
                     // Once per client, without taking the focus (anti-AFK then skips it).
                     for pid in s.tracker.first_windows(&|pid| process::main_window(pid).is_some()) {
                         if v.minimize_on_launch {
-                            super::window::minimize_quietly(pid);
+                            super::window::minimize_quietly(pid, v.park_minimized);
                         }
                     }
                     // Skipped (not reset) while a launch, batch or rejoin runs.
@@ -616,6 +693,11 @@ impl Tracker {
                     {
                         let done = logwatch::clean(&dir, &s.tracker.live_logs());
                         log::info!("cleaned {} Roblox logs ({} MB)", done.files, done.bytes >> 20);
+                    }
+                    for (account, visit) in s.tracker.take_servers() {
+                        if let Err(e) = s.db.add_server(account, &visit) {
+                            log::warn!("could not record a server of account {account}: {e}");
+                        }
                     }
                     for c in s.tracker.take_crashes() {
                         log::warn!(
@@ -699,13 +781,14 @@ impl Tracker {
             e.inst.limits = old.inst.limits;
             (e.inst.anti_afk, e.inst.afk_at) = (old.inst.anti_afk, old.inst.afk_at);
             (e.inst.throttled, e.inst.micro, e.window_seen) = (old.inst.throttled, old.inst.micro, old.window_seen);
-            e.gave_up = old.gave_up;
+            (e.gave_up, e.relaunching) = (old.gave_up, old.relaunching);
+            let had_game = old.in_game_at.is_some();
             (e.mem_strikes, e.mem_mb, e.mem_restart) = (old.mem_strikes, old.mem_mb, old.mem_restart);
             if let Some(kind) = settle(e, now) {
                 self.crashes.lock().unwrap_or_else(|e| e.into_inner()).push(ended(e, kind, now));
             }
             if e.inst != old.inst {
-                moved.push(Transition { before: old.inst, after: e.inst.clone() });
+                moved.push(Transition { before: old.inst, after: e.inst.clone(), first_game: !had_game && e.in_game_at.is_some() });
             }
         }
         prune(&mut entries);
@@ -757,6 +840,8 @@ fn readoptable(s: &Saved, roblox: &[ProcInfo], entries: &[Entry]) -> bool {
 pub struct Transition {
     pub before: Instance,
     pub after: Instance,
+    /// It reached a game for the first time in this poll.
+    pub first_game: bool,
 }
 
 fn client_of(e: &Entry) -> Option<(u32, u64)> {
@@ -971,6 +1056,13 @@ fn settle(e: &mut Entry, now: i64) -> Option<CrashKind> {
     if e.facts.in_game && e.in_game_at.is_none() {
         e.in_game_at = Some(now);
     }
+    if !e.facts.teleporting {
+        e.teleport_at = None;
+    } else if now - *e.teleport_at.get_or_insert(now) >= TELEPORT_MS {
+        log::info!("instance {}: its teleport didn't reach a game in {} s", e.inst.id, TELEPORT_MS / 1000);
+        e.facts.teleporting = false;
+        e.teleport_at = None;
+    }
     let ended = !e.alive && !may_appear(e, now);
     let (state, mut note) = state_of(&e.facts, e.log.is_some(), ended, e.closing, e.expected_user);
     // A client RoALT closed for its memory ends as `Mem` (its note: "Closed").
@@ -1016,7 +1108,9 @@ fn state_of(facts: &LogFacts, bound: bool, ended: bool, closing: bool, expected_
         let note = if closing { closed() } else { problem.unwrap_or_else(unexpected) };
         return (InstanceState::Exited, Some(note));
     }
-    let state = if facts.disconnected {
+    let state = if facts.teleporting {
+        InstanceState::Joining
+    } else if facts.disconnected {
         InstanceState::Disconnected
     } else if facts.in_game {
         InstanceState::InGame
@@ -1028,10 +1122,10 @@ fn state_of(facts: &LogFacts, bound: bool, ended: bool, closing: bool, expected_
     (state, problem.map(Into::into))
 }
 
-/// Keeps the newest `MAX_ENDED` ended entries.
+/// Keeps the newest `MAX_ENDED` ended entries, and those still being relaunched.
 fn prune(entries: &mut Vec<Entry>) {
     loop {
-        let ended = entries.iter().enumerate().filter(|(_, e)| e.inst.state == InstanceState::Exited);
+        let ended = entries.iter().enumerate().filter(|(_, e)| e.inst.state == InstanceState::Exited && e.relaunching.is_none());
         if ended.clone().count() <= MAX_ENDED {
             return;
         }
@@ -1193,6 +1287,11 @@ mod tests {
         assert_eq!(state_of(&f(|f| f.user_id = Some(USER)), true, false, false, Some(USER)), (Joining, None));
         let challenged = f(|f| f.challenged = true);
         assert_eq!(state_of(&challenged, true, false, false, Some(USER)), (Joining, note("Roblox wants a human check")));
+
+        let teleport = f(|f| (f.in_game, f.teleporting, f.disconnected) = (true, true, true));
+        assert_eq!(state_of(&teleport, true, false, false, Some(USER)), (Joining, None), "not a disconnect");
+        let failed = f(|f| (f.in_game, f.disconnected) = (true, true));
+        assert_eq!(state_of(&failed, true, false, false, Some(USER)), (Disconnected, None));
 
         let replaced = f(|f| f.replaced = true);
         assert_eq!(state_of(&replaced, true, true, false, Some(USER)), (Exited, note("Replaced by another Roblox client")));
@@ -1596,6 +1695,107 @@ mod tests {
         poll(start + 5_000);
         assert_eq!(t.take_rejoins().len(), 1);
         assert_eq!(state(&t, &left).0, Disconnected);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_waiting_relaunch_ends_with_close_all_a_clear_or_a_newer_launch() {
+        let dir = temp_dir();
+        let t = Tracker::new();
+        let start = now_ms();
+        let secs = (start / 1000) as u64;
+        let id = t.register(&info(100, start, false), target()).id;
+        let procs = Fake::new(&[(100, secs)]);
+        let poll = |now: i64| t.poll(Some(&dir), &procs, &user_of, now);
+        poll(start + 1_000);
+        procs.set(&[]);
+        poll(start + 200_000);
+        assert_eq!(t.take_rejoins().len(), 1);
+        assert!(!t.relaunch_wanted(&id, false), "no task at work");
+
+        // One task per client, and it survives the poll.
+        assert!(t.begin_relaunch(&id, start));
+        assert!(!t.begin_relaunch(&id, start) && t.is_relaunching(&id));
+        poll(start + 201_000);
+        assert!(t.relaunch_wanted(&id, false));
+        // RoALT's own close: `closing` no longer ends it, once it says so.
+        t.entries()[0].closing = true;
+        assert!(!t.relaunch_wanted(&id, false));
+        assert!(t.relaunch_wanted(&id, true));
+        t.entries()[0].closing = false;
+
+        // Over the ended limit it stays; finished, it goes.
+        for pid in 0..(MAX_ENDED as u32 + 2) {
+            let other = t.register(&LaunchInfo { account_id: 50 + i64::from(pid), browser_tracker_id: BTID + 10 + i64::from(pid), ..info(1_000 + pid, start, false) }, target()).id;
+            let mut entries = t.entries();
+            let e = entries.iter_mut().find(|e| e.inst.id == other).unwrap();
+            (e.inst.state, e.inst.ended_at) = (Exited, Some(start + 300_000 + i64::from(pid)));
+        }
+        prune(&mut t.entries());
+        assert_eq!(t.entries().iter().filter(|e| e.inst.state == Exited).count(), MAX_ENDED + 1);
+        assert!(t.get(&id).is_some());
+        t.end_relaunch(&id);
+        prune(&mut t.entries());
+        assert!(t.get(&id).is_none());
+
+        // Close all stops the next one, ended or not.
+        let second = t.register(&LaunchInfo { account_id: 2, browser_tracker_id: BTID + 1, ..info(200, start + 1, false) }, target()).id;
+        procs.set(&[(200, secs)]);
+        poll(start + 400_000);
+        procs.set(&[]);
+        poll(start + 600_000);
+        assert!(t.begin_relaunch(&second, start) && t.relaunch_wanted(&second, false));
+        assert_eq!(t.relaunches_open(), 0, "ended: nothing to close");
+        t.cancel_relaunches();
+        assert!(!t.relaunch_wanted(&second, false) && !t.relaunch_wanted(&second, true) && !t.is_relaunching(&second));
+        assert!(t.begin_relaunch(&second, start + 1));
+        assert!(!t.relaunch_wanted(&second, false), "handed out after Close all: counts as closed by the user");
+        t.entries().iter_mut().find(|e| e.inst.id == second).unwrap().closing = false;
+
+        // An older ended client of the account says nothing about this relaunch.
+        let older = t.register(&LaunchInfo { account_id: 2, browser_tracker_id: BTID + 3, ..info(202, start, false) }, target()).id;
+        t.entries().iter_mut().find(|e| e.inst.id == older).unwrap().inst.state = Exited;
+        assert!(t.relaunch_wanted(&second, false));
+        // The account launched since it began: nothing left to do, whatever became of that client.
+        let newer = t.register(&LaunchInfo { account_id: 2, browser_tracker_id: BTID + 2, ..info(201, start + 2, false) }, target()).id;
+        assert!(!t.relaunch_wanted(&second, true));
+        t.entries().iter_mut().find(|e| e.inst.id == newer).unwrap().inst.state = Exited;
+        assert!(!t.relaunch_wanted(&second, true));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_recovered_client_loses_its_gave_up_note() {
+        let dir = temp_dir();
+        let t = Tracker::new();
+        let start = now_ms();
+        let secs = (start / 1000) as u64;
+        let id = t.register(&info(100, start, false), target()).id;
+        let log = dir.join("0.744.0.7441080_20261024T120100Z_Player_R100_last.log");
+        append(&log, &[btid_line(BTID)]);
+        append(&log, &join_lines(USER));
+        append(&log, &[replicator()]);
+        let procs = Fake::new(&[(100, secs)]);
+        let poll = |now: i64| t.poll(Some(&dir), &procs, &user_of, now);
+        poll(start + 1_000);
+        append(&log, &["[FLog::Network] Sending disconnect with reason: 267".into()]);
+        poll(start + 2_000);
+        assert_eq!(t.take_rejoins().len(), 1);
+        t.give_up(&id, "Gave up".into());
+        poll(start + 3_000);
+        assert_eq!(state(&t, &id).1, note("Gave up"));
+        assert!(t.take_rejoins().is_empty(), "still the same trouble");
+
+        // The player pressed Reconnect: a normal client again, and its next disconnect counts.
+        append(&log, &join_lines(USER));
+        append(&log, &[replicator()]);
+        poll(start + 4_000);
+        assert!(t.take_rejoins().is_empty());
+        poll(start + 5_000);
+        assert_eq!(state(&t, &id), (InGame, None, 100));
+        append(&log, &["[FLog::Network] Sending disconnect with reason: 267".into()]);
+        poll(start + 6_000);
+        assert_eq!(t.take_rejoins().len(), 1);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

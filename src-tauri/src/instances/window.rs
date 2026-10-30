@@ -11,7 +11,7 @@ use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, GetWindowPlacement, GetWindowRect, IsIconic, IsZoomed, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOZORDER, SW_MINIMIZE, SW_RESTORE, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_MINIMIZE, SW_RESTORE, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE,
     SetWindowPlacement, SetWindowPos, ShowWindow, ShowWindowAsync, WINDOWPLACEMENT, WPF_RESTORETOMAXIMIZED,
 };
 
@@ -36,29 +36,119 @@ pub enum Show {
     Restore,
 }
 
-/// The client's window at most `max_w` pixels wide (its aspect kept); None while it is
-/// minimized, has no window yet or can't be captured.
-pub fn thumbnail(pid: u32, max_w: u32) -> Option<Thumb> {
+/// The client's window at most `max_w` pixels wide (its aspect kept), and whether it is parked
+/// off-screen; None while it is minimized, has no window yet or can't be captured.
+pub fn thumbnail(pid: u32, max_w: u32) -> Option<(Thumb, bool)> {
     let (hwnd, minimized) = process::main_window(pid)?;
     if minimized {
         return None;
     }
-    super::capture::picture(hwnd, max_w)
+    Some((super::capture::picture(hwnd, max_w)?, is_parked(hwnd)))
+}
+
+/// Where a parked window goes: past any monitor, and not where Windows puts minimized ones.
+const PARK_AT: i32 = -30_000;
+
+/// Where each parked window was (pid, x, y, maximized). In memory only: after RoALT restarts, a
+/// parked client is still recognized by its position (`is_parked`) and comes back at `UNPARK_AT`.
+static PARKED: Mutex<Vec<(u32, i32, i32, bool)>> = Mutex::new(Vec::new());
+const UNPARK_AT: (i32, i32) = (100, 100);
+
+/// A left edge this far out is a parked window, not one on a monitor (pure).
+fn parked_left(left: i32) -> bool {
+    left <= PARK_AT / 2
+}
+
+fn is_parked(hwnd: HWND) -> bool {
+    let mut r = RECT::default();
+    // SAFETY: reads one window's state, its rectangle into a local.
+    unsafe { !IsIconic(hwnd).as_bool() && GetWindowRect(hwnd, &mut r).is_ok() && parked_left(r.left) }
+}
+
+/// Moves the window off-screen instead of minimizing it: it keeps drawing, so its preview stays
+/// live (and it keeps using the GPU). Queued, like a minimize; a hung client is minimized instead,
+/// since getting it out of maximized or minimized would wait for it.
+fn park(pid: u32, hwnd: HWND) {
+    if is_parked(hwnd) {
+        return;
+    }
+    if process::hung(pid) {
+        // SAFETY: a window-manager call on a top-level window; posted.
+        let _ = unsafe { ShowWindowAsync(hwnd, SW_SHOWMINNOACTIVE) };
+        return;
+    }
+    // SAFETY: reads one window's state.
+    let zoomed = unsafe { IsZoomed(hwnd) }.as_bool();
+    normal(hwnd, false);
+    let mut r = RECT::default();
+    // SAFETY: reads one window's rectangle into a local.
+    let (x, y) = match unsafe { GetWindowRect(hwnd, &mut r) } {
+        Ok(()) => (r.left, r.top),
+        Err(e) => {
+            log::debug!("park: client {pid}'s position unreadable: {e}");
+            UNPARK_AT
+        }
+    };
+    {
+        let mut parked = PARKED.lock().unwrap_or_else(|e| e.into_inner());
+        parked.retain(|p| p.0 != pid);
+        parked.push((pid, x, y, zoomed));
+    }
+    // SAFETY: a window-manager call on a top-level window; queued, so a busy client holds up nothing.
+    if let Err(e) = unsafe { SetWindowPos(hwnd, None, PARK_AT, PARK_AT, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS) } {
+        log::debug!("park: client {pid} not moved: {e}");
+    }
+}
+
+/// Brings a parked window back where it was; false if it wasn't parked.
+fn unpark(pid: u32, hwnd: HWND) -> bool {
+    if !is_parked(hwnd) {
+        return false;
+    }
+    let was = {
+        let mut parked = PARKED.lock().unwrap_or_else(|e| e.into_inner());
+        parked.iter().position(|p| p.0 == pid).map(|i| parked.remove(i))
+    };
+    let (x, y, zoomed) = was.map_or((UNPARK_AT.0, UNPARK_AT.1, false), |p| (p.1, p.2, p.3));
+    // SAFETY: window-manager calls on a top-level window; queued.
+    unsafe {
+        if let Err(e) = SetWindowPos(hwnd, None, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS) {
+            log::debug!("unpark: client {pid} not moved: {e}");
+        }
+        if zoomed {
+            let _ = ShowWindowAsync(hwnd, SW_SHOWMAXIMIZED);
+        }
+    }
+    true
+}
+
+/// Brings the client back if it is parked (RoALT is closing: nothing could find it otherwise).
+pub fn unpark_client(pid: u32) {
+    if let Some((hwnd, _)) = process::main_window(pid) {
+        unpark(pid, hwnd);
+    }
 }
 
 /// Shows, minimizes or focuses the client's window. Minimize and Restore are queued, so a
 /// busy or hung client holds up nothing; Focus waits, and refuses a client not responding.
-pub fn show(pid: u32, what: Show) -> Result<()> {
+/// `park`: Minimize moves it off-screen instead (`park`), so its preview stays live.
+pub fn show(pid: u32, what: Show, park_it: bool) -> Result<()> {
     let (hwnd, minimized) = process::main_window(pid).ok_or_else(|| AppError::Invalid(tr!("That client has no window yet.")))?;
     let queue = |cmd| {
         // SAFETY: a window-manager call on a top-level window; posted, its return the old visibility.
         let _ = unsafe { ShowWindowAsync(hwnd, cmd) };
     };
     match what {
+        Show::Minimize if park_it => park(pid, hwnd),
         Show::Minimize => queue(SW_MINIMIZE),
-        Show::Restore => queue(SW_RESTORE),
+        Show::Restore => {
+            if !unpark(pid, hwnd) {
+                queue(SW_RESTORE);
+            }
+        }
         Show::Focus => {
             let hwnd = window_to_change(pid)?;
+            unpark(pid, hwnd);
             if minimized {
                 // SAFETY: as above; waits, so the window is back before it is brought to the front.
                 let _ = unsafe { ShowWindow(hwnd, SW_RESTORE) };
@@ -83,10 +173,13 @@ fn saved() -> MutexGuard<'static, Vec<(String, u32, WINDOWPLACEMENT)>> {
     SAVED.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Minimizes the client without taking the focus (Minimize on launch); nothing if it has no
-/// window or is minimized already.
-pub fn minimize_quietly(pid: u32) {
+/// Minimizes the client without taking the focus (Minimize on launch), or parks it (`park`);
+/// nothing if it has no window or is minimized already.
+pub fn minimize_quietly(pid: u32, park_it: bool) {
     if let Some((hwnd, false)) = process::main_window(pid) {
+        if park_it {
+            return park(pid, hwnd);
+        }
         // SAFETY: a window-manager call on a top-level window; posted (the tracker's poll must not
         // wait on a client still loading), its return the old visibility.
         let _ = unsafe { ShowWindowAsync(hwnd, SW_SHOWMINNOACTIVE) };
@@ -266,6 +359,14 @@ pub fn to_rgba(bgra: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tells_a_parked_window_from_one_on_a_monitor() {
+        assert!(parked_left(PARK_AT));
+        assert!(!parked_left(-1920), "a monitor to the left");
+        assert!(!parked_left(-7680), "several of them");
+        assert!(!parked_left(0));
+    }
 
     #[test]
     fn pictures_turn_rgba() {

@@ -27,6 +27,9 @@ pub enum AppError {
     Cancelled,
     #[error("{0}")]
     Invalid(String),
+    /// Refused for now, for a reason that may pass by itself (`temporary`); to the UI, `Invalid`.
+    #[error("{0}")]
+    Wait(String),
     #[error("Storage error: {0}")]
     Storage(String),
     #[error("Encryption failed.")]
@@ -48,17 +51,27 @@ impl AppError {
             Self::Network(_) => "network",
             Self::NotFound => "notFound",
             Self::Cancelled => "cancelled",
-            Self::Invalid(_) => "invalid",
+            Self::Invalid(_) | Self::Wait(_) => "invalid",
             Self::Storage(_) => "storage",
             Self::Crypto => "crypto",
             Self::Internal(_) => "internal",
         }
     }
 
+    /// May pass by itself (the network, Roblox, a locked vault), so the same thing is worth trying
+    /// again later. A bad cookie or a refused target (Roblox's 4xx) stays until someone acts.
+    pub fn temporary(&self) -> bool {
+        match self {
+            Self::Locked | Self::RateLimited(_) | Self::Network(_) | Self::Wait(_) => true,
+            Self::Roblox(why) => !why.starts_with("HTTP 4"),
+            _ => false,
+        }
+    }
+
     /// Logs this error (English, secret-free like every message) at a level fit for its kind.
     pub fn log(&self) {
         let level = match self {
-            Self::Cancelled | Self::Invalid(_) | Self::Locked | Self::WrongPassword | Self::NotFound => log::Level::Debug,
+            Self::Cancelled | Self::Invalid(_) | Self::Wait(_) | Self::Locked | Self::WrongPassword | Self::NotFound => log::Level::Debug,
             Self::Internal(_) | Self::Storage(_) | Self::Crypto => log::Level::Error,
             _ => log::Level::Warn,
         };
@@ -80,7 +93,7 @@ impl AppError {
             Self::Network(why) => tr!("Network error: {why}", why = why),
             Self::NotFound => tr!("Not found."),
             Self::Cancelled => tr!("Cancelled."),
-            Self::Invalid(m) | Self::Internal(m) => m.clone(),
+            Self::Invalid(m) | Self::Wait(m) | Self::Internal(m) => m.clone(),
             Self::Storage(why) => tr!("Storage error: {why}", why = why),
             Self::Crypto => tr!("Encryption failed."),
         }

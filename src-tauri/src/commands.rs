@@ -385,7 +385,7 @@ fn reveal_prompt() -> String {
 }
 
 /// Records a dead or challenged cookie on the account (true when `e` was one).
-fn record_cookie_error(app: &AppHandle, s: &App, id: i64, e: &AppError) -> Result<bool> {
+pub(crate) fn record_cookie_error(app: &AppHandle, s: &App, id: i64, e: &AppError) -> Result<bool> {
     let status = match e {
         AppError::CookieInvalid | AppError::BoundSessionRequired => AccountStatus::Invalid,
         AppError::Challenge => AccountStatus::Challenged,
@@ -689,7 +689,7 @@ pub async fn launch(
     let fps_cap = launch_fps(fps_cap)?;
     // Launches go strictly one at a time (DESIGN §6).
     let _single = s.bulk.begin_single_launch()?;
-    Ok(launch_tracked(&app, &s, account_id, target, favourite_id, None, fps_cap).await?.0)
+    Ok(launch_tracked(&app, &s, account_id, target, favourite_id, None, fps_cap, true).await?.0)
 }
 
 /// Why launches are refused while `roblox_install` runs.
@@ -705,6 +705,9 @@ pub(crate) fn installing() -> String {
 /// so the shared login files while protection is on; a dead or challenged cookie recorded on
 /// the account; the client tracked; the favourite marked as used. An account whose client is
 /// still running is refused (a second client would sign it out of the first).
+/// `hold`: refuse when a bootstrapper's update would close running clients (a relaunch that
+/// already checked that before closing its client doesn't ask again).
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn launch_tracked(
     app: &AppHandle,
     s: &App,
@@ -713,6 +716,7 @@ pub(crate) async fn launch_tracked(
     favourite_id: Option<i64>,
     delay_ms: Option<u32>,
     fps_cap: Option<u32>,
+    hold: bool,
 ) -> Result<(LaunchInfo, Instance)> {
     let kills = s.bulk.kills();
     let killed = || AppError::Invalid(tr!("Launch cancelled by Kill all."));
@@ -721,15 +725,18 @@ pub(crate) async fn launch_tracked(
     let Some(_claim) = s.tracker.claim(account_id) else {
         let name = s.db.account(account_id).map(|a| crate::launcher::bulk::name_of(&a)).ok().filter(|n| !n.is_empty());
         let name = name.unwrap_or_else(|| tr!("This account"));
-        return Err(AppError::Invalid(tr!("{name} is already running. Close its client first.", name = name)));
+        return Err(AppError::Wait(tr!("{name} is already running. Close its client first.", name = name)));
     };
     if let Some(why) = crate::network::blocked(s) {
-        return Err(AppError::Invalid(why));
+        return Err(AppError::Wait(why));
     }
     let _busy = s.bulk.begin_launch();
     // After `_busy`: an install starting now sees this launch, one already running is seen here.
     if s.update.installing() {
-        return Err(AppError::Invalid(installing()));
+        return Err(AppError::Wait(installing()));
+    }
+    if hold && let Some(why) = crate::launcher::update::bootstrapper_hold(s, 0).await {
+        return Err(AppError::Wait(why));
     }
     let v = s.db.settings()?;
     // Less the jitter's second, so a batch's own jittered wait never adds to it.
@@ -1283,6 +1290,7 @@ pub async fn instances_close_all(s: State<'_, App>, force: bool) -> Result<()> {
 
 /// Asks every running client to close (also the tray's "Close all clients").
 pub(crate) async fn close_running(s: &App, force: bool) -> Result<()> {
+    s.tracker.cancel_relaunches();
     let running: Vec<Instance> = s.tracker.list().into_iter().filter(|i| i.state != InstanceState::Exited).collect();
     let (ids, targets): (Vec<String>, Vec<_>) =
         running.into_iter().filter_map(|i| Some((i.id.clone(), s.tracker.mark_closing(&i.id)?))).unzip();
@@ -1409,16 +1417,17 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
 }
 
 /// A picture of one client's window at most `max_w` (16..=1280) pixels wide, as raw bytes:
-/// width and height (u32 little-endian each), then RGBA rows top-down. Empty while it is
-/// minimized, has no window yet or is still behind its bootstrapper.
+/// width, height and 1 if it is parked off-screen, else 0 (u32 little-endian each), then RGBA rows
+/// top-down. Empty while it is minimized, has no window yet or is still behind its bootstrapper.
 #[tauri::command]
 pub async fn instance_thumbnail(s: State<'_, App>, id: String, max_w: u32) -> Result<tauri::ipc::Response> {
     let Some(pid) = client_pid(&s, &id)? else { return Ok(tauri::ipc::Response::new(Vec::new())) };
     let thumb = blocking(move || crate::instances::window::thumbnail(pid, max_w.clamp(16, 1280))).await?;
-    let bytes = thumb.map_or_else(Vec::new, |t| {
-        let mut b = Vec::with_capacity(8 + t.rgba.len());
+    let bytes = thumb.map_or_else(Vec::new, |(t, parked)| {
+        let mut b = Vec::with_capacity(12 + t.rgba.len());
         b.extend(t.width.to_le_bytes());
         b.extend(t.height.to_le_bytes());
+        b.extend(u32::from(parked).to_le_bytes());
         b.extend(t.rgba);
         b
     });
@@ -1429,7 +1438,8 @@ pub async fn instance_thumbnail(s: State<'_, App>, id: String, max_w: u32) -> Re
 #[tauri::command]
 pub async fn instance_show(s: State<'_, App>, id: String, what: crate::instances::window::Show) -> Result<()> {
     let pid = client_pid(&s, &id)?.ok_or_else(not_started)?;
-    blocking(move || crate::instances::window::show(pid, what)).await?
+    let park = s.db.settings()?.park_minimized;
+    blocking(move || crate::instances::window::show(pid, what, park)).await?
 }
 
 /// Minimizes or restores every running client's window (focus is for one client).
@@ -1439,10 +1449,11 @@ pub async fn instances_show_all(s: State<'_, App>, what: crate::instances::windo
         return Err(AppError::Invalid(tr!("Only one client can be in front.")));
     }
     let pids: Vec<u32> = s.tracker.clients().into_iter().map(|c| c.1).collect();
+    let park = s.db.settings()?.park_minimized;
     // One without a window yet has nothing to show or hide.
     blocking(move || {
         for pid in pids {
-            if let Err(e) = crate::instances::window::show(pid, what) {
+            if let Err(e) = crate::instances::window::show(pid, what, park) {
                 log::debug!("show all: client {pid}: {e}");
             }
         }
@@ -1647,6 +1658,7 @@ pub(crate) async fn kill_all(s: &App) -> Result<MultiInstanceStatus> {
 /// `keep_closing` (Kill all): a client that couldn't be closed still counts as closed by the
 /// user, so it is never rejoined or restarted when it ends later.
 async fn close_roblox(s: &App, force: bool, keep_closing: bool) -> Result<MultiInstanceStatus> {
+    s.tracker.cancel_relaunches();
     for i in s.tracker.list() {
         s.tracker.mark_closing(&i.id);
     }
@@ -1667,6 +1679,53 @@ async fn close_roblox(s: &App, force: bool, keep_closing: bool) -> Result<MultiI
 }
 
 /// Clients that crashed, were disconnected or hung, newest first (the last 200).
+/// What a diagnostics report reads: the header now, the logs named for a background thread.
+fn diagnostics_sources(s: &App) -> Result<crate::diagnostics::Sources> {
+    use windows::Win32::System::Registry::HKEY_LOCAL_MACHINE;
+    let reg = |value| crate::launcher::client::reg_string(HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion", Some(value)).unwrap_or_default();
+    let v = s.db.settings()?;
+    let head = format!(
+        "RoALT {} on {} {} (build {})\nMulti-instance: {}\nPerformance: {}\n",
+        env!("CARGO_PKG_VERSION"),
+        reg("ProductName"),
+        reg("DisplayVersion"),
+        reg("CurrentBuildNumber"),
+        v.multi_instance,
+        crate::performance::of(&v, None, now_ms()),
+    );
+    let mut names: Vec<String> = s.db.accounts()?.into_iter().flat_map(|a| [a.username, a.display_name, a.alias]).collect();
+    names.extend(s.db.favourites()?.into_iter().map(|f| f.name));
+    let mut roblox_logs = s.tracker.live_logs();
+    for crash in s.db.crashes()?.iter().filter(|c| c.has_log).take(5) {
+        if let Ok(path) = s.db.crash_log(crash.id) {
+            let path = std::path::PathBuf::from(path);
+            if !roblox_logs.contains(&path) {
+                roblox_logs.push(path);
+            }
+        }
+    }
+    roblox_logs.truncate(5);
+    Ok(crate::diagnostics::Sources { head, roalt_log: s.data_dir.join("logs").join("roalt.log"), roblox_logs, names })
+}
+
+#[tauri::command]
+pub async fn diagnostics_text(s: State<'_, App>) -> Result<String> {
+    let src = diagnostics_sources(&s)?;
+    blocking(move || crate::diagnostics::report(&src, crate::diagnostics::FOR_CLIPBOARD)).await
+}
+
+#[tauri::command]
+pub async fn diagnostics_save(s: State<'_, App>, path: String) -> Result<()> {
+    let src = diagnostics_sources(&s)?;
+    let text = blocking(move || crate::diagnostics::report(&src, crate::diagnostics::FOR_FILE)).await?;
+    crate::vault::backup::write_atomic(Path::new(&path), text.as_bytes())
+}
+
+#[tauri::command]
+pub fn server_history(s: State<'_, App>, account_id: i64) -> Result<Vec<crate::model::ServerVisit>> {
+    s.db.servers(account_id)
+}
+
 #[tauri::command]
 pub fn crashes_list(s: State<'_, App>) -> Result<Vec<Crash>> {
     s.db.crashes()
@@ -1951,9 +2010,80 @@ pub fn settings_get(s: State<'_, App>) -> Result<Settings> {
     s.db.settings()
 }
 
+/// The current performance settings as a profile (JSON), for a file or a share code.
+#[tauri::command]
+pub fn performance_profile(s: State<'_, App>, preview_fps: Option<u32>) -> Result<String> {
+    Ok(crate::performance::of(&s.db.settings()?, preview_fps, now_ms()))
+}
+
+#[tauri::command]
+pub fn performance_export(s: State<'_, App>, path: String, preview_fps: Option<u32>) -> Result<()> {
+    let text = crate::performance::of(&s.db.settings()?, preview_fps, now_ms());
+    crate::vault::backup::write_atomic(Path::new(&path), text.as_bytes())
+}
+
+/// The profile in the file at `path`, checked; nothing is saved (the UI shows it, then saves it
+/// through `settings_set`).
+#[tauri::command]
+pub fn performance_read(s: State<'_, App>, path: String) -> Result<crate::performance::Profile> {
+    let refused = || AppError::Invalid(tr!("This isn't a RoALT performance profile."));
+    if std::fs::metadata(&path)?.len() > crate::performance::MAX_BYTES as u64 {
+        return Err(refused());
+    }
+    let text = std::fs::read_to_string(&path).map_err(|_| refused())?;
+    crate::performance::parse(&text, &s.db.settings()?)
+}
+
+/// As `performance_read`, for a profile's text (a pasted share code, decoded by the UI).
+#[tauri::command]
+pub fn performance_parse(s: State<'_, App>, text: String) -> Result<crate::performance::Profile> {
+    crate::performance::parse(&text, &s.db.settings()?)
+}
+
+/// The performance part of a settings change, checked and applied to `v` (no side effects): also
+/// what a performance profile is checked with (`performance::parse`).
+pub(crate) fn apply_performance(v: &mut Settings, patch: &SettingsPatch) -> Result<()> {
+    if let Some(f) = patch.fps_cap {
+        check_fps(f)?;
+        v.fps_cap = f;
+    }
+    if let Some(l) = patch.low_graphics { v.low_graphics = l }
+    if let Some(l) = patch.lighter_rendering { v.lighter_rendering = l }
+    if let Some(p) = patch.park_minimized { v.park_minimized = p }
+    if let Some(m) = patch.minimize_on_launch { v.minimize_on_launch = m }
+    if let Some(m) = patch.mem_restart_mb {
+        if m != 0 && !(512..=65_536).contains(&m) {
+            return Err(AppError::Invalid(tr!("The memory limit must be 0 (off) or 512 to 65 536 MB.")));
+        }
+        v.mem_restart_mb = m;
+    }
+    if let Some(t) = patch.mem_throttle {
+        if t.mb != 0 && !(512..=65_536).contains(&t.mb) {
+            return Err(AppError::Invalid(tr!("The memory throttle must be 0 (off) or 512 to 65 536 MB.")));
+        }
+        if !(1..=100).contains(&t.cpu_cap) {
+            return Err(AppError::Invalid(tr!("The throttle's CPU limit must be 1 to 100 %.")));
+        }
+        v.mem_throttle = t;
+    }
+    if let Some(m) = patch.trim_every_min {
+        if m > 24 * 60 {
+            return Err(AppError::Invalid(tr!("Trimming can be at most once a day apart.")));
+        }
+        v.trim_every_min = m;
+    }
+    if let Some(a) = patch.auto_spread { v.auto_spread = a }
+    if let Some(a) = patch.adaptive {
+        check_limits(&a.background)?;
+        v.adaptive = a;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> Result<Settings> {
     let mut v = s.db.settings()?;
+    apply_performance(&mut v, &patch)?;
     if let Some(t) = patch.theme { v.theme = t }
     if let Some(l) = &patch.language {
         if !(l.is_empty() || crate::i18n::LANGS.contains(&l.as_str())) {
@@ -2017,38 +2147,6 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
         v.launch_args = a.trim().to_owned();
     }
     if let Some(c) = patch.close_to_tray { v.close_to_tray = c }
-    if let Some(f) = patch.fps_cap {
-        check_fps(f)?;
-        v.fps_cap = f;
-    }
-    if let Some(l) = patch.low_graphics { v.low_graphics = l }
-
-    if let Some(m) = patch.mem_restart_mb {
-        if m != 0 && !(512..=65_536).contains(&m) {
-            return Err(AppError::Invalid(tr!("The memory limit must be 0 (off) or 512 to 65 536 MB.")));
-        }
-        v.mem_restart_mb = m;
-    }
-    if let Some(t) = patch.mem_throttle {
-        if t.mb != 0 && !(512..=65_536).contains(&t.mb) {
-            return Err(AppError::Invalid(tr!("The memory throttle must be 0 (off) or 512 to 65 536 MB.")));
-        }
-        if !(1..=100).contains(&t.cpu_cap) {
-            return Err(AppError::Invalid(tr!("The throttle's CPU limit must be 1 to 100 %.")));
-        }
-        v.mem_throttle = t;
-    }
-    if let Some(m) = patch.trim_every_min {
-        if m > 24 * 60 {
-            return Err(AppError::Invalid(tr!("Trimming can be at most once a day apart.")));
-        }
-        v.trim_every_min = m;
-    }
-    if let Some(a) = patch.auto_spread { v.auto_spread = a }
-    if let Some(a) = patch.adaptive {
-        check_limits(&a.background)?;
-        v.adaptive = a;
-    }
     if let Some(a) = patch.anti_afk {
         // Roblox disconnects after 20 idle minutes.
         if !(1..=19).contains(&a.interval_min) {
@@ -2066,7 +2164,6 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
     let self_update = patch.self_update.filter(|&u| u != v.self_update);
     if let Some(u) = self_update { v.self_update = u }
     if let Some(p) = patch.discord_presence { v.discord_presence = p }
-    if let Some(m) = patch.minimize_on_launch { v.minimize_on_launch = m }
     if let Some(c) = patch.clean_logs { v.clean_logs = c }
     if let Some(d) = patch.launch_delay_ms {
         if !(2_000..=60_000).contains(&d) {

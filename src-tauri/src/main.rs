@@ -3,12 +3,14 @@
 #[macro_use]
 mod i18n;
 mod commands;
+mod diagnostics;
 mod discord;
 mod error;
 mod instances;
 mod launcher;
 mod model;
 mod network;
+mod performance;
 mod roblox_api;
 mod rpc;
 mod self_update;
@@ -389,6 +391,7 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
     instances::Tracker::spawn(app.handle().clone());
     instances::afk::spawn(app.handle().clone());
     network::spawn(app.handle().clone());
+    launcher::flags::restore();
     launcher::client_settings::spawn(app.handle().clone());
     discord::spawn(app.handle().clone());
     rpc::spawn(app.handle().clone());
@@ -409,7 +412,7 @@ fn remind_bandwidth(handle: AppHandle) {
             commands::notice(
                 &handle,
                 true,
-                tr!("The Roblox bandwidth limit is off: Windows clears it when it restarts. Apply it again in Settings, Performance."),
+                tr!("The Roblox bandwidth limit is off: Windows clears it when it restarts. Apply it again in the Performance tab."),
             );
         }
     });
@@ -532,6 +535,9 @@ fn main() {
             commands::roblox_close_all,
             commands::panic_kill,
             commands::crashes_list,
+            commands::diagnostics_text,
+            commands::diagnostics_save,
+            commands::server_history,
             commands::crash_open_log,
             commands::discord_get,
             commands::discord_set,
@@ -566,6 +572,10 @@ fn main() {
             commands::group_remove,
             commands::backup_export,
             commands::backup_import,
+            commands::performance_profile,
+            commands::performance_export,
+            commands::performance_read,
+            commands::performance_parse,
             commands::settings_get,
             commands::settings_set,
             commands::network_status,
@@ -581,6 +591,10 @@ fn main() {
                     s.tracker.persist(&s.db, true);
                     s.limiter.release_all();
                     launcher::client_settings::restore(&s.db);
+                    launcher::flags::restore();
+                    for (_, pid, ..) in s.tracker.clients() {
+                        instances::window::unpark_client(pid);
+                    }
                 }
             }
         });

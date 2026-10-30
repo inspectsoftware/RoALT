@@ -4,6 +4,7 @@
 
 pub mod afk;
 mod capture;
+mod gpu;
 pub mod limits;
 pub mod logwatch;
 pub mod metrics;

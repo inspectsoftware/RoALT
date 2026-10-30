@@ -215,7 +215,9 @@
   "RoALT can't open its vault on this Windows account ({why}).\n\nIf this data folder came from another PC or Windows account, rename {path} and import a .roalt backup.": "RoALT nie może otworzyć sejfu na tym koncie Windows ({why}).\n\nJeśli ten folder danych pochodzi z innego komputera lub konta Windows, zmień nazwę {path} i zaimportuj kopię zapasową .roalt.",
   "{why} The panic hotkey is off; change it in Settings, Automation.": "{why} Skrót awaryjny jest wyłączony; zmień go w Ustawieniach, Automatyzacja.",
   "RoALT can't open its window ({why}).\n\nIt needs the Microsoft Edge WebView2 Runtime: https://go.microsoft.com/fwlink/p/?LinkId=2124703": "RoALT nie może otworzyć okna ({why}).\n\nWymaga środowiska Microsoft Edge WebView2 Runtime: https://go.microsoft.com/fwlink/p/?LinkId=2124703",
-  "The Roblox bandwidth limit is off: Windows clears it when it restarts. Apply it again in Settings, Performance.": "Limit przepustowości Roblox jest wyłączony: Windows usuwa go przy restarcie. Zastosuj go ponownie w Ustawieniach, Wydajność.",
+  "The Roblox bandwidth limit is off: Windows clears it when it restarts. Apply it again in the Performance tab.": "Limit przepustowości Roblox jest wyłączony: Windows czyści go przy ponownym uruchomieniu. Zastosuj go ponownie w karcie Wydajność.",
+  "This isn't a RoALT performance profile.": "To nie jest profil wydajności RoALT.",
+  "This profile was made by a newer RoALT; update RoALT first.": "Ten profil utworzyła nowsza wersja RoALT; najpierw zaktualizuj RoALT.",
   "RoALT can't create its data folder {path}: {why}": "RoALT nie może utworzyć folderu danych {path}: {why}",
   "RoALT failed to start: {why}": "Nie udało się uruchomić RoALT: {why}",
   "You're on a public network. RoALT doesn't launch there; join a private network, or allow public networks in Settings, Security.": "Jesteś w sieci publicznej. RoALT nie uruchamia tam klientów; połącz się z siecią prywatną albo zezwól na sieci publiczne w Ustawieniach, Bezpieczeństwo.",
@@ -333,5 +335,13 @@
     "one": "{n} alt · gry: {games}",
     "few": "{n} alty · gry: {games}",
     "many": "{n} altów · gry: {games}"
-  }
+  },
+  "Roblox has an update, and your bootstrapper (e.g. Bloxstrap) would close every running client to install it. Close your clients first, then launch.": "Roblox ma aktualizację, a twój bootstrapper (np. Bloxstrap) zamknąłby wszystkich działających klientów, aby ją zainstalować. Najpierw zamknij klientów, potem uruchamiaj.",
+  "A client closed unexpectedly and wasn't relaunched: {rejoin} only covers disconnects. To relaunch crashed clients too, turn on {restart} in Settings.": "Klient nieoczekiwanie się zamknął i nie został uruchomiony ponownie: {rejoin} obejmuje tylko rozłączenia. Aby ponownie uruchamiać także klientów po awarii, włącz {restart} w Ustawieniach.",
+  "Auto-rejoin": "Automatyczne ponowne dołączanie",
+  "Auto-restart after a crash": "Automatyczny restart po awarii",
+  "Gave up after {minutes} minutes of trying": "Poddano się po {minutes} min prób",
+  "{name} wasn't rejoined after {minutes} minutes of trying: {why}": "{name}: nie udało się ponownie dołączyć po {minutes} min prób: {why}",
+  "{name} wasn't restarted after {minutes} minutes of trying: {why}": "{name}: nie udało się uruchomić ponownie po {minutes} min prób: {why}",
+  "Waiting to relaunch clients. RoALT keeps trying for up to {minutes} minutes. Last problem: {why}": "Oczekiwanie na ponowne uruchomienie klientów. RoALT będzie próbować przez maksymalnie {minutes} min. Ostatni problem: {why}"
 }

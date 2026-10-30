@@ -13,7 +13,7 @@ use rusqlite_migration::{M, Migrations};
 
 use crate::commands::now_ms;
 use crate::error::{AppError, Result};
-use crate::model::{AccountPatch, AccountStatus, AccountSummary, Crash, CrashKind, Group, GroupInput, Settings, VaultMode};
+use crate::model::{AccountPatch, AccountStatus, AccountSummary, Crash, CrashKind, Group, GroupInput, ServerVisit, Settings, VaultMode};
 use crate::vault::{Kdf, VaultRecord};
 
 /// What `upsert_account` writes. `cookie` is the encrypted blob.
@@ -56,10 +56,13 @@ pub struct FavouriteRow {
     pub last_used_at: Option<i64>,
 }
 
+/// Set once `Db::public_guard_off_once` has run.
+const PUBLIC_GUARD_OFF_ONCE: &str = "public_guard_default_v2";
 const MAX_ALIAS: usize = 64;
 const MAX_NOTES: usize = 2000;
 const MAX_GROUP_NAME: usize = 40;
 const MAX_CRASHES: i64 = 200;
+const MAX_SERVERS: i64 = 50;
 
 /// What `add_crash` writes: one client that ended badly. `log_path` never reaches the UI.
 pub struct NewCrash<'a> {
@@ -77,7 +80,7 @@ const ACCOUNT_SELECT: &str = "SELECT a.id, a.user_id, a.username, a.display_name
      a.favourite, a.sort_order, \
      (SELECT group_concat(ag.group_id ORDER BY g.sort_order, g.id) \
         FROM account_groups ag JOIN groups g ON g.id = ag.group_id WHERE ag.account_id = a.id), \
-     a.status, a.status_checked_at, a.created_at, a.allow_disconnect, a.launch_args, a.discord_muted, a.fps_cap \
+     a.status, a.status_checked_at, a.created_at, a.allow_disconnect, a.launch_args, a.discord_muted, a.fps_cap, a.full_quality \
      FROM accounts a";
 
 const GROUP_SELECT: &str = "SELECT id, name, color, sort_order FROM groups";
@@ -119,13 +122,33 @@ impl Db {
             M::up(include_str!("migrations/004_discord_mute.sql")),
             M::up(include_str!("migrations/005_fps_cap.sql")),
             M::up(include_str!("migrations/006_tracked.sql")),
+            M::up(include_str!("migrations/007_full_quality.sql")),
+            M::up(include_str!("migrations/008_server_history.sql")),
         ])
             .to_latest(&mut conn)
             .map_err(|e| {
                 log::error!("database migration failed: {e}");
                 AppError::Storage(e.to_string())
             })?;
-        Ok(Db { conn: Mutex::new(conn), file })
+        let db = Db { conn: Mutex::new(conn), file };
+        db.public_guard_off_once()?;
+        Ok(db)
+    }
+
+    /// The public-network guard is off by default now. A stored "guard on" can't be told apart
+    /// from the old default nobody chose, so it goes off once for everyone; choices made after
+    /// that stay. Corrupt settings are left for `settings` to report.
+    fn public_guard_off_once(&self) -> Result<()> {
+        if self.setting_value(PUBLIC_GUARD_OFF_ONCE)?.is_some() {
+            return Ok(());
+        }
+        if let Some(mut s) = self.setting_value("settings")?.and_then(|j| serde_json::from_str::<Settings>(&j).ok())
+            && !s.allow_public_networks
+        {
+            s.allow_public_networks = true;
+            self.save_settings(&s)?;
+        }
+        self.set_setting_value(PUBLIC_GUARD_OFF_ONCE, Some("1"))
     }
 
     /// A consistent copy of the open database, written to `path` (compacted: no freed pages
@@ -281,6 +304,9 @@ impl Db {
         }
         if let Some(v) = patch.fps_cap {
             tx.execute("UPDATE accounts SET fps_cap = ?2 WHERE id = ?1", params![id, Some(v).filter(|&v| v != 0)])?;
+        }
+        if let Some(v) = patch.full_quality {
+            tx.execute("UPDATE accounts SET full_quality = ?2 WHERE id = ?1", params![id, v])?;
         }
         tx.commit()?;
         Ok(())
@@ -503,6 +529,37 @@ impl Db {
         Ok(())
     }
 
+    /// Records a server the account's client reached, unless it was already the latest; only its
+    /// newest `MAX_SERVERS` are kept.
+    pub fn add_server(&self, account_id: i64, v: &ServerVisit) -> Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let latest: Option<String> = tx
+            .query_row("SELECT job_id FROM server_history WHERE account_id = ?1 ORDER BY id DESC LIMIT 1", [account_id], |r| r.get(0))
+            .optional()?;
+        if latest.as_deref() != Some(&v.job_id) {
+            tx.execute(
+                "INSERT INTO server_history (account_id, place_id, job_id, private, joined_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![account_id, v.place_id, v.job_id, v.private, v.joined_at],
+            )?;
+            tx.execute(
+                "DELETE FROM server_history WHERE account_id = ?1 AND id NOT IN \
+                 (SELECT id FROM server_history WHERE account_id = ?1 ORDER BY id DESC LIMIT ?2)",
+                params![account_id, MAX_SERVERS],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The account's servers, newest first.
+    pub fn servers(&self, account_id: i64) -> Result<Vec<ServerVisit>> {
+        let c = self.conn();
+        let mut st = c.prepare("SELECT place_id, job_id, private, joined_at FROM server_history WHERE account_id = ?1 ORDER BY id DESC")?;
+        let rows = st.query_map([account_id], |r| Ok(ServerVisit { place_id: r.get(0)?, job_id: r.get(1)?, private: r.get(2)?, joined_at: r.get(3)? }))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Records a client that ended badly; only the newest 200 are kept.
     pub fn add_crash(&self, c: &NewCrash) -> Result<()> {
         let mut conn = self.conn();
@@ -621,6 +678,7 @@ fn account_row(r: &Row) -> rusqlite::Result<AccountSummary> {
         launch_args: r.get(14)?,
         discord_muted: r.get(15)?,
         fps_cap: r.get(16)?,
+        full_quality: r.get(17)?,
     })
 }
 
@@ -815,6 +873,7 @@ mod tests {
             launch_args: Some(" --fast ".into()),
             discord_muted: Some(true),
             fps_cap: None,
+            full_quality: None,
         };
 
         db.update_account(id, &p).unwrap();
@@ -962,6 +1021,18 @@ mod tests {
         db.conn().execute("UPDATE settings SET value = ?1 WHERE key = 'settings'", [old]).unwrap();
         assert_eq!(db.settings().unwrap().auto_lock_minutes, 3);
 
+        // The guard goes off once for settings saved with it on; later choices stay.
+        let on = Settings { allow_public_networks: false, ..Settings::default() };
+        let db2 = Db::open_in_memory().unwrap();
+        db2.set_setting_value(PUBLIC_GUARD_OFF_ONCE, None).unwrap();
+        db2.save_settings(&on).unwrap();
+        db2.public_guard_off_once().unwrap();
+        assert!(db2.settings().unwrap().allow_public_networks, "off once");
+        db2.save_settings(&on).unwrap();
+        db2.public_guard_off_once().unwrap();
+        assert!(!db2.settings().unwrap().allow_public_networks, "the user's later choice stays");
+        assert!(Settings::default().allow_public_networks);
+
         // Values kept beside the settings leave them alone.
         assert_eq!(db.setting_value("discord_webhook").unwrap(), None);
         db.set_setting_value("discord_webhook", Some("00ff")).unwrap();
@@ -969,6 +1040,31 @@ mod tests {
         assert_eq!((db.setting_value("discord_webhook").unwrap().as_deref(), db.settings().unwrap()), (Some("00ff"), s));
         db.set_setting_value("discord_webhook", None).unwrap();
         assert_eq!(db.setting_value("discord_webhook").unwrap(), None);
+    }
+
+    #[test]
+    fn server_history_keeps_the_newest_per_account() {
+        let db = Db::open_in_memory().unwrap();
+        let id = add(&db, 1);
+        let visit = |job: &str, at| ServerVisit { place_id: 7, job_id: job.into(), private: false, joined_at: at };
+        db.add_server(id, &visit("a", 1)).unwrap();
+        db.add_server(id, &visit("a", 2)).unwrap();
+        assert_eq!(db.servers(id).unwrap().len(), 1, "the same server again isn't a new visit");
+        for i in 0..MAX_SERVERS + 5 {
+            db.add_server(id, &visit(&format!("job{i}"), i)).unwrap();
+        }
+        let all = db.servers(id).unwrap();
+        assert_eq!(all.len() as i64, MAX_SERVERS);
+        assert_eq!(all[0].job_id, format!("job{}", MAX_SERVERS + 4), "newest first");
+    }
+
+    #[test]
+    fn full_quality_is_kept() {
+        let db = Db::open_in_memory().unwrap();
+        let id = add(&db, 1);
+        assert!(!db.account(id).unwrap().full_quality);
+        db.update_account(id, &patch(|p| p.full_quality = Some(true))).unwrap();
+        assert!(db.account(id).unwrap().full_quality);
     }
 
     #[test]

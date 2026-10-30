@@ -17,6 +17,7 @@ export const qk = {
   instances: ["instances"],
   multi: ["multi"],
   crashes: ["crashes"],
+  serverHistory: (id: number) => ["serverHistory", id] as const,
   metrics: ["metrics"],
   bandwidth: ["bandwidth"],
   discord: ["discord"],

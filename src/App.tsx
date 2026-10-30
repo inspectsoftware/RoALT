@@ -6,6 +6,7 @@ import { AccountsView } from "./features/accounts/AccountsView";
 import { AddAccountDialog } from "./features/accounts/AddAccountDialog";
 import { DashboardView } from "./features/dashboard/DashboardView";
 import { DiscordView } from "./features/discord/DiscordView";
+import { PerformanceView } from "./features/performance/PerformanceView";
 import { DebugView } from "./features/debug/DebugView";
 import { GroupsNav } from "./features/accounts/GroupsNav";
 import { FavouritesNav } from "./features/launch/Favourites";
@@ -150,7 +151,7 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
   const accounts = useAccounts();
   const groups = useGroups();
   const running = useInstances().data?.filter(isRunning).length ?? 0;
-  const [view, setView] = useState<"dashboard" | "accounts" | "launch" | "servers" | "monitor" | "discord" | "debug" | "settings">("dashboard");
+  const [view, setView] = useState<"dashboard" | "accounts" | "launch" | "performance" | "servers" | "monitor" | "discord" | "debug" | "settings">("dashboard");
   const [group, setGroup] = useState<number | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   // The Launch view's accounts; the last one launched until something else is picked.
@@ -198,6 +199,7 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
         Digit6: () => setView("monitor"),
         Digit7: () => setView("discord"),
         Digit8: () => setView("debug"),
+        Digit9: () => setView("performance"),
       };
       const go = views[e.code];
       if (go) {
@@ -272,6 +274,10 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
                 {running}
               </span>
             )}
+          </button>
+          <button className="nav-item" aria-current={view === "performance" ? "page" : undefined} onClick={() => setView("performance")}>
+            <Icon name="gauge" />
+            <span className="flex-1 min-w-0 truncate">{t("app.nav.performance")}</span>
           </button>
           <button className="nav-item" aria-current={view === "servers" ? "page" : undefined} onClick={openServers}>
             <Icon name="servers" />
@@ -374,8 +380,10 @@ function Shell({ vault, settings }: { vault: VaultStatus; settings: Settings }) 
         <DiscordView settings={settings} />
       ) : view === "debug" ? (
         <DebugView />
+      ) : view === "performance" ? (
+        <PerformanceView settings={settings} />
       ) : (
-        <SettingsView vault={vault} settings={settings} />
+        <SettingsView vault={vault} settings={settings} onPerformance={() => setView("performance")} />
       )}
 
       <AddAccountDialog

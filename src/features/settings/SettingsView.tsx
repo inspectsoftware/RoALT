@@ -30,7 +30,6 @@ const pickerFilter = () => [{ name: t("settings.images"), extensions: ["png", "j
 export const SETTINGS_SECTIONS: readonly (readonly [string, Key])[] = [
   ["general", "settings.section.general"],
   ["launching", "settings.section.launching"],
-  ["performance", "settings.section.performance"],
   ["automation", "settings.section.automation"],
   ["security", "settings.section.security"],
   ["data", "settings.section.data"],
@@ -46,6 +45,8 @@ const SHORTCUTS: [Key, string][] = [
   ["settings.shortcut.settings", "Ctrl 5"],
   ["settings.shortcut.monitor", "Ctrl 6"],
   ["settings.shortcut.discord", "Ctrl 7"],
+  ["settings.shortcut.debug", "Ctrl 8"],
+  ["settings.shortcut.performance", "Ctrl 9"],
   ["settings.shortcut.add", "Ctrl N"],
   ["settings.shortcut.filter", "Ctrl F"],
   ["settings.shortcut.selectAll", "Ctrl A"],
@@ -63,7 +64,7 @@ const cancelled = () => ({ kind: "cancelled", message: "" });
 
 type VaultDialog = "set" | "change" | "remove" | "export";
 
-export function SettingsView({ vault, settings }: { vault: VaultStatus; settings: Settings }) {
+export function SettingsView({ vault, settings, onPerformance }: { vault: VaultStatus; settings: Settings; onPerformance: () => void }) {
   const qc = useQueryClient();
   const set = useSetSettings();
   const master = vault.mode === "master";
@@ -195,11 +196,10 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
             onCommit={(s) => set.mutate({ launchDelayMs: Math.round(s * 1000) })}
           />
         </Row>
-        <Row
-          title={t("settings.minimize")}
-          hint={t("settings.minimizeHint")}
-        >
-          <Switch label={t("settings.minimize")} checked={settings.minimizeOnLaunch} onChange={(minimizeOnLaunch) => set.mutate({ minimizeOnLaunch })} />
+        <Row title={t("settings.performanceMoved")} hint={t("settings.performanceMovedHint")}>
+          <button className="btn" onClick={onPerformance}>
+            {t("settings.openPerformance")}
+          </button>
         </Row>
         <Row title={t("settings.autoRejoin")} hint={t("settings.autoRejoinHint")}>
           <Switch label={t("settings.autoRejoin")} checked={settings.autoRejoin} onChange={(autoRejoin) => set.mutate({ autoRejoin })} />
@@ -284,18 +284,6 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
             onCommit={(launchArgs) => set.mutateAsync({ launchArgs })}
           />
         </Row>
-        <Row
-          title={t("settings.fpsCap")}
-          hint={t("settings.fpsCapHint")}
-        >
-          <NumberField unit={t("settings.unit.fpsOff")} short="FPS" min={0} max={360} value={settings.fpsCap} onCommit={(fpsCap) => set.mutate({ fpsCap })} />
-        </Row>
-        <Row
-          title={t("settings.lowGraphics")}
-          hint={t("settings.lowGraphicsHint")}
-        >
-          <Switch label={t("settings.lowGraphics")} checked={settings.lowGraphics} onChange={(lowGraphics) => set.mutate({ lowGraphics })} />
-        </Row>
         <ClientRow client={client} />
         <Row
           title={t("settings.autoUpdate")}
@@ -303,86 +291,6 @@ export function SettingsView({ vault, settings }: { vault: VaultStatus; settings
         >
           <Switch label={t("settings.autoUpdate")} checked={settings.autoUpdate} onChange={(autoUpdate) => set.mutate({ autoUpdate })} />
         </Row>
-
-        <Heading id="performance">{t("settings.section.performance")}</Heading>
-        <Row
-          title={t("settings.memRestart")}
-          hint={t("settings.memRestartHint")}
-        >
-          <NumberField unit={t("settings.unit.mbOff")} short="MB" min={0} max={65536} value={settings.memRestartMb} onCommit={(memRestartMb) => set.mutate({ memRestartMb })} />
-        </Row>
-        <Row
-          title={t("settings.memThrottle")}
-          hint={t("settings.memThrottleHint")}
-        >
-          <div className="flex flex-wrap items-center gap-3">
-            <NumberField
-              unit={t("settings.unit.mbOff")}
-              short="MB"
-              min={0}
-              max={65536}
-              value={settings.memThrottle.mb}
-              onCommit={(mb) => set.mutate({ memThrottle: { ...settings.memThrottle, mb } })}
-            />
-            <Segmented
-              mono
-              label={t("settings.memThrottleCpu")}
-              value={settings.memThrottle.cpuCap}
-              options={[25, 10, 5, 2].map((c) => ({ value: c, label: t("settings.percent", { n: c }) }))}
-              onChange={(cpuCap) => set.mutate({ memThrottle: { ...settings.memThrottle, cpuCap } })}
-            />
-          </div>
-        </Row>
-        <Row
-          title={t("settings.trim")}
-          hint={t("settings.trimHint")}
-        >
-          <NumberField unit={t("settings.unit.minutesOff")} short={t("settings.unit.min")} min={0} max={1440} value={settings.trimEveryMin} onCommit={(trimEveryMin) => set.mutate({ trimEveryMin })} />
-        </Row>
-        <Row title={t("settings.spread")} hint={t("settings.spreadHint")}>
-          <Switch label={t("settings.spread")} checked={settings.autoSpread} onChange={(autoSpread) => set.mutate({ autoSpread })} />
-        </Row>
-        <Row
-          title={t("settings.adaptive")}
-          hint={t("settings.adaptiveHint")}
-        >
-          <Switch
-            label={t("settings.adaptive")}
-            checked={settings.adaptive.enabled}
-            onChange={(enabled) => set.mutate({ adaptive: { ...settings.adaptive, enabled } })}
-          />
-        </Row>
-        {settings.adaptive.enabled && (
-          <Row title={t("settings.inBackground")} hint={t("settings.adaptiveBgHint")}>
-            <div className="flex flex-wrap items-center gap-3">
-              <Segmented
-                mono
-                label={t("settings.adaptiveBgCpu")}
-                value={settings.adaptive.background.cpuCap ?? 0}
-                options={[0, 50, 25, 10, 5].map((c) => ({ value: c, label: c ? t("settings.percent", { n: c }) : t("common.off") }))}
-                onChange={(c) => set.mutate({ adaptive: { ...settings.adaptive, background: { ...settings.adaptive.background, cpuCap: c || null } } })}
-              />
-              <label className="flex items-center gap-2">
-                <span className="text-xs text-dim">{t("settings.efficiency")}</span>
-                <Switch
-                  label={t("settings.adaptiveBgEco")}
-                  checked={settings.adaptive.background.eco}
-                  onChange={(eco) => set.mutate({ adaptive: { ...settings.adaptive, background: { ...settings.adaptive.background, eco } } })}
-                />
-              </label>
-              <Segmented
-                mono
-                label={t("settings.adaptiveBgTrim")}
-                value={settings.adaptive.background.trimEveryMin ?? -1}
-                options={[-1, 0, 5, 15, 30, 60].map((m) => ({ value: m, label: m < 0 ? t("common.default") : m ? t("settings.minutesShort", { n: m }) : t("common.off") }))}
-                onChange={(m) =>
-                  set.mutate({ adaptive: { ...settings.adaptive, background: { ...settings.adaptive.background, trimEveryMin: m < 0 ? null : m } } })
-                }
-              />
-            </div>
-          </Row>
-        )}
-        <BandwidthRow />
 
         <Heading id="automation">{t("settings.section.automation")}</Heading>
         <Row
@@ -657,7 +565,7 @@ function ImportDialog({ open, path, onClose }: { open: boolean; path: string; on
 }
 
 /** The Roblox bandwidth limit: typed, then applied with admin rights only on the button. */
-function BandwidthRow() {
+export function BandwidthRow() {
   const qc = useQueryClient();
   const status = useQuery({ queryKey: qk.bandwidth, queryFn: api.bandwidthStatus, staleTime: 0 }).data;
   const [text, setText] = useState("");
@@ -798,8 +706,8 @@ function ShutdownRow() {
   );
 }
 
-/** Public networks: launching is refused by default (a master vault locks on joining one);
- * allowing them is confirmed. */
+/** Public networks: allowed by default; turned off, launching is refused there and a master
+ * vault locks on joining one. Allowing them again is confirmed. */
 function PublicNetworkRow({ settings }: { settings: Settings }) {
   const set = useSetSettings();
   const network = useNetwork().data;

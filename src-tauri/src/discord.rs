@@ -209,7 +209,8 @@ pub fn change_of(t: &Transition) -> Option<CrashKind> {
 /// The client got into a game for the first time (pure): not a rejoin, restart or reconnect.
 pub fn launched(t: &Transition) -> bool {
     let (b, a) = (&t.before, &t.after);
-    a.state == InstanceState::InGame
+    t.first_game
+        && a.state == InstanceState::InGame
         && a.rejoins == 0
         && !matches!(b.state, InstanceState::InGame | InstanceState::Disconnected)
 }
@@ -622,7 +623,7 @@ mod tests {
     #[test]
     fn tells_disconnects_hangs_and_crashes_once() {
         use InstanceState::*;
-        let t = |b: Instance, a: Instance| change_of(&Transition { before: b, after: a });
+        let t = |b: Instance, a: Instance| change_of(&Transition { before: b, after: a, first_game: false });
         assert_eq!(t(inst(InGame, None), inst(Disconnected, None)), Some(CrashKind::Disconnect));
         assert_eq!(t(inst(Disconnected, None), inst(Disconnected, Some(HUNG))), Some(CrashKind::Hang));
         assert_eq!(t(inst(InGame, None), inst(InGame, Some(HUNG))), Some(CrashKind::Hang));
@@ -640,7 +641,7 @@ mod tests {
         assert_eq!(t(inst(Disconnected, None), inst(InGame, None)), None, "reconnected");
 
         // Getting into a game is a launch alert, once, and only for the first client.
-        let l = |b: Instance, a: Instance| launched(&Transition { before: b, after: a });
+        let l = |b: Instance, a: Instance| launched(&Transition { before: b, after: a, first_game: true });
         assert!(l(inst(Joining, None), inst(InGame, None)));
         assert!(l(inst(Starting, None), inst(InGame, None)));
         assert!(!l(inst(InGame, None), inst(InGame, Some(HUNG))), "already in game");
@@ -700,6 +701,7 @@ mod tests {
             allow_disconnect: false,
             launch_args: None,
             discord_muted: false,
+            full_quality: false,
             fps_cap: None,
 
         };

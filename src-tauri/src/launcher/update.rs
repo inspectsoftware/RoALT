@@ -106,6 +106,46 @@ pub fn installer_url(version: &str) -> Option<String> {
     is_version(version).then(|| format!("{}{version}-RobloxPlayerInstaller.exe", endpoints::SETUP))
 }
 
+/// A bootstrapper with an older Roblox than the live one closes every client as it updates, so
+/// with clients running a launch through it waits (pure). Anything unknown doesn't hold it up.
+// ponytail: Bloxstrap's optional background updates don't close clients, but only under conditions
+// it decides at launch; such a user is asked to close clients too. Read its settings if they mind.
+fn bootstrapper_would_close(installed: Option<&str>, latest: Option<&str>, running: usize) -> bool {
+    running > 0 && outdated(installed, latest)
+}
+
+/// The live version on this PC's release channel, asked now (a bootstrapper follows the channel);
+/// None when Roblox can't be asked, so nothing is held up on a guess.
+async fn live_version(s: &App) -> Option<String> {
+    let on_channel = match client::channel() {
+        Some(channel) => s.api.client_version_on(&channel).await,
+        None => s.api.client_version().await,
+    };
+    match on_channel {
+        Ok(v) => Some(v),
+        // Unknown to Roblox or closed to this PC: bootstrappers go back to production then.
+        Err(AppError::NotFound | AppError::CookieInvalid | AppError::Roblox(_)) if client::channel().is_some() => s.api.client_version().await.ok(),
+        Err(e) => {
+            log::info!("bootstrapper check: Roblox version unknown: {e}");
+            None
+        }
+    }
+}
+
+/// Why this launch must wait for a bootstrapper's update (`bootstrapper_would_close`), or None.
+/// `closing`: clients about to be closed for it, which don't count as running.
+pub async fn bootstrapper_hold(s: &App, closing: usize) -> Option<String> {
+    let exe = client::find().ok()?;
+    let installed = client::bootstrapper_version(&exe)?;
+    let running = crate::instances::process::roblox_processes().len().saturating_sub(closing);
+    if running == 0 {
+        return None;
+    }
+    let live = live_version(s).await?;
+    bootstrapper_would_close(Some(&installed), Some(&live), running)
+        .then(|| tr!("Roblox has an update, and your bootstrapper (e.g. Bloxstrap) would close every running client to install it. Close your clients first, then launch."))
+}
+
 /// The Roblox client as found now, with the last known live version.
 pub fn client(s: &App) -> RobloxClient {
     let exe = client::find().ok();
@@ -365,6 +405,16 @@ mod tests {
             latest: latest.map(Into::into),
             outdated: outdated(version, latest),
         }
+    }
+
+    #[test]
+    fn holds_a_launch_only_when_a_bootstrapper_would_close_clients() {
+        let (a, b) = ("version-aaaaaaaaaaaaaaaa", "version-bbbbbbbbbbbbbbbb");
+        assert!(bootstrapper_would_close(Some(a), Some(b), 1));
+        assert!(!bootstrapper_would_close(Some(a), Some(b), 0), "nothing to close");
+        assert!(!bootstrapper_would_close(Some(a), Some(a), 3), "up to date");
+        assert!(!bootstrapper_would_close(None, Some(b), 3), "unknown");
+        assert!(!bootstrapper_would_close(Some(a), None, 3), "unknown");
     }
 
     #[test]

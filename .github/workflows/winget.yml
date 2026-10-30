@@ -1,0 +1,24 @@
+name: Winget
+
+# When a release is published, proposes it to the Windows Package Manager. Does nothing until the
+# WINGET_TOKEN secret is set (a GitHub token with public_repo, on an account with a fork of
+# microsoft/winget-pkgs); the first version of inspectsoftware.RoALT must be submitted by hand.
+on:
+  release:
+    types: [released]
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    env:
+      HAS_TOKEN: ${{ secrets.WINGET_TOKEN != '' }}
+    steps:
+      - name: Skipped without WINGET_TOKEN
+        if: env.HAS_TOKEN != 'true'
+        run: echo "WINGET_TOKEN isn't set; not publishing to winget."
+      - uses: vedantmgoyal9/winget-releaser@main
+        if: env.HAS_TOKEN == 'true'
+        with:
+          identifier: inspectsoftware.RoALT
+          installers-regex: 'RoALT-Setup-.*\.exe$'
+          token: ${{ secrets.WINGET_TOKEN }}

@@ -19,4 +19,12 @@ privateMb: number,
 /**
  * Disk and network reads and writes, bytes per second since the previous sample.
  */
-readBps: number | null, writeBps: number | null, };
+readBps: number | null, writeBps: number | null, 
+/**
+ * 3D GPU use, percent of one engine set (None when Windows can't say).
+ */
+gpuPct: number | null, 
+/**
+ * Dedicated GPU memory, MB (None when Windows can't say).
+ */
+gpuMemMb: number | null, };

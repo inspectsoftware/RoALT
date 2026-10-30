@@ -163,6 +163,32 @@ pub fn managed_by_bootstrapper(exe: &ClientExe) -> bool {
     exe.bootstrapper || in_bootstrapper_folder(&exe.path) || handler.is_some_and(|h| !is_player(&h))
 }
 
+/// The Roblox release channel this PC is on; None for the normal one (or a name that can't be
+/// one, it goes into a URL).
+pub fn channel() -> Option<String> {
+    let c = reg_string(HKEY_CURRENT_USER, r"SOFTWARE\ROBLOX Corporation\Environments\RobloxPlayer\Channel", Some("www.roblox.com"))?;
+    let usable = !c.is_empty() && !c.eq_ignore_ascii_case("production") && !c.eq_ignore_ascii_case("live");
+    (usable && c.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')).then_some(c)
+}
+
+/// The Roblox version in a bootstrapper's state file (pure): Bloxstrap's `PlayerState.json` has it
+/// at the top, Fishstrap's `RobloxState.json` under `Player`.
+fn state_version(json: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(json.trim_start_matches('\u{feff}')).ok()?;
+    let version = v.get("VersionGuid").or_else(|| v.get("Player")?.get("VersionGuid"))?;
+    version.as_str().filter(|s| !s.is_empty()).map(str::to_owned)
+}
+
+/// The Roblox version the bootstrapper at `exe` has installed; None when `exe` isn't one or its
+/// state can't be read.
+pub fn bootstrapper_version(exe: &ClientExe) -> Option<String> {
+    if !exe.bootstrapper {
+        return None;
+    }
+    let dir = exe.path.parent()?;
+    ["PlayerState.json", "RobloxState.json"].iter().find_map(|f| state_version(&std::fs::read_to_string(dir.join(f)).ok()?))
+}
+
 fn in_bootstrapper_folder(path: &Path) -> bool {
     path.components().any(|c| ["bloxstrap", "fishstrap"].iter().any(|b| c.as_os_str().eq_ignore_ascii_case(b)))
 }
@@ -172,7 +198,7 @@ fn is_player(path: &Path) -> bool {
 }
 
 /// A `REG_SZ` (or expanded `REG_EXPAND_SZ`) value; `None` names the key's default value.
-fn reg_string(root: HKEY, key: &str, value: Option<&str>) -> Option<String> {
+pub(crate) fn reg_string(root: HKEY, key: &str, value: Option<&str>) -> Option<String> {
     let (key, value) = (HSTRING::from(key), value.map(HSTRING::from));
     let name = value.as_ref().map_or(PCWSTR::null(), |v| PCWSTR(v.as_ptr()));
     let mut len = 0u32;
@@ -194,6 +220,13 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn reads_a_bootstrappers_version() {
+        assert_eq!(state_version(r#"{"VersionGuid":"version-abc"}"#).as_deref(), Some("version-abc"), "Bloxstrap");
+        assert_eq!(state_version(r#"{"Player":{"VersionGuid":"version-abc"},"Studio":{}}"#).as_deref(), Some("version-abc"), "Fishstrap");
+        assert_eq!(state_version(r#"{"VersionGuid":""}"#), None);
+        assert_eq!(state_version("not json"), None);
+    }
     #[test]
     fn handler_command_lines() {
         let exe = |c: &str| handler_exe(c).map(|p| p.to_string_lossy().into_owned());

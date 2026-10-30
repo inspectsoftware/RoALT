@@ -27,6 +27,7 @@ const paths = {
   bell: <><path d="M3 12h10l-1.5-2V6.5a3.5 3.5 0 0 0-7 0V10z" /><path d="M6.5 14h3" /></>,
   play: <path d="M4 2.5l9 5.5-9 5.5z" strokeLinejoin="round" />,
   grid: <><rect x="2" y="2" width="5" height="5" /><rect x="9" y="2" width="5" height="5" /><rect x="2" y="9" width="5" height="5" /><rect x="9" y="9" width="5" height="5" /></>,
+  gauge: <><path d="M2.5 12a5.5 5.5 0 1 1 11 0" /><path d="M8 12l3-4" /></>,
   servers: <><rect x="2" y="2" width="12" height="5" /><rect x="2" y="9" width="12" height="5" /><path d="M5 4.5h1M5 11.5h1" /></>,
   grip: (
     <g fill="currentColor" stroke="none">

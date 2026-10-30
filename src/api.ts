@@ -10,6 +10,8 @@ import type { BandwidthStatus } from "./bindings/BandwidthStatus";
 import type { BulkProgress } from "./bindings/BulkProgress";
 import type { BulkRequest } from "./bindings/BulkRequest";
 import type { ClientMetrics } from "./bindings/ClientMetrics";
+import type { Profile } from "./bindings/Profile";
+import type { ServerVisit } from "./bindings/ServerVisit";
 import type { ConflictPolicy } from "./bindings/ConflictPolicy";
 import type { Crash } from "./bindings/Crash";
 import type { DataDir } from "./bindings/DataDir";
@@ -52,6 +54,8 @@ export type {
 };
 export type { AccountStatus } from "./bindings/AccountStatus";
 export type { Adaptive } from "./bindings/Adaptive";
+export type { Profile } from "./bindings/Profile";
+export type { ServerVisit } from "./bindings/ServerVisit";
 export type { AfkMode } from "./bindings/AfkMode";
 export type { AntiAfk } from "./bindings/AntiAfk";
 export type { BulkItem } from "./bindings/BulkItem";
@@ -182,6 +186,10 @@ export const api = {
   panicKill: () => invoke<MultiInstanceStatus>("panic_kill"),
   /** Clients that crashed, were disconnected or hung, newest first (the last 200). */
   crashesList: () => invoke<Crash[]>("crashes_list"),
+  /** A cleaned report to send when something goes wrong (`diagnostics`). */
+  diagnosticsText: () => invoke<string>("diagnostics_text"),
+  diagnosticsSave: (path: string) => invoke<void>("diagnostics_save", { path }),
+  serverHistory: (accountId: number) => invoke<ServerVisit[]>("server_history", { accountId }),
   /** Opens that crash's client log in the default app. */
   crashOpenLog: (id: number) => invoke<void>("crash_open_log", { id }),
 
@@ -209,6 +217,12 @@ export const api = {
   groupRemove: (id: number) => invoke<void>("group_remove", { id }),
 
   /** Master mode needs the master password (currentPassword); DPAPI mode shows Windows Hello. */
+  /** The current performance settings as a profile (JSON text). */
+  performanceProfile: (previewFps: number) => invoke<string>("performance_profile", { previewFps }),
+  performanceExport: (path: string, previewFps: number) => invoke<void>("performance_export", { path, previewFps }),
+  /** A profile file or text, checked; nothing is saved until it goes through settingsSet. */
+  performanceRead: (path: string) => invoke<Profile>("performance_read", { path }),
+  performanceParse: (text: string) => invoke<Profile>("performance_parse", { text }),
   backupExport: (path: string, password: string, currentPassword?: string, accountIds?: number[]) =>
     invoke<number>("backup_export", { path, password, currentPassword, accountIds }),
   backupImport: (path: string, password: string, onConflict: ConflictPolicy) =>

@@ -65,6 +65,7 @@ let accounts: AccountSummary[] = seed.map(([alias, displayName, username, userId
   launchArgs: null,
   discordMuted: false,
   fpsCap: i === 1 ? 15 : null,
+  fullQuality: false,
 }));
 
 let settings: Settings = {
@@ -75,8 +76,8 @@ let settings: Settings = {
   adaptive: { enabled: false, background: { cpuCap: 25, eco: true, trimEveryMin: null, affinity: null } }, bandwidthKbps: 0,
   antiAfk: { enabled: false, intervalMin: 15, mode: "focus" },
   discord: { crash: true, hang: true, memRestart: true, disconnect: true, restart: true, breaker: true, batchDone: true, launch: false, statusEveryMin: 0 },
-  autoUpdate: false, selfUpdate: true, discordPresence: true, minimizeOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0, lowGraphics: true,
-  allowPublicNetworks: false, language: "",
+  autoUpdate: false, selfUpdate: true, discordPresence: true, minimizeOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0, lowGraphics: true, lighterRendering: true, parkMinimized: false,
+  allowPublicNetworks: true, language: "",
 };
 
 // Outdated, so Settings offers the update and the Launch view warns before a batch.
@@ -121,19 +122,24 @@ function fakeMetrics() {
       privateMb: 900 + 120 * wave(31) + leak,
       readBps: age < 2 ? null : 20_000 + 400_000 * wave(5) * Math.random(),
       writeBps: age < 2 ? null : 5_000 + 60_000 * wave(9),
+      gpuPct: age < 2 ? null : 1 + 6 * wave(11),
+      gpuMemMb: 190 + 40 * wave(29),
     };
   });
 }
 /** Clients whose fake window is minimized (no picture). */
 const minimized = new Set<string>();
 /** A fake 4:3 picture of a client's window: a moving sky over a green baseplate. */
+/** Clients "parked" off-screen (`parkMinimized`): still drawing. */
+const parked = new Set<string>();
 function fakeThumb(i: Instance, w: number) {
   const h = Math.round((w * 3) / 4);
-  const buf = new ArrayBuffer(8 + w * h * 4);
+  const buf = new ArrayBuffer(12 + w * h * 4);
   const head = new DataView(buf);
   head.setUint32(0, w, true);
   head.setUint32(4, h, true);
-  const px = new Uint8ClampedArray(buf, 8);
+  head.setUint32(8, parked.has(i.id) ? 1 : 0, true);
+  const px = new Uint8ClampedArray(buf, 12);
   const shift = (Date.now() / 40 + i.accountId * 60) % w;
   for (let y = 0; y < h; y++)
     for (let x = 0; x < w; x++) {
@@ -178,6 +184,38 @@ function endInstance(id: string, note: string) {
   i.note = note;
   instancesChanged();
 }
+/** The last performance profile "saved" in the preview (performance_export). */
+let lastProfile: string | null = null;
+const PERF_KEYS = ["fpsCap", "lowGraphics", "lighterRendering", "minimizeOnLaunch", "parkMinimized", "memRestartMb", "memThrottle", "trimEveryMin", "autoSpread", "adaptive"] as const;
+
+function perfProfile(previewFps: number) {
+  const s: Record<string, unknown> = {};
+  for (const k of PERF_KEYS) s[k] = settings[k];
+  return JSON.stringify({ format: "roalt-performance", version: 1, exportedAt: Date.now(), settings: { ...s, previewFps } }, null, 2);
+}
+
+/** The profile in `text` as performance_parse returns it, or the error message. */
+function perfParse(text: string): Record<string, unknown> | string {
+  const refused = "This isn't a RoALT performance profile.";
+  let file: { format?: unknown; version?: number; settings?: Record<string, unknown> };
+  try {
+    file = JSON.parse(text);
+  } catch {
+    return refused;
+  }
+  if (file?.format !== "roalt-performance") return refused;
+  if ((file.version ?? 0) > 1) return "This profile was made by a newer RoALT; update RoALT first.";
+  const p = file.settings ?? {};
+  const fps = p.fpsCap as number | undefined;
+  if (fps && (fps < 5 || fps > 360)) return "The FPS cap must be 0 (off) or 5 to 360.";
+  const mem = p.memRestartMb as number | undefined;
+  if (mem && mem < 512) return "The memory limit must be 0 (off) or 512 to 65 536 MB.";
+  const out: Record<string, unknown> = {};
+  for (const k of PERF_KEYS) if (p[k] !== undefined && p[k] !== null) out[k] = p[k];
+  if ([15, 30, 60].includes(p.previewFps as number)) out.previewFps = p.previewFps;
+  return out;
+}
+
 function track(accountId: number, pid: number, target: LaunchTarget, placeId: number | null, viaBootstrapper: boolean, rejoins = 0, fpsCap: number | null = null) {
   // Without the lock a new client replaces the running one, as Roblox does.
   if (!lockHeld) for (const old of instances) endInstance(old.id, "Replaced by another Roblox client");
@@ -257,7 +295,7 @@ function addFake(username: string): AccountSummary {
   const a: AccountSummary = {
     id, userId: 6000000000 + id, username, displayName: username.replace(/_/g, " "), alias: "", notes: "", color: null,
     favourite: false, sortOrder: accounts.length, groupIds: [], status: "valid", statusCheckedAt: Date.now(), createdAt: Date.now(),
-    allowDisconnect: false, launchArgs: null, discordMuted: false, fpsCap: null,
+    allowDisconnect: false, launchArgs: null, discordMuted: false, fpsCap: null, fullQuality: false,
   };
   accounts.push(a);
   changed();
@@ -879,8 +917,9 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "instance_show": {
       const i = instances.find((x) => x.id === args.id && x.state !== "exited");
       if (!i) return fail("notFound", "Not found.");
-      if (args.what === "minimize") minimized.add(i.id);
-      else minimized.delete(i.id);
+      minimized.delete(i.id);
+      parked.delete(i.id);
+      if (args.what === "minimize") (settings.parkMinimized ? parked : minimized).add(i.id);
       return null;
     }
     case "instances_show_all":
@@ -945,6 +984,17 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       instances.forEach((i) => endInstance(i.id, "Closed"));
       retakeLock();
       return multiStatus();
+    case "server_history":
+      return args.accountId === 2
+        ? [
+            { placeId: 1818, jobId: "0d6c3f4e-5b2a-4c1d-9e8f-7a6b5c4d3e2f", private: false, joinedAt: Date.now() - 20 * MIN },
+            { placeId: 1818, jobId: "1e7d4f5a-6c3b-4d2e-8f90-8b7c6d5e4f30", private: true, joinedAt: Date.now() - 180 * MIN },
+          ]
+        : [];
+    case "diagnostics_text":
+      return "RoALT (preview) diagnostics";
+    case "diagnostics_save":
+      return null;
     case "crashes_list":
       return structuredClone(crashes);
     case "crash_open_log":
@@ -1080,6 +1130,17 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       }
       settings = { ...settings, ...args.patch };
       return { ...settings };
+
+    case "performance_profile":
+      return perfProfile(args.previewFps);
+    case "performance_export":
+      lastProfile = perfProfile(args.previewFps);
+      return null;
+    case "performance_read":
+    case "performance_parse": {
+      const r = perfParse(cmd === "performance_parse" ? args.text : lastProfile ?? perfProfile(15));
+      return typeof r === "string" ? fail("invalid", r) : r;
+    }
 
     case "plugin:dialog|save":
       return `C:\\Users\\you\\Documents\\${args.options?.defaultPath ?? "backup.roalt"}`;

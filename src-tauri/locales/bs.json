@@ -215,7 +215,9 @@
   "RoALT can't open its vault on this Windows account ({why}).\n\nIf this data folder came from another PC or Windows account, rename {path} and import a .roalt backup.": "RoALT ne može otvoriti svoj trezor na ovom Windows računu ({why}).\n\nAko je ova mapa podataka s drugog računara ili Windows računa, preimenujte {path} i uvezite .roalt sigurnosnu kopiju.",
   "{why} The panic hotkey is off; change it in Settings, Automation.": "{why} Hitna prečica je isključena; promijenite je u Postavkama, Automatizacija.",
   "RoALT can't open its window ({why}).\n\nIt needs the Microsoft Edge WebView2 Runtime: https://go.microsoft.com/fwlink/p/?LinkId=2124703": "RoALT ne može otvoriti svoj prozor ({why}).\n\nPotreban mu je Microsoft Edge WebView2 Runtime: https://go.microsoft.com/fwlink/p/?LinkId=2124703",
-  "The Roblox bandwidth limit is off: Windows clears it when it restarts. Apply it again in Settings, Performance.": "Ograničenje propusnosti za Roblox je isključeno: Windows ga briše pri ponovnom pokretanju. Primijenite ga ponovo u Postavkama, Performanse.",
+  "The Roblox bandwidth limit is off: Windows clears it when it restarts. Apply it again in the Performance tab.": "Ograničenje propusnosti za Roblox je isključeno: Windows ga briše pri ponovnom pokretanju. Primijenite ga ponovo na kartici Performanse.",
+  "This isn't a RoALT performance profile.": "Ovo nije RoALT profil performansi.",
+  "This profile was made by a newer RoALT; update RoALT first.": "Ovaj profil je napravio noviji RoALT; prvo ažurirajte RoALT.",
   "RoALT can't create its data folder {path}: {why}": "RoALT ne može napraviti svoju mapu podataka {path}: {why}",
   "RoALT failed to start: {why}": "RoALT se nije uspio pokrenuti: {why}",
   "You're on a public network. RoALT doesn't launch there; join a private network, or allow public networks in Settings, Security.": "Na javnoj ste mreži. RoALT tamo ne pokreće klijente; povežite se na privatnu mrežu ili dozvolite javne mreže u Postavkama, Sigurnost.",
@@ -333,5 +335,13 @@
     "one": "{n} alt · igara: {games}",
     "few": "{n} alta · igara: {games}",
     "other": "{n} altova · igara: {games}"
-  }
+  },
+  "Roblox has an update, and your bootstrapper (e.g. Bloxstrap) would close every running client to install it. Close your clients first, then launch.": "Roblox ima ažuriranje, a vaš bootstrapper (npr. Bloxstrap) bi zatvorio sve pokrenute klijente da ga instalira. Prvo zatvorite klijente, pa onda pokrenite.",
+  "A client closed unexpectedly and wasn't relaunched: {rejoin} only covers disconnects. To relaunch crashed clients too, turn on {restart} in Settings.": "Klijent se neočekivano zatvorio i nije ponovo pokrenut: {rejoin} pokriva samo prekide veze. Da se ponovo pokreću i srušeni klijenti, uključite {restart} u Postavkama.",
+  "Auto-rejoin": "Automatsko ponovno pridruživanje",
+  "Auto-restart after a crash": "Automatski restart nakon pada",
+  "Gave up after {minutes} minutes of trying": "Odustalo nakon {minutes} minuta pokušaja",
+  "{name} wasn't rejoined after {minutes} minutes of trying: {why}": "{name} se nije ponovo pridružio nakon {minutes} minuta pokušaja: {why}",
+  "{name} wasn't restarted after {minutes} minutes of trying: {why}": "{name} nije ponovo pokrenut nakon {minutes} minuta pokušaja: {why}",
+  "Waiting to relaunch clients. RoALT keeps trying for up to {minutes} minutes. Last problem: {why}": "Čeka se ponovno pokretanje klijenata. RoALT nastavlja pokušavati do {minutes} minuta. Posljednji problem: {why}"
 }

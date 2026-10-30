@@ -12,4 +12,4 @@ launchArgs?: string, discordMuted?: boolean,
 /**
  * `Some(0)` goes back to the default from Settings; else 5..=360.
  */
-fpsCap?: number, };
+fpsCap?: number, fullQuality?: boolean, };

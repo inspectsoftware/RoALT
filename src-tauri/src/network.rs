@@ -1,6 +1,6 @@
 //! Public-network guard. Windows files every network as Public, Private or Domain (the user
 //! picks it when joining: a café or hotel Wi-Fi is Public). While a connected network with
-//! internet access is Public and `Settings.allow_public_networks` is off:
+//! internet access is Public and `Settings.allow_public_networks` is off (it is on by default):
 //! - launches are refused (`blocked`, checked by `commands::launch_tracked`, so single launches,
 //!   batches, auto-rejoin and the tray alike) and a running batch stops;
 //! - a master-password vault locks (on joining such a network, not again while on it).

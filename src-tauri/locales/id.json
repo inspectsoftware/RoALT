@@ -215,7 +215,9 @@
   "RoALT can't open its vault on this Windows account ({why}).\n\nIf this data folder came from another PC or Windows account, rename {path} and import a .roalt backup.": "RoALT tidak dapat membuka brankasnya di akun Windows ini ({why}).\n\nJika folder data ini berasal dari PC atau akun Windows lain, ganti nama {path} lalu impor cadangan .roalt.",
   "{why} The panic hotkey is off; change it in Settings, Automation.": "{why} Hotkey darurat mati; ubah di Pengaturan, Otomatisasi.",
   "RoALT can't open its window ({why}).\n\nIt needs the Microsoft Edge WebView2 Runtime: https://go.microsoft.com/fwlink/p/?LinkId=2124703": "RoALT tidak dapat membuka jendelanya ({why}).\n\nRoALT memerlukan Microsoft Edge WebView2 Runtime: https://go.microsoft.com/fwlink/p/?LinkId=2124703",
-  "The Roblox bandwidth limit is off: Windows clears it when it restarts. Apply it again in Settings, Performance.": "Batas bandwidth Roblox nonaktif: Windows menghapusnya saat dimulai ulang. Terapkan lagi di Pengaturan, Performa.",
+  "The Roblox bandwidth limit is off: Windows clears it when it restarts. Apply it again in the Performance tab.": "Batas bandwidth Roblox mati: Windows menghapusnya saat dimulai ulang. Terapkan lagi di tab Performa.",
+  "This isn't a RoALT performance profile.": "Ini bukan profil performa RoALT.",
+  "This profile was made by a newer RoALT; update RoALT first.": "Profil ini dibuat oleh RoALT yang lebih baru; perbarui RoALT dulu.",
   "RoALT can't create its data folder {path}: {why}": "RoALT tidak dapat membuat folder datanya {path}: {why}",
   "RoALT failed to start: {why}": "RoALT gagal dimulai: {why}",
   "You're on a public network. RoALT doesn't launch there; join a private network, or allow public networks in Settings, Security.": "Anda berada di jaringan publik. RoALT tidak meluncurkan klien di sana; gabung ke jaringan privat, atau izinkan jaringan publik di Pengaturan, Keamanan.",
@@ -311,5 +313,13 @@
   },
   "{n} alts · {games} games": {
     "other": "{n} alt · {games} game"
-  }
+  },
+  "Roblox has an update, and your bootstrapper (e.g. Bloxstrap) would close every running client to install it. Close your clients first, then launch.": "Roblox punya pembaruan, dan bootstrapper Anda (mis. Bloxstrap) akan menutup semua klien yang berjalan untuk memasangnya. Tutup klien Anda dulu, lalu luncurkan.",
+  "A client closed unexpectedly and wasn't relaunched: {rejoin} only covers disconnects. To relaunch crashed clients too, turn on {restart} in Settings.": "Klien tertutup tiba-tiba dan tidak diluncurkan ulang: {rejoin} hanya mencakup pemutusan koneksi. Untuk meluncurkan ulang klien yang crash juga, aktifkan {restart} di Pengaturan.",
+  "Auto-rejoin": "Gabung ulang otomatis",
+  "Auto-restart after a crash": "Mulai ulang otomatis setelah crash",
+  "Gave up after {minutes} minutes of trying": "Menyerah setelah mencoba {minutes} menit",
+  "{name} wasn't rejoined after {minutes} minutes of trying: {why}": "{name} tidak bergabung ulang setelah mencoba {minutes} menit: {why}",
+  "{name} wasn't restarted after {minutes} minutes of trying: {why}": "{name} tidak dimulai ulang setelah mencoba {minutes} menit: {why}",
+  "Waiting to relaunch clients. RoALT keeps trying for up to {minutes} minutes. Last problem: {why}": "Menunggu untuk meluncurkan ulang klien. RoALT terus mencoba hingga {minutes} menit. Masalah terakhir: {why}"
 }

@@ -34,7 +34,8 @@ export function Avatar({ account, size, url }: { account: AccountSummary; size: 
     <span
       aria-hidden="true"
       className="relative flex-none grid place-content-center font-bold overflow-hidden"
-      style={{ width: size, height: size, background: bg, color: inkOn(bg), fontSize: Math.round(size * 0.36) }}
+      // The colour backs the initials only: a headshot has a transparent background of its own.
+      style={{ width: size, height: size, background: done ? "transparent" : bg, color: inkOn(bg), fontSize: Math.round(size * 0.36) }}
     >
       <span className={done ? "opacity-0" : undefined}>{initials(account)}</span>
       {show && (

@@ -1,8 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { api, asError, type AccountInfo, type AccountPatch, type AccountSummary, type Group, type Presence, type VaultMode } from "../../api";
+import { api, asError, type AccountInfo, type AccountPatch, type AccountSummary, type Group, type Presence, type ServerVisit, type VaultMode } from "../../api";
 import { groupColor, qk, useAccountInfo, useUpdateAccount } from "../../data";
 import { NumberField, Switch, TextField } from "../../ui/controls";
 import { Icon } from "../../ui/Icon";
@@ -185,6 +185,8 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
         </button>
       </Section>
 
+      <ServerHistory accountId={a.id} />
+
       <Section>
         <label className="flex flex-col gap-1.5">
           <span className="label">{t("accounts.detail.alias")}</span>
@@ -288,6 +290,13 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
             <span className="text-xs text-dim">{t("accounts.detail.fpsCapHint")}</span>
           </span>
           <NumberField unit={t("accounts.detail.fpsUnit")} short="FPS" min={0} max={360} value={a.fpsCap ?? 0} onCommit={(fpsCap) => save({ fpsCap })} />
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="flex flex-col gap-0.5">
+            <span>{t("accounts.detail.fullQuality")}</span>
+            <span className="text-xs text-dim">{t("accounts.detail.fullQualityHint")}</span>
+          </span>
+          <Switch label={t("accounts.detail.fullQuality")} checked={a.fullQuality} onChange={(fullQuality) => save({ fullQuality })} />
         </div>
 
       </Section>
@@ -539,6 +548,54 @@ function ActionButton({ icon, label, title, disabled, onClick }: {
       <span className="truncate">{label}</span>
       {icon === "external" && <Icon name="external" size={12} />}
     </button>
+  );
+}
+
+/** The servers this account's clients reached, newest first; a public one can be joined again. */
+function ServerHistory({ accountId }: { accountId: number }) {
+  const servers = useQuery({
+    queryKey: qk.serverHistory(accountId),
+    queryFn: () => api.serverHistory(accountId),
+    staleTime: 0,
+    refetchInterval: 15_000,
+  }).data;
+  if (!servers?.length) return null;
+  return (
+    <Section>
+      <span className="label">{t("accounts.history.title")}</span>
+      <ul className="flex flex-col gap-2">
+        {servers.slice(0, 10).map((v) => (
+          <ServerRow key={`${v.jobId}-${v.joinedAt}`} accountId={accountId} visit={v} />
+        ))}
+      </ul>
+    </Section>
+  );
+}
+
+function ServerRow({ accountId, visit: v }: { accountId: number; visit: ServerVisit }) {
+  const game = useQuery({ queryKey: qk.game(v.placeId), queryFn: () => api.gameInfo(v.placeId) }).data;
+  const [busy, setBusy] = useState(false);
+  const rejoin = () => {
+    setBusy(true);
+    api
+      .launch(accountId, { kind: "server", placeId: v.placeId, jobId: v.jobId })
+      .then(() => toast(t("accounts.history.joining")), toastError)
+      .finally(() => setBusy(false));
+  };
+  return (
+    <li className="flex items-center justify-between gap-2">
+      <span className="flex flex-col gap-0.5 min-w-0">
+        <span className="truncate">{game?.name ?? t("dashboard.place", { id: v.placeId })}</span>
+        <span className="mono text-[11px] text-dim">{ago(v.joinedAt)}</span>
+      </span>
+      {v.private ? (
+        <span className="text-xs text-dim">{t("accounts.history.private")}</span>
+      ) : (
+        <button className="btn btn-sm" onClick={rejoin} disabled={busy}>
+          {t("accounts.history.rejoin")}
+        </button>
+      )}
+    </li>
   );
 }
 

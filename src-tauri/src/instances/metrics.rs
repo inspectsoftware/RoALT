@@ -1,5 +1,5 @@
 //! What each client uses: CPU from `GetProcessTimes` deltas, memory from
-//! `K32GetProcessMemoryInfo`, IO from `GetProcessIoCounters`. Each sample opens a short-lived
+//! `K32GetProcessMemoryInfo`, IO from `GetProcessIoCounters`, GPU from `gpu`. Each sample opens a short-lived
 //! `PROCESS_QUERY_LIMITED_INFORMATION` handle checked against the client's start time; nothing
 //! reads the client's memory (no VM_READ).
 
@@ -13,6 +13,7 @@ use windows::Win32::System::Threading::{
     GetProcessIoCounters, GetProcessTimes, IO_COUNTERS, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
 };
 
+use super::gpu::{Gpu, Usage};
 use super::process::{open, started};
 use crate::model::{ClientMetrics, Limits};
 
@@ -41,11 +42,13 @@ struct Last {
 pub struct Sampler {
     last: Mutex<HashMap<String, Last>>,
     cache: Mutex<Option<(Instant, Vec<ClientMetrics>)>>,
+    /// Opened on the first sample; stays None where Windows has no such counters.
+    gpu: Mutex<Option<Option<Gpu>>>,
 }
 
 impl Sampler {
     pub fn new() -> Sampler {
-        Sampler { last: Mutex::new(HashMap::new()), cache: Mutex::new(None) }
+        Sampler { last: Mutex::new(HashMap::new()), cache: Mutex::new(None), gpu: Mutex::new(None) }
     }
 
     /// Metrics of the running clients (id, pid, start time, limits as `Tracker::clients`);
@@ -64,7 +67,14 @@ impl Sampler {
             .map_or(1, |n| n.get()) as f64;
         let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
         last.retain(|id, _| clients.iter().any(|c| c.0 == *id));
+        let usage = match self.gpu.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(Gpu::open) {
+            Some(g) => g.read(),
+            None => Usage { pct: None, mem_mb: None },
+        };
+        // After the GPU counters, which can take seconds to open: the cache lasts from here.
         let now = Instant::now();
+        // A process using nothing has no counter instance: 0, when the counters answered at all.
+        let of = |m: &Option<HashMap<u32, f64>>, pid: u32| m.as_ref().map(|m| m.get(&pid).copied().unwrap_or(0.0));
         let mut out = Vec::new();
         for (id, pid, t0, _) in clients {
             let Some(r) = read(*pid, *t0) else { continue };
@@ -80,6 +90,8 @@ impl Sampler {
                 private_mb: r.private as f64 / MB,
                 read_bps: rate(|r| r.read),
                 write_bps: rate(|r| r.write),
+                gpu_pct: of(&usage.pct, *pid).map(|p| p.min(100.0)),
+                gpu_mem_mb: of(&usage.mem_mb, *pid),
             });
             last.insert(id.clone(), Last { at: now, t0: *t0, r });
         }

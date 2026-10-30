@@ -25,6 +25,9 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
       tag: ${{ steps.v.outputs.tag }}
+      signed: ${{ env.HAS_SIGNPATH }}
+    env:
+      HAS_SIGNPATH: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v7
       - id: v
@@ -44,6 +47,30 @@ jobs:
         # Installs it, or upgrades a preinstalled older 6.x (the .iss needs 6.6).
         run: choco upgrade innosetup --no-progress -y
       - run: powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1
+      # Optional, until SignPath has approved the project: SIGNPATH_API_TOKEN (secret) and
+      # SIGNPATH_ORGANIZATION_ID (variable). Before the updater's signature, which covers the
+      # installer's exact bytes.
+      - uses: actions/upload-artifact@v7
+        id: unsigned
+        if: env.HAS_SIGNPATH == 'true'
+        with:
+          name: unsigned
+          path: dist-installer/RoALT-Setup-${{ steps.v.outputs.version }}.exe
+          if-no-files-found: error
+      - uses: signpath/github-action-submit-signing-request@v2
+        if: env.HAS_SIGNPATH == 'true'
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: RoALT
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: github-ci
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: dist-signed
+      - name: Use the signed installer
+        if: env.HAS_SIGNPATH == 'true'
+        run: Copy-Item "dist-signed\RoALT-Setup-${{ steps.v.outputs.version }}.exe" dist-installer\ -Force
       - name: Sign the installer for the self-updater
         # The key (a PKCS#8 PEM P-256 private key) reaches Node only through the environment and is
         # never printed. Signed: "RoALT-Setup-<version>.exe\n" then the installer's bytes, so the
@@ -96,12 +123,15 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.windows.outputs.tag }}
           VERSION: ${{ needs.windows.outputs.version }}
+          SIGNED: ${{ needs.windows.outputs.signed }}
         run: |
           sha256sum -- * > SHA256SUMS.txt
           cat SHA256SUMS.txt
           test -s "RoALT-Setup-$VERSION.exe.sig" || { echo "::error::RoALT-Setup-$VERSION.exe.sig is missing"; exit 1; }
+          signing="No Authenticode signature yet: SmartScreen warns."
+          if [ "$SIGNED" = true ]; then signing="Code signed."; fi
           cat > ../notes.md <<EOF
-          No Authenticode signature yet: SmartScreen warns. The SHA-256 sums are below and in SHA256SUMS.txt; RoALT-Setup-$VERSION.exe.sig is the signature RoALT's built-in updater checks before it runs the installer.
+          $signing The SHA-256 sums are below and in SHA256SUMS.txt; RoALT-Setup-$VERSION.exe.sig is the signature RoALT's built-in updater checks before it runs the installer.
 
           - **Windows** 10 1809 or later, or Windows 11, x64: RoALT-Setup-$VERSION.exe. SmartScreen warns on first run: More info → Run anyway.
           - Needs the Microsoft Edge WebView2 Runtime (Windows 11 has it). Setup checks, and offers Microsoft's download when it is missing.

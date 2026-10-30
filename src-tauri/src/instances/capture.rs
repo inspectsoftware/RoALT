@@ -347,9 +347,11 @@ mod tests {
         let Ok(h) = std::env::var("ROALT_TEST_HWND") else { return };
         let hwnd = windows::Win32::Foundation::HWND(h.parse::<isize>().unwrap() as _);
         let mut means = Vec::new();
+        let mut pictures = std::collections::HashSet::new();
         let start = std::time::Instant::now();
         while start.elapsed() < std::time::Duration::from_secs(6) {
             if let Some(t) = picture(hwnd, 480) {
+                pictures.insert(t.rgba.clone());
                 let sum: u64 = t.rgba.chunks(4).map(|p| u64::from(p[0]) + u64::from(p[1]) + u64::from(p[2])).sum();
                 means.push(sum as f64 / 3.0 / (t.rgba.len() / 4) as f64);
             }
@@ -358,7 +360,7 @@ mod tests {
         means.sort_by(f64::total_cmp);
         let median = means[means.len() / 2];
         let flashes = means.iter().filter(|m| **m > median + 60.0).count();
-        println!("FLASHES samples={} median={median:.0} max={:.0} flashes={flashes}", means.len(), means.last().unwrap());
+        println!("FLASHES samples={} different={} median={median:.0} max={:.0} flashes={flashes}", means.len(), pictures.len(), means.last().unwrap());
     }
 
     #[test]

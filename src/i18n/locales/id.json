@@ -449,7 +449,7 @@
   "accounts.add.tabLogin": "Masuk dengan Roblox",
   "accounts.add.tabCookie": "Tempel cookie",
   "accounts.add.tabMany": "Tambah banyak sekaligus",
-  "accounts.add.loginPrivate": "Jendela memakai profil browser privat baru yang dihapus setelahnya. Tutup jendela untuk membatalkan.",
+  "accounts.add.loginPrivate": "Jendela menggunakan profil browser terpisah. Setelah masuk, sesi disimpan terenkripsi di PC ini. Tutup jendela untuk membatalkan.",
   "accounts.add.waiting": "Menunggu Anda selesai masuk…",
   "accounts.add.openSignIn": "Buka login Roblox",
   "accounts.add.manyLabel": "Cookie, satu per baris",
@@ -1143,5 +1143,9 @@
   "settings.tabLayoutTop": "Akun di atas",
   "settings.tabLayoutSide": "Akun di samping",
   "ui.accountsTop": "Pindahkan akun ke atas",
-  "ui.accountsSide": "Pindahkan akun ke samping"
+  "ui.accountsSide": "Pindahkan akun ke samping",
+  "settings.soundEffects": "Efek suara",
+  "settings.soundHint": "Suara lembut untuk klik, sakelar, dan notifikasi.",
+  "settings.soundVolume": "Volume suara",
+  "settings.soundPreview": "Putar suara"
 }

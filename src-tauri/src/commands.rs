@@ -156,7 +156,11 @@ fn normalize_cookie(raw: &str) -> Result<Secret> {
 /// Validates a cookie that is not stored yet and saves it as a new or refreshed account.
 async fn add_account(app: &AppHandle, s: &App, cookie: Secret) -> Result<AccountSummary> {
     let (user, rotated): (AuthenticatedUser, _) = s.api.authenticated_user(0, &cookie).await?;
-    let cookie = rotated.unwrap_or(cookie);
+    store_login(app, s, user, rotated.unwrap_or(cookie))
+}
+
+/// Save only a session already validated by Roblox, without a second network probe.
+fn store_login(app: &AppHandle, s: &App, user: AuthenticatedUser, cookie: Secret) -> Result<AccountSummary> {
     let blob = s.vault.encrypt(&cookie_aad(user.id), cookie.expose().as_bytes())?;
     let id = s.db.upsert_account(&NewAccount {
         user_id: user.id,
@@ -183,8 +187,17 @@ pub async fn account_add_login(app: AppHandle, s: State<'_, App>) -> Result<Acco
     if s.vault.is_locked() {
         return Err(AppError::Locked);
     }
-    let cookie = webview::capture_login(&app, &s.data_dir).await?;
-    add_account(&app, &s, cookie).await
+    let (user, cookie, snapshot) = webview::capture_login(&app, &s.data_dir).await?;
+    let user_id = user.id;
+    let account = store_login(&app, &s, user, cookie)?;
+    // Never overwrite a profile that is currently open for this account.
+    if let Some(_lease) = crate::browser_sessions::Lease::take(user_id)
+        && let Some(snapshot) = snapshot
+        && crate::browser_sessions::store(&app, user_id, &snapshot).is_err()
+    {
+        log::warn!("account added, but its browser session could not be preserved");
+    }
+    Ok(account)
 }
 
 /// The start of every .ROBLOSECURITY value.
@@ -388,7 +401,7 @@ pub fn accounts_reorder(app: AppHandle, s: State<'_, App>, ids: Vec<i64>) -> Res
 pub fn accounts_remove(app: AppHandle, s: State<'_, App>, ids: Vec<i64>) -> Result<()> {
     unlocked(&s)?;
     not_too_many(&ids)?;
-    s.db.remove_accounts(&ids)?;
+    crate::browser_sessions::remove_accounts(&s, &ids)?;
     accounts_changed(&app);
     Ok(())
 }
@@ -703,8 +716,8 @@ pub async fn account_open_session(app: AppHandle, s: State<'_, App>, id: i64) ->
     let name = if a.alias.is_empty() { a.display_name.clone() } else { a.alias.clone() };
     let title = format!("{name} (@{}) — Roblox — RoALT", a.username);
     let (user_id, handle) = (a.user_id, app.clone());
-    webview::open_session(&app, &s.data_dir, &title, cookie, move |last| {
-        let Some(last) = last else { return };
+    webview::open_session(&app, &s.data_dir, &title, user_id, cookie, move |last| {
+        let Some(last) = last else { return false };
         // Runs on a blocking thread before the window is destroyed: finish before the app
         // can exit (closing the last window ends it).
         tauri::async_runtime::block_on(async move {
@@ -712,24 +725,26 @@ pub async fn account_open_session(app: AppHandle, s: State<'_, App>, id: i64) ->
             // The row may have been removed (and its id reused) while the window was open.
             match s.db.account(id) {
                 Ok(a) if a.user_id == user_id => {}
-                Ok(_) | Err(AppError::NotFound) => return,
+                Ok(_) | Err(AppError::NotFound) => return false,
                 Err(e) => {
                     log::debug!("session window for account {id}: could not read the account: {e}");
-                    return;
+                    return false;
                 }
             }
-            match s.api.authenticated_user(0, &last).await {
+            let verified = match s.api.authenticated_user(0, &last).await {
                 Ok((u, rotated)) if u.id == user_id => {
                     s.store_rotated(id, rotated.unwrap_or(last));
                     if let Err(e) = s.db.set_status(id, AccountStatus::Valid, now_ms(), Some(&u.name), Some(&u.display_name)) {
                         log::warn!("could not mark account {id} valid after its session window: {e}");
                     }
+                    true
                 }
-                Ok(_) => log::warn!("session window for account {id} ended signed in as another user; cookie not changed"),
-                Err(e) => log::warn!("session window for account {id} ended with an unusable cookie ({e}); cookie not changed"),
-            }
+                Ok(_) => { log::warn!("session window for account {id} ended signed in as another user; cookie not changed"); false },
+                Err(e) => { log::warn!("session window for account {id} ended with an unusable cookie ({e}); cookie not changed"); false },
+            };
             accounts_changed(&handle);
-        });
+            verified
+        })
     })
     .await
 }

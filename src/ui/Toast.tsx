@@ -1,3 +1,4 @@
+import { playSound, type Sound } from "./sounds";
 import { useSyncExternalStore } from "react";
 import { asError, type ErrorPayload } from "../api";
 import { Icon } from "./Icon";
@@ -25,7 +26,8 @@ function dismiss(id: number) {
 
 /** Shows a short message bottom-right. Callable from anywhere, including outside React. A sticky
  *  one stays until dismissed. */
-export function toast(text: string, tone: Tone = "ok", sticky = false) {
+export function toast(text: string, tone: Tone = "ok", sticky = false, sound?: Sound) {
+  playSound(sound ?? (tone === "error" ? "error" : "success"));
   const id = ++nextId;
   publish([...items.slice(-3), { id, text, tone }]);
   if (!sticky) later(id, tone === "error" ? 7000 : 4000);

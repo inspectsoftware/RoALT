@@ -467,7 +467,7 @@
   "accounts.add.tabLogin": "Roblox ile giriş yap",
   "accounts.add.tabCookie": "Çerez yapıştır",
   "accounts.add.tabMany": "Birden çok ekle",
-  "accounts.add.loginPrivate": "Pencere, sonradan silinen yeni bir gizli tarayıcı profili kullanır. İptal etmek için kapatın.",
+  "accounts.add.loginPrivate": "Pencere ayrı bir tarayıcı profili kullanır. Giriş yaptıktan sonra oturum bu bilgisayarda şifrelenmiş olarak saklanır. İptal etmek için pencereyi kapatın.",
   "accounts.add.waiting": "Oturum açmayı bitirmeniz bekleniyor…",
   "accounts.add.openSignIn": "Roblox oturum açmayı aç",
   "accounts.add.manyLabel": "Çerezler, satır başına bir tane",
@@ -1189,5 +1189,9 @@
   "settings.tabLayoutTop": "Hesaplar üstte",
   "settings.tabLayoutSide": "Hesaplar yanda",
   "ui.accountsTop": "Hesapları üste taşı",
-  "ui.accountsSide": "Hesapları yana taşı"
+  "ui.accountsSide": "Hesapları yana taşı",
+  "settings.soundEffects": "Ses efektleri",
+  "settings.soundHint": "Tıklamalar, anahtarlar ve bildirimler için hafif sesler.",
+  "settings.soundVolume": "Ses düzeyi",
+  "settings.soundPreview": "Sesi çal"
 }

@@ -467,7 +467,7 @@
   "accounts.add.tabLogin": "Logga in med Roblox",
   "accounts.add.tabCookie": "Klistra in en cookie",
   "accounts.add.tabMany": "Lägg till flera samtidigt",
-  "accounts.add.loginPrivate": "Fönstret använder en ny privat webbläsarprofil som raderas efteråt. Stäng det för att avbryta.",
+  "accounts.add.loginPrivate": "Fönstret använder en separat webbläsarprofil. Efter inloggning lagras sessionen krypterad på den här datorn. Stäng fönstret för att avbryta.",
   "accounts.add.waiting": "Väntar på att du loggar in klart…",
   "accounts.add.openSignIn": "Öppna Roblox-inloggning",
   "accounts.add.manyLabel": "Cookies, en per rad",
@@ -1189,5 +1189,9 @@
   "settings.tabLayoutTop": "Konton överst",
   "settings.tabLayoutSide": "Konton vid sidan",
   "ui.accountsTop": "Flytta konton överst",
-  "ui.accountsSide": "Flytta konton till sidan"
+  "ui.accountsSide": "Flytta konton till sidan",
+  "settings.soundEffects": "Ljudeffekter",
+  "settings.soundHint": "Diskreta ljud för klick, reglage och aviseringar.",
+  "settings.soundVolume": "Ljudvolym",
+  "settings.soundPreview": "Spela ljud"
 }

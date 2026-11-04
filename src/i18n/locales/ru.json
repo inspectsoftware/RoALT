@@ -485,7 +485,7 @@
   "accounts.add.tabLogin": "Войти через Roblox",
   "accounts.add.tabCookie": "Вставить куки",
   "accounts.add.tabMany": "Добавить сразу несколько",
-  "accounts.add.loginPrivate": "Окно использует новый приватный профиль браузера, который потом удаляется. Закройте окно, чтобы отменить.",
+  "accounts.add.loginPrivate": "Окно использует отдельный профиль браузера. После входа сеанс хранится на этом ПК в зашифрованном виде. Закройте окно для отмены.",
   "accounts.add.waiting": "Ждём, пока вы завершите вход…",
   "accounts.add.openSignIn": "Открыть вход Roblox",
   "accounts.add.manyLabel": "Cookie, по одному на строку",
@@ -1235,5 +1235,9 @@
   "settings.tabLayoutTop": "Аккаунты сверху",
   "settings.tabLayoutSide": "Аккаунты сбоку",
   "ui.accountsTop": "Переместить аккаунты наверх",
-  "ui.accountsSide": "Переместить аккаунты вбок"
+  "ui.accountsSide": "Переместить аккаунты вбок",
+  "settings.soundEffects": "Звуковые эффекты",
+  "settings.soundHint": "Негромкие звуки нажатий, переключателей и уведомлений.",
+  "settings.soundVolume": "Громкость",
+  "settings.soundPreview": "Прослушать"
 }

@@ -485,7 +485,7 @@
   "accounts.add.tabLogin": "Prijavi se putem Robloxa",
   "accounts.add.tabCookie": "Zalijepi kolačić",
   "accounts.add.tabMany": "Dodaj više odjednom",
-  "accounts.add.loginPrivate": "Prozor koristi novi privatni profil preglednika koji se poslije briše. Zatvorite ga da otkažete.",
+  "accounts.add.loginPrivate": "Prozor koristi zaseban profil preglednika. Nakon prijave, sesija se čuva šifrirana na ovom računaru. Zatvorite prozor za otkazivanje.",
   "accounts.add.waiting": "Čeka se da završite prijavu…",
   "accounts.add.openSignIn": "Otvori Roblox prijavu",
   "accounts.add.manyLabel": "Kolačići, jedan po redu",
@@ -1235,5 +1235,9 @@
   "settings.tabLayoutTop": "Računi gore",
   "settings.tabLayoutSide": "Računi sa strane",
   "ui.accountsTop": "Premjesti račune gore",
-  "ui.accountsSide": "Premjesti račune sa strane"
+  "ui.accountsSide": "Premjesti račune sa strane",
+  "settings.soundEffects": "Zvučni efekti",
+  "settings.soundHint": "Tihi zvukovi za klikove, prekidače i obavijesti.",
+  "settings.soundVolume": "Jačina zvuka",
+  "settings.soundPreview": "Pusti zvuk"
 }

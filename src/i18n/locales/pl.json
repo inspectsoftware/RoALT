@@ -485,7 +485,7 @@
   "accounts.add.tabLogin": "Zaloguj się przez Roblox",
   "accounts.add.tabCookie": "Wklej ciasteczko",
   "accounts.add.tabMany": "Dodaj wiele naraz",
-  "accounts.add.loginPrivate": "Okno używa nowego, prywatnego profilu przeglądarki, który jest potem usuwany. Zamknij je, aby anulować.",
+  "accounts.add.loginPrivate": "Okno używa osobnego profilu przeglądarki. Po zalogowaniu sesja jest przechowywana na tym komputerze w postaci zaszyfrowanej. Zamknij okno, aby anulować.",
   "accounts.add.waiting": "Czekam, aż skończysz logowanie…",
   "accounts.add.openSignIn": "Otwórz logowanie Roblox",
   "accounts.add.manyLabel": "Cookie, jedno na wiersz",
@@ -1235,5 +1235,9 @@
   "settings.tabLayoutTop": "Konta na górze",
   "settings.tabLayoutSide": "Konta z boku",
   "ui.accountsTop": "Przenieś konta na górę",
-  "ui.accountsSide": "Przenieś konta na bok"
+  "ui.accountsSide": "Przenieś konta na bok",
+  "settings.soundEffects": "Efekty dźwiękowe",
+  "settings.soundHint": "Subtelne dźwięki kliknięć, przełączników i powiadomień.",
+  "settings.soundVolume": "Głośność",
+  "settings.soundPreview": "Odtwórz dźwięk"
 }

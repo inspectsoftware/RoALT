@@ -539,7 +539,7 @@
   "accounts.add.tabLogin": "تسجيل الدخول عبر Roblox",
   "accounts.add.tabCookie": "لصق ملف تعريف ارتباط",
   "accounts.add.tabMany": "إضافة عدة حسابات معًا",
-  "accounts.add.loginPrivate": "تستخدم النافذة ملف متصفح خاصًا جديدًا يُحذف بعد ذلك. أغلقها للإلغاء.",
+  "accounts.add.loginPrivate": "تستخدم النافذة ملف متصفح منفصلاً. بعد تسجيل الدخول، تُحفظ جلسته مشفرة على هذا الكمبيوتر. أغلق النافذة للإلغاء.",
   "accounts.add.waiting": "في انتظار إنهاء تسجيل الدخول…",
   "accounts.add.openSignIn": "فتح تسجيل الدخول إلى Roblox",
   "accounts.add.manyLabel": "ملفات تعريف الارتباط، واحد في كل سطر",
@@ -1373,5 +1373,9 @@
   "settings.tabLayoutTop": "الحسابات في الأعلى",
   "settings.tabLayoutSide": "الحسابات على الجانب",
   "ui.accountsTop": "نقل الحسابات إلى الأعلى",
-  "ui.accountsSide": "نقل الحسابات إلى الجانب"
+  "ui.accountsSide": "نقل الحسابات إلى الجانب",
+  "settings.soundEffects": "المؤثرات الصوتية",
+  "settings.soundHint": "أصوات خفيفة للنقرات والمفاتيح والإشعارات.",
+  "settings.soundVolume": "مستوى الصوت",
+  "settings.soundPreview": "تشغيل الصوت"
 }

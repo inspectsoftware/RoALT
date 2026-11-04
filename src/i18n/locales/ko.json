@@ -449,7 +449,7 @@
   "accounts.add.tabLogin": "Roblox로 로그인",
   "accounts.add.tabCookie": "쿠키 붙여넣기",
   "accounts.add.tabMany": "한 번에 여러 개 추가",
-  "accounts.add.loginPrivate": "창은 새 비공개 브라우저 프로필을 쓰고 끝나면 삭제돼요. 취소하려면 창을 닫으세요.",
+  "accounts.add.loginPrivate": "별도의 브라우저 프로필을 사용합니다. 로그인 후 세션은 이 PC에 암호화되어 저장됩니다. 취소하려면 창을 닫으세요.",
   "accounts.add.waiting": "로그인을 마칠 때까지 기다리는 중…",
   "accounts.add.openSignIn": "Roblox 로그인 열기",
   "accounts.add.manyLabel": "쿠키, 한 줄에 하나씩",
@@ -1143,5 +1143,9 @@
   "settings.tabLayoutTop": "계정을 위에",
   "settings.tabLayoutSide": "계정을 옆에",
   "ui.accountsTop": "계정을 위로 이동",
-  "ui.accountsSide": "계정을 옆으로 이동"
+  "ui.accountsSide": "계정을 옆으로 이동",
+  "settings.soundEffects": "효과음",
+  "settings.soundHint": "클릭, 스위치 및 알림에 은은한 소리를 재생합니다.",
+  "settings.soundVolume": "음량",
+  "settings.soundPreview": "소리 재생"
 }

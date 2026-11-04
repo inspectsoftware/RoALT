@@ -9,6 +9,7 @@
     "build": "tsc --noEmit && node scripts/check-i18n.mjs && vite build",
     "i18n:check": "node scripts/check-i18n.mjs",
     "typecheck": "tsc --noEmit",
+    "test:sounds": "node --experimental-strip-types scripts/test-sounds.mjs",
     "tauri": "tauri",
     "bindings": "cargo test --manifest-path src-tauri/Cargo.toml export_bindings"
   },

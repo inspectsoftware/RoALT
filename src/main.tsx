@@ -1,3 +1,4 @@
+import { installSounds } from "./ui/sounds";
 import { Component, StrictMode, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import "@fontsource-variable/geist";
@@ -65,6 +66,8 @@ try {
 if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
   await import("./dev/mockIpc");
 }
+
+installSounds();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

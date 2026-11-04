@@ -1,3 +1,4 @@
+import { playSound, previewSound, setSoundPreferences, useSoundPreferences } from "../../ui/sounds";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { open as openFile, save as saveFile } from "@tauri-apps/plugin-dialog";
@@ -157,6 +158,7 @@ export function SettingsView({ vault, settings, onPerformance, onRecoveryCode }:
             onChange={(theme) => set.mutate({ theme })}
           />
         </Row>
+        <SoundSettings />
         <Row title={t("settings.language")} hint={t("settings.languageHint")}>
           <select
             className="field w-auto"
@@ -1055,5 +1057,24 @@ export function Row({ title, hint, children, last }: { title: ReactNode; hint: R
       </div>
       {children}
     </div>
+  );
+}
+
+/** Sound preferences are local to this installation, like preview frame rate. */
+function SoundSettings() {
+  const sound = useSoundPreferences();
+  return (
+    <Row title={t("settings.soundEffects")} hint={t("settings.soundHint")}>
+      <div className="flex flex-wrap items-center gap-3">
+        <Switch label={t("settings.soundEffects")} checked={sound.enabled} onChange={(enabled) => setSoundPreferences({ enabled })} />
+        <input className="range max-w-32" type="range" min={0} max={100} step={5}
+          aria-label={t("settings.soundVolume")} value={Math.round(sound.volume * 100)} disabled={!sound.enabled}
+          onChange={(e) => setSoundPreferences({ volume: Number(e.target.value) / 100 })}
+          onPointerUp={() => playSound("click")}
+          onKeyUp={(e) => { if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) playSound("click"); }} />
+        <span className="mono text-xs text-dim w-9 text-end">{Math.round(sound.volume * 100)}%</span>
+        <button type="button" className="btn btn-sm" data-sound="off" disabled={!sound.enabled || sound.volume === 0} onClick={previewSound}>{t("settings.soundPreview")}</button>
+      </div>
+    </Row>
   );
 }

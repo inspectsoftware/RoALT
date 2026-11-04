@@ -449,7 +449,7 @@
   "accounts.add.tabLogin": "Đăng nhập bằng Roblox",
   "accounts.add.tabCookie": "Dán cookie",
   "accounts.add.tabMany": "Thêm nhiều cùng lúc",
-  "accounts.add.loginPrivate": "Cửa sổ dùng một hồ sơ trình duyệt riêng tư mới và sẽ bị xóa sau đó. Đóng cửa sổ để hủy.",
+  "accounts.add.loginPrivate": "Cửa sổ dùng hồ sơ trình duyệt riêng. Sau khi đăng nhập, phiên được lưu mã hóa trên PC này. Đóng cửa sổ để hủy.",
   "accounts.add.waiting": "Đang chờ bạn đăng nhập xong…",
   "accounts.add.openSignIn": "Mở đăng nhập Roblox",
   "accounts.add.manyLabel": "Cookie, mỗi dòng một cái",

@@ -467,7 +467,7 @@
   "accounts.add.tabLogin": "Sign in with Roblox",
   "accounts.add.tabCookie": "Paste a cookie",
   "accounts.add.tabMany": "Add many at once",
-  "accounts.add.loginPrivate": "The window uses a fresh private browser profile that is deleted afterwards. Close it to cancel.",
+  "accounts.add.loginPrivate": "The window uses a separate browser profile. After sign-in, its session is kept encrypted on this PC. Close the window to cancel.",
   "accounts.add.waiting": "Waiting for you to finish signing in…",
   "accounts.add.openSignIn": "Open Roblox sign-in",
   "accounts.add.manyLabel": "Cookies, one per line",

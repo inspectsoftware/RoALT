@@ -18,6 +18,7 @@ mod splash;
 mod storage;
 mod tray;
 mod vault;
+mod browser_sessions;
 mod webview;
 
 use std::io::ErrorKind;

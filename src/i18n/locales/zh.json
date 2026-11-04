@@ -449,7 +449,7 @@
   "accounts.add.tabLogin": "通过 Roblox 登录",
   "accounts.add.tabCookie": "粘贴 Cookie",
   "accounts.add.tabMany": "批量添加",
-  "accounts.add.loginPrivate": "窗口使用全新的隐私浏览器配置，用完即删除。关闭窗口即可取消。",
+  "accounts.add.loginPrivate": "此窗口使用独立的浏览器配置。登录后，会话将加密保存在此电脑上。关闭窗口即可取消。",
   "accounts.add.waiting": "正在等待你完成登录…",
   "accounts.add.openSignIn": "打开 Roblox 登录",
   "accounts.add.manyLabel": "Cookie，每行一个",

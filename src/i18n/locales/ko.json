@@ -449,7 +449,7 @@
   "accounts.add.tabLogin": "Roblox로 로그인",
   "accounts.add.tabCookie": "쿠키 붙여넣기",
   "accounts.add.tabMany": "한 번에 여러 개 추가",
-  "accounts.add.loginPrivate": "창은 새 비공개 브라우저 프로필을 쓰고 끝나면 삭제돼요. 취소하려면 창을 닫으세요.",
+  "accounts.add.loginPrivate": "별도의 브라우저 프로필을 사용합니다. 로그인 후 세션은 이 PC에 암호화되어 저장됩니다. 취소하려면 창을 닫으세요.",
   "accounts.add.waiting": "로그인을 마칠 때까지 기다리는 중…",
   "accounts.add.openSignIn": "Roblox 로그인 열기",
   "accounts.add.manyLabel": "쿠키, 한 줄에 하나씩",

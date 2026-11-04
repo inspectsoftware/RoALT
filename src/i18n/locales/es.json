@@ -467,7 +467,7 @@
   "accounts.add.tabLogin": "Iniciar sesión con Roblox",
   "accounts.add.tabCookie": "Pegar una cookie",
   "accounts.add.tabMany": "Agregar varias a la vez",
-  "accounts.add.loginPrivate": "La ventana usa un perfil de navegador privado nuevo que se borra después. Ciérrala para cancelar.",
+  "accounts.add.loginPrivate": "La ventana usa un perfil de navegador separado. Tras iniciar sesión, la sesión se guarda cifrada en este PC. Cierra la ventana para cancelar.",
   "accounts.add.waiting": "Esperando a que termines de iniciar sesión…",
   "accounts.add.openSignIn": "Abrir inicio de sesión de Roblox",
   "accounts.add.manyLabel": "Cookies, una por línea",

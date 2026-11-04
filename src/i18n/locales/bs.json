@@ -485,7 +485,7 @@
   "accounts.add.tabLogin": "Prijavi se putem Robloxa",
   "accounts.add.tabCookie": "Zalijepi kolačić",
   "accounts.add.tabMany": "Dodaj više odjednom",
-  "accounts.add.loginPrivate": "Prozor koristi novi privatni profil preglednika koji se poslije briše. Zatvorite ga da otkažete.",
+  "accounts.add.loginPrivate": "Prozor koristi zaseban profil preglednika. Nakon prijave, sesija se čuva šifrirana na ovom računaru. Zatvorite prozor za otkazivanje.",
   "accounts.add.waiting": "Čeka se da završite prijavu…",
   "accounts.add.openSignIn": "Otvori Roblox prijavu",
   "accounts.add.manyLabel": "Kolačići, jedan po redu",

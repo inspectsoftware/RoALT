@@ -449,7 +449,7 @@
   "accounts.add.tabLogin": "ลงชื่อเข้าใช้ด้วย Roblox",
   "accounts.add.tabCookie": "วางคุกกี้",
   "accounts.add.tabMany": "เพิ่มหลายบัญชีพร้อมกัน",
-  "accounts.add.loginPrivate": "หน้าต่างนี้ใช้โปรไฟล์เบราว์เซอร์ส่วนตัวใหม่ที่จะถูกลบหลังใช้ ปิดหน้าต่างเพื่อยกเลิก",
+  "accounts.add.loginPrivate": "หน้าต่างใช้โปรไฟล์เบราว์เซอร์แยกต่างหาก หลังเข้าสู่ระบบ เซสชันจะถูกเก็บแบบเข้ารหัสบนพีซีนี้ ปิดหน้าต่างเพื่อยกเลิก",
   "accounts.add.waiting": "กำลังรอให้คุณลงชื่อเข้าใช้จนเสร็จ…",
   "accounts.add.openSignIn": "เปิดหน้าลงชื่อเข้าใช้ Roblox",
   "accounts.add.manyLabel": "คุกกี้ บรรทัดละหนึ่งรายการ",

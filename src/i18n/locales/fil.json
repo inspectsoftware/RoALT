@@ -467,7 +467,7 @@
   "accounts.add.tabLogin": "Mag-sign in gamit ang Roblox",
   "accounts.add.tabCookie": "Mag-paste ng cookie",
   "accounts.add.tabMany": "Magdagdag ng marami",
-  "accounts.add.loginPrivate": "Gumagamit ang window ng bagong private browser profile na buburahin pagkatapos. Isara ito para i-cancel.",
+  "accounts.add.loginPrivate": "Gumagamit ang window ng hiwalay na browser profile. Pagkatapos mag-sign in, naka-encrypt na itinatago ang session sa PC na ito. Isara ang window para kanselahin.",
   "accounts.add.waiting": "Hinihintay kang matapos mag-sign in…",
   "accounts.add.openSignIn": "Buksan ang Roblox sign-in",
   "accounts.add.manyLabel": "Cookies, isa kada linya",

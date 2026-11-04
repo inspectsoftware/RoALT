@@ -449,7 +449,7 @@
   "accounts.add.tabLogin": "Roblox でサインイン",
   "accounts.add.tabCookie": "Cookie を貼り付け",
   "accounts.add.tabMany": "まとめて追加",
-  "accounts.add.loginPrivate": "このウィンドウは使用後に削除される新しいプライベートブラウザープロファイルを使います。閉じるとキャンセルされます。",
+  "accounts.add.loginPrivate": "専用のブラウザープロファイルを使用します。ログイン後、セッションはこのPCに暗号化して保存されます。キャンセルするにはウィンドウを閉じてください。",
   "accounts.add.waiting": "サインインの完了を待っています…",
   "accounts.add.openSignIn": "Roblox のサインインを開く",
   "accounts.add.manyLabel": "Cookie (1 行に 1 つ)",

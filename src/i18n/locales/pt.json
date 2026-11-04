@@ -467,7 +467,7 @@
   "accounts.add.tabLogin": "Entrar com o Roblox",
   "accounts.add.tabCookie": "Colar um cookie",
   "accounts.add.tabMany": "Adicionar várias",
-  "accounts.add.loginPrivate": "A janela usa um perfil de navegador privado novo, que é apagado depois. Feche para cancelar.",
+  "accounts.add.loginPrivate": "A janela usa um perfil de navegador separado. Após entrar, a sessão é mantida criptografada neste PC. Feche a janela para cancelar.",
   "accounts.add.waiting": "Esperando você terminar o login…",
   "accounts.add.openSignIn": "Abrir login do Roblox",
   "accounts.add.manyLabel": "Cookies, um por linha",

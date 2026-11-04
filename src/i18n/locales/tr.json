@@ -467,7 +467,7 @@
   "accounts.add.tabLogin": "Roblox ile giriş yap",
   "accounts.add.tabCookie": "Çerez yapıştır",
   "accounts.add.tabMany": "Birden çok ekle",
-  "accounts.add.loginPrivate": "Pencere, sonradan silinen yeni bir gizli tarayıcı profili kullanır. İptal etmek için kapatın.",
+  "accounts.add.loginPrivate": "Pencere ayrı bir tarayıcı profili kullanır. Giriş yaptıktan sonra oturum bu bilgisayarda şifrelenmiş olarak saklanır. İptal etmek için pencereyi kapatın.",
   "accounts.add.waiting": "Oturum açmayı bitirmeniz bekleniyor…",
   "accounts.add.openSignIn": "Roblox oturum açmayı aç",
   "accounts.add.manyLabel": "Çerezler, satır başına bir tane",

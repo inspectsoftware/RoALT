@@ -62,7 +62,7 @@ fn verdict(c: &Ended, has_log: bool, dump: bool, fault: bool) -> String {
         _ if dump || fault => "the client itself crashed: see the crash dump and Windows' record below".to_owned(),
         _ if !has_log => "it ended before writing a log, with no crash recorded: it didn't get to start properly (look at antivirus, a damaged Roblox install or the client's version)".to_owned(),
         _ if early => "it ended early by itself with no crash recorded: something closed it or it closed itself (look at the end of its log, an update or the anti-cheat)".to_owned(),
-        _ => "it ended with no crash recorded: closed by hand, by another program or by itself (Roblox can't tell RoALT which)".to_owned(),
+        _ => "it ended with no crash recorded: closed by hand, by another program or by itself (Roblox can't tell AltDock which)".to_owned(),
     }
 }
 

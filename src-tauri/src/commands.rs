@@ -79,7 +79,7 @@ pub async fn vault_recovery_create(s: State<'_, App>, current_password: String) 
 fn recovery_file_text(code: &str) -> Result<String> {
     let code = crate::vault::master::normalize_code(code).ok_or_else(not_a_code)?;
     Ok(tr!(
-        "RoALT recovery code: {code}\n\nIf you forget your master password, press Forgot password? on the unlock screen and enter this code. \
+        "AltDock recovery code: {code}\n\nIf you forget your master password, press Forgot password? on the unlock screen and enter this code. \
          It works once, for this Windows user on this PC.\n\nAnyone who finds this file on this PC can open your vault. Keep it on a USB stick, \
          a phone or paper.\n",
         code = code.expose()
@@ -314,14 +314,14 @@ pub async fn accounts_import_ram(app: AppHandle, s: State<'_, App>, path: String
     }
     let meta = std::fs::metadata(&path).map_err(|e| {
         log::warn!("could not read RAM file metadata: {e}");
-        AppError::Invalid(tr!("RoALT couldn't read that file."))
+        AppError::Invalid(tr!("AltDock couldn't read that file."))
     })?;
     if meta.len() > 32 * 1024 * 1024 {
         return Err(AppError::Invalid(tr!("That file is too big to be an AccountData.json.")));
     }
     let data = zeroize::Zeroizing::new(std::fs::read(&path).map_err(|e| {
         log::warn!("could not read RAM file: {e}");
-        AppError::Invalid(tr!("RoALT couldn't read that file."))
+        AppError::Invalid(tr!("AltDock couldn't read that file."))
     })?);
     if data.starts_with(RAM_HEADER) {
         return Err(AppError::Invalid(tr!(
@@ -333,7 +333,7 @@ pub async fn accounts_import_ram(app: AppHandle, s: State<'_, App>, path: String
         Err(_) if data.trim_ascii_start().starts_with(b"[") || data.starts_with(b"\xEF\xBB\xBF") => ram_accounts(&data)?,
         Err(_) => {
             return Err(AppError::Invalid(tr!(
-                "RoALT couldn't decrypt this file. It must come from Roblox Account Manager on this PC, signed in as the same Windows user."
+                "AltDock couldn't decrypt this file. It must come from Roblox Account Manager on this PC, signed in as the same Windows user."
             )));
         }
     };
@@ -952,7 +952,7 @@ pub async fn account_open_session(app: AppHandle, s: State<'_, App>, id: i64) ->
     let a = s.db.account(id)?;
     let cookie = stored_cookie(&s, id)?;
     let name = if a.alias.is_empty() { a.display_name.clone() } else { a.alias.clone() };
-    let title = format!("{name} (@{}) — Roblox — RoALT", a.username);
+    let title = format!("{name} (@{}) — Roblox — AltDock", a.username);
     let (user_id, handle) = (a.user_id, app.clone());
     webview::open_session(&app, &s.data_dir, id, &title, cookie, move |last| {
         let Some(last) = last else { return };
@@ -1216,7 +1216,7 @@ pub fn logs_open(app: AppHandle, s: State<'_, App>) -> Result<()> {
 /// The last `lines` lines of `logs/roalt.log` (at most 10 000): the Debug tab's history.
 #[tauri::command]
 pub async fn debug_tail(s: State<'_, App>, lines: u32) -> Result<Vec<String>> {
-    let path = s.data_dir.join("logs").join("roalt.log");
+    let path = s.data_dir.join("logs").join("altdock.log");
     blocking(move || tail(&path, lines.min(10_000) as usize)).await?
 }
 
@@ -1436,7 +1436,7 @@ pub fn shutdown_status(s: State<'_, App>) -> Option<i64> {
 #[tauri::command]
 pub async fn data_dir_move(app: AppHandle, s: State<'_, App>, path: String) -> Result<()> {
     if crate::data_dir_overridden() {
-        return Err(AppError::Invalid(tr!("A test run's data folder (ROALT_DATA_DIR) can't be moved.")));
+        return Err(AppError::Invalid(tr!("A test run's data folder (ALTDOCK_DATA_DIR) can't be moved.")));
     }
     if s.bulk.any_busy() {
         return Err(AppError::Invalid(tr!("Wait for the running launch, batch or auto-rejoin to finish, then move the data folder.")));
@@ -2038,7 +2038,7 @@ pub async fn layout_preview(app: AppHandle, s: State<'_, App>, account_ids: Vec<
     }
     let w = builder
         .initialization_script(format!("window.__ROALT_LAYOUT_PREVIEW__ = {data};"))
-        .title("RoALT")
+        .title("AltDock")
         // The main window's WebView2 profile: none of its own outside RoALT's data folder.
         .data_directory(s.data_dir.join("webview"))
         .decorations(false)
@@ -2281,7 +2281,7 @@ pub fn set_panic_hotkey(app: &AppHandle, old: &str, key: &str) -> Result<()> {
             log::warn!("could not re-register the old panic hotkey; none is bound: {e}");
         }
         log::warn!("could not register the panic hotkey {key}: {e}");
-        return Err(AppError::Invalid(tr!("Windows wouldn't give RoALT {key}: another app probably uses it. Pick another.", key = key)));
+        return Err(AppError::Invalid(tr!("Windows wouldn't give AltDock {key}: another app probably uses it. Pick another.", key = key)));
     }
     Ok(())
 }
@@ -2336,7 +2336,7 @@ fn diagnostics_sources(s: &App) -> Result<crate::diagnostics::Sources> {
     // Whether the lock is held and, when it isn't, why: what multi-instance reports turn on.
     let multi = s.multi.status(v.multi_instance, v.protect_shared_login);
     let head = format!(
-        "RoALT {} on {} {} (build {})\nMulti-instance: {}, lock held: {}{}\nPerformance: {}\n",
+        "AltDock {} on {} {} (build {})\nMulti-instance: {}, lock held: {}{}\nPerformance: {}\n",
         env!("CARGO_PKG_VERSION"),
         reg("ProductName"),
         reg("DisplayVersion"),
@@ -2358,7 +2358,7 @@ fn diagnostics_sources(s: &App) -> Result<crate::diagnostics::Sources> {
         }
     }
     roblox_logs.truncate(5);
-    Ok(crate::diagnostics::Sources { head, roalt_log: s.data_dir.join("logs").join("roalt.log"), roblox_logs, names })
+    Ok(crate::diagnostics::Sources { head, roalt_log: s.data_dir.join("logs").join("altdock.log"), roblox_logs, names })
 }
 
 #[tauri::command]
@@ -2662,7 +2662,7 @@ fn check_backup(p: &backup::BackupPayload) -> Result<()> {
         || p.groups.iter().any(|g| bad(&g.name))
         || p.favourites.iter().any(|f| f.name.is_empty() || bad(&f.name));
     if wrong {
-        return Err(AppError::Invalid(tr!("This isn't a RoALT backup.")));
+        return Err(AppError::Invalid(tr!("This isn't an AltDock backup.")));
     }
     for a in &p.accounts {
         if let Some(args) = &a.launch_args {
@@ -2775,7 +2775,7 @@ pub async fn performance_export(s: State<'_, App>, path: String, preview_fps: Op
 /// through `settings_set`).
 #[tauri::command]
 pub async fn performance_read(s: State<'_, App>, path: String) -> Result<crate::performance::Profile> {
-    let refused = || AppError::Invalid(tr!("This isn't a RoALT performance profile."));
+    let refused = || AppError::Invalid(tr!("This isn't an AltDock performance profile."));
     if std::fs::metadata(&path)?.len() > crate::performance::MAX_BYTES as u64 {
         return Err(refused());
     }

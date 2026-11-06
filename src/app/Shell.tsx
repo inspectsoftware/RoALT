@@ -84,7 +84,7 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
   const viewName = t(VIEW_NAME[view]);
 
   useEffect(() => {
-    document.title = `${viewName} · RoALT`;
+    document.title = `${viewName} · AltDock`;
   }, [viewName]);
 
   // A new account needs its headshot; the backend only asks Roblox for the missing ones.

@@ -87,7 +87,7 @@ struct File {
 }
 
 fn not_a_profile() -> AppError {
-    AppError::Invalid(tr!("This isn't a RoALT performance profile."))
+    AppError::Invalid(tr!("This isn't an AltDock performance profile."))
 }
 
 /// The profile of `v` (pure): every performance setting, plus the preview rate.
@@ -152,7 +152,7 @@ pub fn parse(text: &str, current: &Settings) -> Result<Profile> {
         return Err(not_a_profile());
     }
     if file.version > VERSION {
-        return Err(AppError::Invalid(tr!("This profile was made by a newer RoALT; update RoALT first.")));
+        return Err(AppError::Invalid(tr!("This profile was made by a newer AltDock; update AltDock first.")));
     }
     let mut p = file.settings;
     p.adaptive = p.adaptive.map(without_cores);

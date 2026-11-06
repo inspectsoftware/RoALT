@@ -169,7 +169,7 @@ pub struct Sources {
 }
 
 pub fn report(src: &Sources, max: usize) -> String {
-    let mut sections = vec![("RoALT log".to_owned(), clean_tail(&src.roalt_log, ROALT_LINES, &src.names))];
+    let mut sections = vec![("AltDock log".to_owned(), clean_tail(&src.roalt_log, ROALT_LINES, &src.names))];
     for (n, log) in src.roblox_logs.iter().enumerate() {
         sections.push((format!("Roblox log {}", n + 1), clean_tail(log, ROBLOX_LINES, &src.names)));
     }

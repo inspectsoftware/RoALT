@@ -51,7 +51,7 @@ export function DebugView() {
   };
   const saveReport = async () => {
     try {
-      const path = await saveFile({ defaultPath: `RoALT-diagnostics-${new Date().toISOString().slice(0, 10)}.txt`, filters: [{ name: t("debug.reportFilter"), extensions: ["txt"] }] });
+      const path = await saveFile({ defaultPath: `AltDock-diagnostics-${new Date().toISOString().slice(0, 10)}.txt`, filters: [{ name: t("debug.reportFilter"), extensions: ["txt"] }] });
       if (!path) return;
       await api.diagnosticsSave(path);
       toast(t("debug.reportSaved"));

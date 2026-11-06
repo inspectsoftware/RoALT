@@ -70,6 +70,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "altdock"
+version = "1.0.2"
+dependencies = [
+ "aes-gcm",
+ "argon2",
+ "getrandom 0.4.3",
+ "log",
+ "reqwest",
+ "rusqlite",
+ "rusqlite_migration",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-clipboard-manager",
+ "tauri-plugin-dialog",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-log",
+ "tauri-plugin-opener",
+ "tauri-plugin-single-instance",
+ "tauri-plugin-window-state",
+ "thiserror 2.0.21",
+ "tokio",
+ "ts-rs",
+ "url",
+ "uuid",
+ "webview2-com",
+ "windows",
+ "windows-future",
+ "zeroize",
+]
+
+[[package]]
 name = "android_log-sys"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3613,39 +3646,6 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "roalt"
-version = "1.0.2"
-dependencies = [
- "aes-gcm",
- "argon2",
- "getrandom 0.4.3",
- "log",
- "reqwest",
- "rusqlite",
- "rusqlite_migration",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-clipboard-manager",
- "tauri-plugin-dialog",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-log",
- "tauri-plugin-opener",
- "tauri-plugin-single-instance",
- "tauri-plugin-window-state",
- "thiserror 2.0.21",
- "tokio",
- "ts-rs",
- "url",
- "uuid",
- "webview2-com",
- "windows",
- "windows-future",
- "zeroize",
 ]
 
 [[package]]

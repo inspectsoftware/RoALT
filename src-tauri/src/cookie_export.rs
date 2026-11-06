@@ -14,7 +14,7 @@ use crate::vault::Secret;
 
 pub const DELETE_AFTER: Duration = Duration::from_secs(10 * 60);
 const DIR: &str = "exports";
-const PREFIX: &str = "RoALT-cookies-";
+const PREFIX: &str = "AltDock-cookies-";
 
 /// The files this run wrote and hasn't deleted yet, newest last.
 static EXPORTS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
@@ -131,16 +131,16 @@ mod tests {
 
     #[test]
     fn names_its_files_and_sweeps_only_those() {
-        assert_eq!(file_name((2026, 11, 4, 9, 5, 7)), "RoALT-cookies-20261104-090507.txt");
+        assert_eq!(file_name((2026, 11, 4, 9, 5, 7)), "AltDock-cookies-20261104-090507.txt");
         let d = std::env::temp_dir().join(format!("roalt-export-{}", uuid::Uuid::new_v4()));
         let dir = d.join(DIR);
         std::fs::create_dir_all(&dir).unwrap();
         // A `.txt.tmp` left by a crashed write is swept too; other files are left alone.
         let (ours, tmp, other, note) = (
-            dir.join("RoALT-cookies-20261104-090507.txt"),
-            dir.join("RoALT-cookies-20261104-090508.txt.tmp"),
+            dir.join("AltDock-cookies-20261104-090507.txt"),
+            dir.join("AltDock-cookies-20261104-090508.txt.tmp"),
             dir.join("mine.txt"),
-            dir.join("RoALT-cookies-x.log"),
+            dir.join("AltDock-cookies-x.log"),
         );
         for p in [&ours, &tmp, &other, &note] {
             std::fs::write(p, b"x").unwrap();
@@ -155,7 +155,7 @@ mod tests {
     fn deletes_only_what_it_wrote() {
         let d = std::env::temp_dir().join(format!("roalt-export-{}", uuid::Uuid::new_v4()));
         let path = write(&d, "a:b\r\n").unwrap();
-        let other = d.join(DIR).join("RoALT-cookies-not-ours.txt");
+        let other = d.join(DIR).join("AltDock-cookies-not-ours.txt");
         std::fs::write(&other, b"x").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "a:b\r\n");
         assert_eq!(newest().as_ref(), Some(&path));

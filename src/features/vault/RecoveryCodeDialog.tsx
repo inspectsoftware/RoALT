@@ -40,7 +40,7 @@ export function RecoveryCodeStep({ code, saved, onSaved, refused, onDone }: {
   const copy = () => api.vaultRecoveryCopy(code).then(() => setNote({ ok: true, text: t("vault.recovery.copied"), by: "copy" }), failed);
   async function saveToFile() {
     try {
-      const path = await saveFile({ defaultPath: "RoALT-recovery-code.txt", filters: [{ name: t("vault.recovery.fileFilter"), extensions: ["txt"] }] });
+      const path = await saveFile({ defaultPath: "AltDock-recovery-code.txt", filters: [{ name: t("vault.recovery.fileFilter"), extensions: ["txt"] }] });
       if (!path) return;
       await api.vaultRecoverySave(path, code);
       setNote({ ok: true, text: t("vault.recovery.savedTo"), by: "save" });

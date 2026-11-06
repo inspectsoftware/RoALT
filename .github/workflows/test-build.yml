@@ -1,0 +1,83 @@
+name: Test build
+
+# A quick installer for testing, on every push to the altdock branch: optimised less than a
+# release (no LTO, many codegen units) and with Rust's build cache, so it takes minutes, not 20.
+# A newer push cancels the build still running. The result replaces the draft release
+# "AltDock test build"; real releases still come from the Release workflow.
+
+on:
+  push:
+    branches: [altdock]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-build
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_RELEASE_LTO: "false"
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+  CARGO_PROFILE_RELEASE_OPT_LEVEL: "1"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: v
+        run: |
+          $version = (Get-Content -Raw src-tauri\tauri.conf.json | ConvertFrom-Json).version
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: test-build
+      - name: Inno Setup 6.6+
+        run: choco upgrade innosetup --no-progress -y
+      - run: powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: test-build
+          path: dist-installer/AltDock-Setup-${{ steps.v.outputs.version }}.exe
+          if-no-files-found: error
+
+  draft:
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: test-build
+          path: dist
+      - name: Replace the "AltDock test build" draft
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.windows.outputs.version }}
+        run: |
+          sha256sum -- * > SHA256SUMS.txt
+          short=${GITHUB_SHA::7}
+          cat > ../notes.md <<EOF
+          Test build of commit $short (AltDock $VERSION), less optimised than a release. Not signed: SmartScreen warns on first run (More info → Run anyway).
+
+          ~~~
+          $(cat SHA256SUMS.txt)
+          ~~~
+          EOF
+          gh release delete test-build --yes 2>/dev/null || true
+          gh release create test-build ./* --draft --prerelease --target "$GITHUB_SHA" --title "AltDock test build ($short)" --notes-file ../notes.md

@@ -43,6 +43,10 @@ jobs:
         with:
           node-version: 24
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: release
       - name: Inno Setup 6.6+
         # Installs it, or upgrades a preinstalled older 6.x (the .iss needs 6.6).
         run: choco upgrade innosetup --no-progress -y

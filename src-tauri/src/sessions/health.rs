@@ -6,8 +6,14 @@ use std::path::{Path, PathBuf};
 
 /// `a.b.c.d` from `VS_FIXEDFILEINFO`'s `dwFileVersionMS`/`LS` (pure): the numbers rdpwrap.ini's
 /// sections are named after, not the version string (which may say something else).
+///
+/// Windows hands a program without a Windows 10 `supportedOS` manifest entry 6.2 as the major and
+/// minor version of its own system files (measured: termsrv.dll 10.0.26100.6899 read as
+/// 6.2.26100.6899). Every build from 10240 on is Windows 10 or 11, i.e. 10.0, so that is restored.
 pub fn format_version(ms: u32, ls: u32) -> String {
-    format!("{}.{}.{}.{}", ms >> 16, ms & 0xFFFF, ls >> 16, ls & 0xFFFF)
+    let (major, minor, build) = (ms >> 16, ms & 0xFFFF, ls >> 16);
+    let (major, minor) = if build >= 10240 && major < 10 { (10, 0) } else { (major, minor) };
+    format!("{major}.{minor}.{build}.{}", ls & 0xFFFF)
 }
 
 /// TermService's `ServiceDll` is RDP Wrapper's (pure).
@@ -323,6 +329,8 @@ mod tests {
     fn versions_from_the_numeric_parts() {
         assert_eq!(format_version(10 << 16, (26100 << 16) | 7171), "10.0.26100.7171");
         assert_eq!(format_version((6 << 16) | 3, 9600 << 16), "6.3.9600.0");
+        // The 6.2 Windows reports to programs without a Windows 10 manifest entry.
+        assert_eq!(format_version((6 << 16) | 2, (26100 << 16) | 6899), "10.0.26100.6899");
         assert_eq!(format_version(u32::MAX, u32::MAX), "65535.65535.65535.65535");
     }
 

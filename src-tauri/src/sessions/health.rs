@@ -94,7 +94,7 @@ mod system {
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 
-    use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VS_FIXEDFILEINFO, VerQueryValueW};
+    use windows::Win32::Storage::FileSystem::{FILE_VER_GET_NEUTRAL, GetFileVersionInfoExW, GetFileVersionInfoSizeExW, VS_FIXEDFILEINFO, VerQueryValueW};
     use windows::core::{HSTRING, w};
 
     use super::*;
@@ -102,17 +102,20 @@ mod system {
     use crate::sessions::types::{FixKind, HealthCheck, SessionConfig};
     use crate::sessions::{FIREWALL_RULE, RUN_VALUE, app_exe, creds, firewall, rdp, run_command, users};
 
-    /// A file's numeric version (`a.b.c.d`), from its version resource.
+    /// A file's numeric version (`a.b.c.d`), from the version resource of the file itself
+    /// (`FILE_VER_GET_NEUTRAL`): without it Windows reads the language file (`termsrv.dll.mui`),
+    /// whose version lags the DLL's (measured: 6899 read where RDP Wrapper sees 9549).
     pub fn file_version(path: &Path) -> Option<String> {
         let name = HSTRING::from(path.as_os_str());
-        // SAFETY: `name` is a live NUL-terminated path.
-        let size = unsafe { GetFileVersionInfoSizeW(&name, None) };
+        let mut handle = 0u32;
+        // SAFETY: `name` is a live NUL-terminated path; `handle` outlives the call.
+        let size = unsafe { GetFileVersionInfoSizeExW(FILE_VER_GET_NEUTRAL, &name, &mut handle) };
         if size == 0 {
             return None;
         }
         let mut data = vec![0u8; size as usize];
         // SAFETY: `data` has the `size` bytes the call may write.
-        unsafe { GetFileVersionInfoW(&name, None, size, data.as_mut_ptr().cast()) }.ok()?;
+        unsafe { GetFileVersionInfoExW(FILE_VER_GET_NEUTRAL, &name, None, size, data.as_mut_ptr().cast()) }.ok()?;
         let mut info: *mut core::ffi::c_void = std::ptr::null_mut();
         let mut len = 0u32;
         // SAFETY: `data` holds the version resource; `info` ends up pointing into it.

@@ -38,7 +38,7 @@ pub const INSTALL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 /// Win32 `FILE_SHARE_READ`: others may read (and run) the file, never write or delete it.
 pub(crate) const FILE_SHARE_READ: u32 = 0x1;
 fn bootstrapper() -> String {
-    tr!("A bootstrapper (e.g. Bloxstrap) manages this Roblox install and keeps it up to date; RoALT leaves it alone.")
+    tr!("A bootstrapper (e.g. Bloxstrap) manages this Roblox install and keeps it up to date; AltDock leaves it alone.")
 }
 
 #[derive(Default)]
@@ -205,7 +205,7 @@ fn not_here(s: &App, live: &str) -> bool {
     if crate::instances::process::installer_running() || !not_rolled_out(live, &probe_results(s)) {
         return false;
     }
-    log::info!("Roblox lists {live} as live, but a client RoALT started asking for it got into a game on an older build: not rolled out to this PC yet, launches go on");
+    log::info!("Roblox lists {live} as live, but a client AltDock started asking for it got into a game on an older build: not rolled out to this PC yet, launches go on");
     *lock(&s.update.not_here) = Some((live.to_owned(), unix_now()));
     true
 }

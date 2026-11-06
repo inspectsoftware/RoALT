@@ -1,40 +1,26 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <!-- "Soft depth": a lime square under a tilted tile with a square hole (a nod to Roblox's mark). -->
+  <!-- AltDock: two client windows stacked on a dock bar. Same shapes as `Logo` (src/ui/Icon.tsx),
+       there in an 18-unit box: back window 6,2 10.5x7; front window 1.5,5 10.5x7.5; dock 1.5,14 15x2.5. -->
   <defs>
     <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#16181C"/>
-      <stop offset="1" stop-color="#08090B"/>
+      <stop offset="0" stop-color="#1C2333"/>
+      <stop offset="1" stop-color="#0B0E14"/>
     </linearGradient>
-    <linearGradient id="lime" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#D6FB55"/>
-      <stop offset="1" stop-color="#AEDB1C"/>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5EEAD4"/>
+      <stop offset="1" stop-color="#14B8A6"/>
     </linearGradient>
-    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+    <linearGradient id="window" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#FFFFFF"/>
-      <stop offset="1" stop-color="#D9DCE2"/>
+      <stop offset="1" stop-color="#D5DCE6"/>
     </linearGradient>
     <filter id="lift" x="-30%" y="-30%" width="160%" height="170%">
-      <feDropShadow dx="0" dy="28" stdDeviation="30" flood-color="#000" flood-opacity="0.55"/>
-      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#000" flood-opacity="0.35"/>
-    </filter>
-    <filter id="soft" x="-30%" y="-30%" width="160%" height="170%">
-      <feDropShadow dx="0" dy="16" stdDeviation="22" flood-color="#000" flood-opacity="0.45"/>
-    </filter>
-    <filter id="inset" x="-50%" y="-50%" width="200%" height="200%">
-      <feOffset dx="0" dy="10" in="SourceAlpha" result="o"/>
-      <feGaussianBlur stdDeviation="8" in="o" result="b"/>
-      <feComposite in="SourceAlpha" in2="b" operator="out" result="ring"/>
-      <feFlood flood-color="#000" flood-opacity="0.7"/>
-      <feComposite in2="ring" operator="in" result="shade"/>
-      <feComposite in="shade" in2="SourceGraphic" operator="over"/>
+      <feDropShadow dx="0" dy="20" stdDeviation="24" flood-color="#000" flood-opacity="0.5"/>
     </filter>
   </defs>
   <rect width="1024" height="1024" rx="224" fill="url(#ground)"/>
   <rect x="1" y="1" width="1022" height="1022" rx="223" fill="none" stroke="#FFF" stroke-opacity="0.06" stroke-width="2"/>
-  <rect x="176" y="176" width="440" height="440" rx="44" fill="url(#lime)" filter="url(#soft)"/>
-  <g transform="rotate(15 628 628)" filter="url(#lift)">
-    <rect x="428" y="428" width="400" height="400" rx="44" fill="url(#tile)"/>
-    <rect x="430" y="430" width="396" height="396" rx="42" fill="none" stroke="#FFF" stroke-opacity="0.8" stroke-width="3"/>
-  </g>
-  <rect transform="rotate(15 628 628)" x="568" y="568" width="120" height="120" rx="16" fill="#0A0B0D" filter="url(#inset)"/>
+  <rect x="405" y="263" width="373" height="249" rx="53" fill="url(#accent)"/>
+  <rect x="245" y="370" width="373" height="267" rx="53" fill="url(#window)" filter="url(#lift)"/>
+  <rect x="245" y="690" width="533" height="89" rx="44.5" fill="#E2E8F0" fill-opacity="0.92"/>
 </svg>

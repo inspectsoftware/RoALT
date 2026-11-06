@@ -89,11 +89,6 @@ export function publicBlock(network: { public: boolean } | undefined, settings: 
 /** Home's News: fetched at start, then every 30 minutes while RoALT runs. */
 export const useNews = () => useQuery({ queryKey: qk.news, queryFn: api.news, staleTime: 30 * 60_000, refetchInterval: 30 * 60_000 });
 
-/** How many people use RoALT now, and their accounts playing: pinged every 2 minutes while `enabled` (Settings' onlineCount),
- * also hidden or in the tray, since the ping is what counts this run. */
-export const useOnline = (enabled: boolean) =>
-  useQuery({ queryKey: qk.online, queryFn: api.onlinePing, enabled, staleTime: 2 * 60_000, refetchInterval: 2 * 60_000, refetchIntervalInBackground: true });
-
 /** The Roblox client and its versions; roblox://client replaces it. */
 export const useRobloxClient = () => useQuery({ queryKey: qk.client, queryFn: api.robloxClient });
 

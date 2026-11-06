@@ -89,15 +89,9 @@ let robloxClient: RobloxClient = {
   latest: "version-9ac8595712b447a7",
   outdated: true,
 };
-/** RoALT's self-update: the background check "finds" the next minor version 10 s after start. */
+/** AltDock's self-update is disabled (no update source), as in Rust: nothing is ever found. */
 const APP_VERSION: string = import.meta.env.APP_VERSION;
-const NEXT_VERSION = APP_VERSION.replace(/^(\d+)\.(\d+)\..*$/, (_, a, b) => `${a}.${Number(b) + 1}.0`);
 let appUpdate: string | null = null;
-setTimeout(() => {
-  if (!settings.selfUpdate) return;
-  appUpdate = NEXT_VERSION;
-  void emit("app://update", { current: APP_VERSION, available: appUpdate });
-}, 10_000);
 /** The fake vault's Discord webhook (the real one is encrypted; the UI only ever sees its id's end). */
 /** `roblox_install` runs: launches and a second install are refused, as in Rust. */
 let installing = false;
@@ -212,7 +206,7 @@ function perfProfile(previewFps: number) {
 
 /** The profile in `text` as performance_parse returns it, or the error message. */
 function perfParse(text: string): Record<string, unknown> | string {
-  const refused = "This isn't a RoALT performance profile.";
+  const refused = "This isn't an AltDock performance profile.";
   let file: { format?: unknown; version?: number; settings?: Record<string, unknown> };
   try {
     file = JSON.parse(text);
@@ -220,7 +214,7 @@ function perfParse(text: string): Record<string, unknown> | string {
     return refused;
   }
   if (file?.format !== "roalt-performance") return refused;
-  if ((file.version ?? 0) > 1) return "This profile was made by a newer RoALT; update RoALT first.";
+  if ((file.version ?? 0) > 1) return "This profile was made by a newer AltDock; update AltDock first.";
   const p = file.settings ?? {};
   const fps = p.fpsCap as number | undefined;
   if (fps && (fps < 5 || fps > 360)) return "The FPS cap must be 0 (off) or 5 to 360.";
@@ -271,7 +265,7 @@ function kick(i: Instance) {
     track(a.id, 14000 + Math.floor(Math.random() * 9000), i.target, i.placeId, i.viaBootstrapper, i.rejoins + 1, i.fpsCap);
   }, settings.launchDelayMs);
 }
-// Debug tab: roalt.log as tauri-plugin-log writes it, and a new line every few seconds.
+// Debug tab: altdock.log as tauri-plugin-log writes it, and a new line every few seconds.
 const LEVEL_NAMES = ["", "TRACE", "DEBUG", "INFO", "WARN", "ERROR"];
 const fakeLog: string[] = [];
 function logLine(level: number, target: string, message: string, live = true) {
@@ -281,14 +275,14 @@ function logLine(level: number, target: string, message: string, live = true) {
   if (live) emit("log://log", { level, message: line });
 }
 [
-  [3, "roalt", "multi-instance not active at start: another client holds the singleton"],
-  [4, "roalt::roblox_api", "users.roblox.com/v1/users/authenticated: HTTP 401, code Some((0, 0)): This cookie is not valid or has expired. Sign in again."],
-  [3, "roalt::commands", "account 3 marked Invalid: This cookie is not valid or has expired. Sign in again."],
-  [2, "roalt::instances::tracker", "instance 7f3a: client log not readable: The process cannot access the file"],
-  [5, "roalt", "panic in thread tokio-runtime-worker at src/instances/tracker.rs:612:9: index out of bounds"],
+  [3, "altdock", "multi-instance not active at start: another client holds the singleton"],
+  [4, "altdock::roblox_api", "users.roblox.com/v1/users/authenticated: HTTP 401, code Some((0, 0)): This cookie is not valid or has expired. Sign in again."],
+  [3, "altdock::commands", "account 3 marked Invalid: This cookie is not valid or has expired. Sign in again."],
+  [2, "altdock::instances::tracker", "instance 7f3a: client log not readable: The process cannot access the file"],
+  [5, "altdock", "panic in thread tokio-runtime-worker at src/instances/tracker.rs:612:9: index out of bounds"],
   [4, "roblox", "account 2 instance 7f3a: [FLog::Error] Texture failed to load (x3)"],
 ].forEach(([l, t, m]) => logLine(l as number, t as string, m as string, false));
-setInterval(() => logLine(1 + Math.ceil(Math.random() * 4), "roalt::mock", "periodic mock line"), 4000);
+setInterval(() => logLine(1 + Math.ceil(Math.random() * 4), "altdock::mock", "periodic mock line"), 4000);
 
 setInterval(() => {
   if (!settings.antiAfk.enabled) return;
@@ -535,7 +529,7 @@ const GAMES: Record<number, [name: string, creator: string, universeId: number]>
   7719004215: ["Mega Obby", "ObbyWorks", 2650339475],
 };
 function fakeGame(placeId: number): GameInfo {
-  const [name, creator, universeId] = GAMES[placeId] ?? [`Test Place ${placeId}`, "RoALT Dev", 1_000_000 + (placeId % 9_000_000)];
+  const [name, creator, universeId] = GAMES[placeId] ?? [`Test Place ${placeId}`, "AltDock Dev", 1_000_000 + (placeId % 9_000_000)];
   return {
     placeId, universeId, rootPlaceId: placeId, name, creator, maxPlayers: 12,
     playing: fakeServers(placeId).reduce((n, s) => n + s.playing, 0), visits: (placeId % 997) * 1_000_003,
@@ -814,7 +808,7 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       await reauth(args.password);
       const n = accounts.filter((a) => !args.accountIds || args.accountIds.includes(a.id)).length;
       await sleep(300);
-      return { path: "C:\\Users\\you\\AppData\\Roaming\\RoALT\\exports\\RoALT-cookies-20261104-211500.txt", count: n, skipped: 0, deletesAt: Date.now() + 600_000 };
+      return { path: "C:\\Users\\you\\AppData\\Roaming\\AltDock\\exports\\AltDock-cookies-20261104-211500.txt", count: n, skipped: 0, deletesAt: Date.now() + 600_000 };
     }
     case "cookie_export_delete":
       return 1;
@@ -1178,7 +1172,7 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
           ]
         : [];
     case "diagnostics_text":
-      return "RoALT (preview) diagnostics";
+      return "AltDock (preview) diagnostics";
     case "diagnostics_save":
       return null;
     case "crashes_list":
@@ -1208,32 +1202,28 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "news": {
       await sleep(700);
       const at = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
-      const release = (v: string, hours: number, notes: string) => ({ id: `roalt:${v}`, source: "roalt", title: `RoALT ${v}`, summary: notes, url: `https://github.com/inspectsoftware/RoALT/releases/tag/v${v}`, published: at(hours), version: v });
       const forum = (id: number, title: string, hours: number, summary: string) => ({ id: `devforum:${id}`, source: "devforum", title, summary, url: `https://devforum.roblox.com/t/topic/${id}`, published: at(hours), version: null });
       const month = new Date().toISOString().slice(0, 7);
       return {
         items: [
-          release(NEXT_VERSION, 3, "## New\n- **A redesigned app**: the island, client cards, Home tabs and a searchable Settings.\n- Export cookies from Accounts.\n- Private servers: change their settings, or buy one.\n\n## Fixed\n- Tooltips no longer jump to the corner of the window.\n- Switching to the side layout no longer flashes the tab strip.\n- The Performance icon sits centred.\n\nNo Authenticode signature yet."),
           forum(9001, "Studio MCP Server Updates: Open Cloud Access in Your MCP Client", 5, "Key Takeaways MCP now has full access to Open Cloud; connected agents can help you manage your game beyond building…"),
           forum(9002, "PlayerCharacterDestroyBehavior Will Be Default on November 11", 9, "Hi Creators, What’s Changing We introduced PlayerCharacterDestroyBehavior as an opt-in property almost three years ago…"),
           forum(9003, "Release Notes for 745", 200, ""),
-          release(APP_VERSION, 72, "## Fixes\n- **Anti-AFK now really keeps clients online.**"),
           { id: `newsroom:${month}/the-hollow`, source: "newsroom", title: "The Hollow: New Platform-Wide Survival Event for Halloween", summary: "", url: "https://about.roblox.com/newsroom", published: month, version: null },
         ],
         failed: [],
       };
     }
     case "online_ping":
-      return settings.onlineCount ? { online: 1284, playing: 5120 } : null;
+      return null;
     case "self_update_status":
       return { current: APP_VERSION, available: appUpdate };
     case "self_update_check":
       await sleep(800);
-      appUpdate = NEXT_VERSION;
       return { current: APP_VERSION, available: appUpdate };
     case "self_update_install":
-      if (!appUpdate) return fail("invalid", "RoALT is up to date.");
-      if (batch && !batch.done) return fail("invalid", "Wait for the running launch, batch or auto-rejoin to finish, then update RoALT.");
+      if (!appUpdate) return fail("invalid", "AltDock is up to date.");
+      if (batch && !batch.done) return fail("invalid", "Wait for the running launch, batch or auto-rejoin to finish, then update AltDock.");
       // Downloading, checking, then the installer restarts the app.
       await sleep(2500);
       location.reload();
@@ -1263,7 +1253,7 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       }
     }
     case "data_dir_info":
-      return { path: "C:\\Users\\you\\AppData\\Local\\RoALT", default: true, overridden: false };
+      return { path: "C:\\Users\\you\\AppData\\Local\\AltDock", default: true, overridden: false };
     case "data_dir_open":
     case "logs_open":
       return null;
@@ -1316,7 +1306,7 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "data_dir_move":
       await sleep(1200);
       if (batch && !batch.done) return fail("invalid", MOVE_BUSY);
-      if (/bad/i.test(args.path)) return fail("invalid", "That folder already has a RoALT database. Pick another one.");
+      if (/bad/i.test(args.path)) return fail("invalid", "That folder already has an AltDock database. Pick another one.");
       location.reload();
       return new Promise(() => {});
 
@@ -1372,9 +1362,9 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     }
 
     case "plugin:dialog|save":
-      return `C:\\Users\\you\\Documents\\${args.options?.defaultPath ?? "backup.roalt"}`;
+      return `C:\\Users\\you\\Documents\\${args.options?.defaultPath ?? "backup.altdock"}`;
     case "plugin:dialog|open":
-      return args.options?.directory ? "D:\\RoALT data" : "C:\\Users\\you\\Documents\\RoALT-backup-2026-10-01.roalt";
+      return args.options?.directory ? "D:\\AltDock data" : "C:\\Users\\you\\Documents\\AltDock-backup-2026-10-01.altdock";
     case "plugin:window|is_maximized":
       return false;
     default:

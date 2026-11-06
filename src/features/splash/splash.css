@@ -28,10 +28,10 @@
 .splash .logo svg { position: absolute; inset: 0; }
 .splash .cube {
   position: absolute;
-  left: 6.7px;
-  top: 6.7px;
-  width: 60px;
-  height: 60px;
+  left: 40px;
+  top: 13.3px;
+  width: 70px;
+  height: 46.7px;
   border-radius: 10px;
   background: var(--splash-accent, #f5f5f5);
   animation-name: splash-cube;

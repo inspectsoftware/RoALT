@@ -1,6 +1,6 @@
-//! Home's News tab: RoALT's releases (GitHub), the DevForum's announcements and release notes, and
-//! Roblox's newsroom. Fetched when the UI asks (at start and every 30 min); the sources load side by
-//! side and one that fails is named in `failed` while the others still show. Every link is rebuilt
+//! Home's News tab: the DevForum's announcements and release notes, and Roblox's newsroom (no
+//! release feed: AltDock has none yet, and never asks RoALT's GitHub). Fetched when the UI asks (at
+//! start and every 30 min); the sources load side by side and one that fails is named in `failed` while the others still show. Every link is rebuilt
 //! from an id or slug on the source's own host, so a page can't hand the UI some other address.
 
 use std::time::Duration;
@@ -10,7 +10,6 @@ use serde::Deserialize;
 
 use crate::model::{News, NewsItem, NewsSource};
 
-const RELEASES: &str = "https://api.github.com/repos/inspectsoftware/RoALT/releases?per_page=5";
 const ANNOUNCEMENTS: &str = "https://devforum.roblox.com/c/updates/announcements/36.json";
 const RELEASE_NOTES: &str = "https://devforum.roblox.com/c/updates/release-notes/62.json";
 /// No feed: the page's article cards are read (`newsroom`).
@@ -19,13 +18,11 @@ const NEWSROOM: &str = "https://about.roblox.com/newsroom";
 const MAX_BODY: usize = 3_000_000;
 /// Items kept from each source.
 const PER_SOURCE: usize = 6;
-/// A release's notes, cut beyond this many characters.
-const MAX_NOTES: usize = 20_000;
 
 /// Fetches every source at once; never fails as a whole.
 pub async fn fetch() -> News {
     let http = match reqwest::Client::builder()
-        .user_agent(concat!("RoALT/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("AltDock/", env!("CARGO_PKG_VERSION")))
         .https_only(true)
         .redirect(Policy::none())
         .connect_timeout(Duration::from_secs(10))
@@ -35,10 +32,10 @@ pub async fn fetch() -> News {
         Ok(c) => c,
         Err(e) => {
             log::warn!("news: http client unavailable: {e}");
-            return News { items: vec![], failed: vec![NewsSource::Roalt, NewsSource::Devforum, NewsSource::Newsroom] };
+            return News { items: vec![], failed: vec![NewsSource::Devforum, NewsSource::Newsroom] };
         }
     };
-    let (releases, announcements, notes, newsroom) = tokio::join!(get(&http, RELEASES), get(&http, ANNOUNCEMENTS), get(&http, RELEASE_NOTES), get(&http, NEWSROOM));
+    let (announcements, notes, newsroom) = tokio::join!(get(&http, ANNOUNCEMENTS), get(&http, RELEASE_NOTES), get(&http, NEWSROOM));
     let mut items = Vec::new();
     let mut failed = Vec::new();
     let mut take = |source, got: Option<Vec<NewsItem>>| match got {
@@ -49,7 +46,6 @@ pub async fn fetch() -> News {
             }
         }
     };
-    take(NewsSource::Roalt, releases.as_deref().and_then(parse_releases));
     // One of the two DevForum categories is enough to show the DevForum.
     let forum: Vec<_> = [announcements, notes].iter().flatten().filter_map(|b| parse_devforum(b)).flatten().collect();
     take(NewsSource::Devforum, (!forum.is_empty()).then_some(forum));
@@ -76,48 +72,6 @@ async fn get(http: &reqwest::Client, url: &str) -> Option<String> {
         out.extend_from_slice(&chunk);
     }
     String::from_utf8(out).inspect_err(|_| log::info!("news: {host} sent text that isn't UTF-8")).ok()
-}
-
-#[derive(Deserialize)]
-struct Release {
-    tag_name: String,
-    #[serde(default)]
-    body: Option<String>,
-    published_at: Option<String>,
-    #[serde(default)]
-    draft: bool,
-    #[serde(default)]
-    prerelease: bool,
-}
-
-/// `x.y.z`, digits and dots only.
-fn plain_version(v: &str) -> bool {
-    let parts: Vec<_> = v.split('.').collect();
-    parts.len() == 3 && parts.iter().all(|p| !p.is_empty() && p.len() <= 9 && p.bytes().all(|b| b.is_ascii_digit()))
-}
-
-/// Published releases with a `vX.Y.Z` tag, newest first as GitHub lists them. None when unreadable.
-fn parse_releases(body: &str) -> Option<Vec<NewsItem>> {
-    let list: Vec<Release> = serde_json::from_str(body).inspect_err(|e| log::info!("news: GitHub's answer unreadable: {e}")).ok()?;
-    Some(
-        list.into_iter()
-            .filter(|r| !r.draft && !r.prerelease)
-            .filter_map(|r| {
-                let version = r.tag_name.strip_prefix('v').filter(|v| plain_version(v))?.to_owned();
-                Some(NewsItem {
-                    id: format!("roalt:{version}"),
-                    source: NewsSource::Roalt,
-                    // By the tag, as the update offer names it (a release's name can differ: v0.9.2 is "RoALT 0.9.1a").
-                    title: format!("RoALT {version}"),
-                    summary: r.body.unwrap_or_default().chars().take(MAX_NOTES).collect(),
-                    url: format!("https://github.com/inspectsoftware/RoALT/releases/tag/v{version}"),
-                    published: r.published_at?,
-                    version: Some(version),
-                })
-            })
-            .take(PER_SOURCE)
-            .collect(),
-    )
 }
 
 #[derive(Deserialize)]
@@ -273,27 +227,6 @@ fn entity(name: &str) -> Option<char> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn releases() {
-        let body = r###"[
-            {"tag_name":"v0.10.0","name":"RoALT 0.9.9a","body":"## New\n- Macros","published_at":"2026-11-05T10:00:00Z"},
-            {"tag_name":"v0.9.9","name":"","body":null,"published_at":"2026-11-04T10:00:00Z","draft":true},
-            {"tag_name":"v0.9.8-rc.1","published_at":"2026-11-03T10:00:00Z"},
-            {"tag_name":"v0.9.7","name":"  ","published_at":"2026-11-02T10:00:00Z","prerelease":true},
-            {"tag_name":"0.9.6","published_at":"2026-11-01T10:00:00Z"},
-            {"tag_name":"v0.9.5","published_at":null},
-            {"tag_name":"v0.9.4","name":null,"published_at":"2026-10-30T10:00:00Z"}
-        ]"###;
-        let items = parse_releases(body).unwrap();
-        assert_eq!(items.len(), 2, "drafts, prereleases, odd tags and undated ones are left out");
-        assert_eq!(items[0].title, "RoALT 0.10.0", "by the tag, not the release's name");
-        assert_eq!(items[0].summary, "## New\n- Macros");
-        assert_eq!(items[0].url, "https://github.com/inspectsoftware/RoALT/releases/tag/v0.10.0");
-        assert_eq!(items[0].version.as_deref(), Some("0.10.0"));
-        assert_eq!(items[1].id, "roalt:0.9.4");
-        assert!(parse_releases("<html>").is_none());
-    }
 
     #[test]
     fn devforum() {

@@ -145,7 +145,7 @@ async fn rejoin(app: &AppHandle, r: Rejoin, user_id: Option<i64>) {
             return;
         }
         if say_waiting(Instant::now()) {
-            notice(app, false, tr!("Waiting to relaunch clients. RoALT keeps trying for up to {minutes} minutes. Last problem: {why}", minutes = RETRY_FOR.as_secs() / 60, why = why));
+            notice(app, false, tr!("Waiting to relaunch clients. AltDock keeps trying for up to {minutes} minutes. Last problem: {why}", minutes = RETRY_FOR.as_secs() / 60, why = why));
         }
         wait = retry_wait(tries);
         tries += 1;
@@ -268,8 +268,8 @@ async fn attempt(app: &AppHandle, s: &App, r: &Rejoin, user_id: Option<i64>, kil
                 trn!(n, "Gave up after {n} rejoin", "Gave up after {n} rejoins"),
                 trn!(
                     n,
-                    "{name} wasn't rejoined: it needed {n} rejoin in {minutes} minutes, so RoALT gave up.",
-                    "{name} wasn't rejoined: it needed {n} rejoins in {minutes} minutes, so RoALT gave up.",
+                    "{name} wasn't rejoined: it needed {n} rejoin in {minutes} minutes, so AltDock gave up.",
+                    "{name} wasn't rejoined: it needed {n} rejoins in {minutes} minutes, so AltDock gave up.",
                     name = name,
                     minutes = v.breaker_window_min
                 ),
@@ -279,8 +279,8 @@ async fn attempt(app: &AppHandle, s: &App, r: &Rejoin, user_id: Option<i64>, kil
                 trn!(n, "Gave up after {n} restart", "Gave up after {n} restarts"),
                 trn!(
                     n,
-                    "{name} wasn't restarted: it needed {n} restart in {minutes} minutes, so RoALT gave up.",
-                    "{name} wasn't restarted: it needed {n} restarts in {minutes} minutes, so RoALT gave up.",
+                    "{name} wasn't restarted: it needed {n} restart in {minutes} minutes, so AltDock gave up.",
+                    "{name} wasn't restarted: it needed {n} restarts in {minutes} minutes, so AltDock gave up.",
                     name = name,
                     minutes = v.breaker_window_min
                 ),

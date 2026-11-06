@@ -386,7 +386,7 @@ pub fn reset_followed(pid: u32, t0: u64) {
     let mut inside = BOOL(0);
     // SAFETY: `h` is live; `inside` is a local.
     if unsafe { IsProcessInJob(*h, None, &mut inside) }.is_ok() && inside.as_bool() {
-        log::info!("client {pid} is already in a job: a CPU cap from before RoALT restarted may stay on until it closes");
+        log::info!("client {pid} is already in a job: a CPU cap from before AltDock restarted may stay on until it closes");
     }
 }
 

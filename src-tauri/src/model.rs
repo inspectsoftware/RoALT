@@ -1322,7 +1322,6 @@ pub struct AppUpdate {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub enum NewsSource {
-    Roalt,
     Devforum,
     Newsroom,
 }

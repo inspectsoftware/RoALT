@@ -427,7 +427,7 @@ fn close_in(pid: u32, table: &[Handle], suffix: &str) -> Result<usize> {
             if e.code() == ERROR_ACCESS_DENIED.to_hresult() {
                 AppError::Invalid(elevated())
             } else {
-                AppError::Invalid(tr!("Windows wouldn't let RoALT into Roblox (process {pid}): {why}", pid = pid, why = e.message()))
+                AppError::Invalid(tr!("Windows wouldn't let AltDock into Roblox (process {pid}): {why}", pid = pid, why = e.message()))
             }
         })?;
     let mut closed = 0;
@@ -574,7 +574,7 @@ mod tests {
 
     /// Never the real name: tests must not touch Roblox's singleton.
     fn test_name() -> String {
-        format!("RoALT_test_singleton_{}", uuid::Uuid::new_v4())
+        format!("AltDock_test_singleton_{}", uuid::Uuid::new_v4())
     }
 
     /// What a starting client does: create an event of that name (closed again right away).
@@ -697,7 +697,7 @@ mod tests {
         assert!(m.has_survivors());
         assert_eq!(m.held().as_ref().unwrap().survivors.len(), 1);
         m.adopt(&[(child.id(), t)]);
-        assert!(!m.has_survivors(), "followed again: RoALT's own");
+        assert!(!m.has_survivors(), "followed again: AltDock's own");
         m.held().as_mut().unwrap().survivors = vec![(child.id(), t)];
         child.kill().unwrap();
         child.wait().unwrap();

@@ -66,7 +66,7 @@ pub async fn capture_login(app: &AppHandle, data_dir: &Path) -> Result<Secret> {
     mark_open(&profile);
     // Blank first: the old cookie goes before anything loads from Roblox.
     let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(parse_url("about:blank")?))
-        .title(tr!("Sign in to Roblox — RoALT"))
+        .title(tr!("Sign in to Roblox — AltDock"))
         .inner_size(480.0, 760.0)
         .center()
         .data_directory(profile.clone())

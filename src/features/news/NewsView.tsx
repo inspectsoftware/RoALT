@@ -5,16 +5,12 @@ import { Chip, Skeleton } from "../../ui/Bits";
 import { Button, IconButton } from "../../ui/Button";
 import { toastError } from "../../ui/Toast";
 import { ago } from "../accounts/shared";
-import { useUpdateInstall, useUpdateOffer } from "../settings/UpdateBanner";
 import { markRead, useNewsFeed, type FeedItem } from "./news";
-import { releaseNotes } from "./notes";
 import "./news.css";
 
 type Source = FeedItem["source"];
-const SOURCES: Source[] = ["roalt", "devforum", "newsroom", "client"];
-const LABEL = { roalt: "news.src.roalt", devforum: "news.src.devforum", newsroom: "news.src.newsroom", client: "news.src.client" } as const;
-/** Lines a release shows before "All notes". */
-const SHORT = 6;
+const SOURCES: Source[] = ["devforum", "newsroom", "client"];
+const LABEL = { devforum: "news.src.devforum", newsroom: "news.src.newsroom", client: "news.src.client" } as const;
 const DAY = 24 * 60 * 60_000;
 /** Leaving News marks what it showed as read (`NewsView`). */
 let leaving = 0;
@@ -33,63 +29,6 @@ function open(item: FeedItem) {
   if (item.url) openUrl(item.url).catch(toastError);
 }
 
-/** The newest RoALT release: its notes, and the update when this is the version on offer. */
-function Lead({ item, now }: { item: FeedItem; now: number }) {
-  const offer = useUpdateOffer();
-  const update = useUpdateInstall(offer);
-  const [all, setAll] = useState(false);
-  const sections = releaseNotes(item.summary);
-  const total = sections.reduce((n, s) => n + s.lines.length, 0);
-  let left = all ? Infinity : SHORT;
-  const shown = sections
-    .map((s) => {
-      const lines = s.lines.slice(0, Math.max(0, left));
-      left -= lines.length;
-      return { ...s, lines };
-    })
-    .filter((s) => s.lines.length);
-  return (
-    <article className="panel news-lead" aria-labelledby="news-lead-title">
-      <p className="news-meta">
-        {item.unread && <span className="news-dot" role="img" aria-label={t("news.unread")} />}
-        <b>{t(LABEL.roalt)}</b>
-        <span>{when(item.published, now)}</span>
-      </p>
-      <h2 id="news-lead-title">{item.title}</h2>
-      {shown.length > 0 && (
-        <div className="news-notes">
-          {shown.map((s, i) => (
-            <section key={i}>
-              {s.title && <h3>{s.title}</h3>}
-              <ul>
-                {s.lines.map((l, j) => (
-                  <li key={j}>{l}</li>
-                ))}
-              </ul>
-            </section>
-          ))}
-        </div>
-      )}
-      <div className="flex flex-wrap items-center gap-2">
-        {offer && offer === item.version && (
-          <Button variant="primary" icon="download" busy={update.busy} onClick={update.start}>
-            {t("settings.updateNow")}
-          </Button>
-        )}
-        {total > SHORT && (
-          <Button size="md" aria-expanded={all} onClick={() => setAll((a) => !a)}>
-            {all ? t("news.fewerNotes") : t("news.allNotes")}
-          </Button>
-        )}
-        <Button size="md" variant="ghost" iconEnd="external" onClick={() => open(item)}>
-          {t("news.releasePage")}
-        </Button>
-      </div>
-      {update.dialog}
-    </article>
-  );
-}
-
 function Row({ item, now }: { item: FeedItem; now: number }) {
   const body = (
     <>
@@ -104,7 +43,7 @@ function Row({ item, now }: { item: FeedItem; now: number }) {
       </span>
     </>
   );
-  // The client update has nowhere to go: RoALT already uses it.
+  // The client update has nowhere to go: AltDock already uses it.
   if (!item.url) return <div className="news-row" data-unread={item.unread || undefined}>{body}</div>;
   return (
     <button type="button" className="news-row" data-unread={item.unread || undefined} data-tip={t("news.open")} onClick={() => open(item)}>
@@ -113,7 +52,7 @@ function Row({ item, now }: { item: FeedItem; now: number }) {
   );
 }
 
-/** Home's News tab: RoALT's newest release up front, then everything, newest first, by source.
+/** Home's News tab: everything, newest first, by source (no release feed of AltDock's own yet).
  * Leaving it marks what it showed as read. */
 export function NewsView() {
   const { items, unread, failed, query } = useNewsFeed();
@@ -130,8 +69,7 @@ export function NewsView() {
     };
   }, []);
 
-  const lead = items.find((i) => i.source === "roalt");
-  const feed = items.filter((i) => i !== lead && (filter === "all" || i.source === filter));
+  const feed = items.filter((i) => filter === "all" || i.source === filter);
   const count = (s: Source | "all") => items.filter((i) => i.unread && (s === "all" || i.source === s)).length || undefined;
   const sources = SOURCES.filter((s) => items.some((i) => i.source === s));
   const down = failed.map((s) => t(LABEL[s]));
@@ -159,7 +97,6 @@ export function NewsView() {
         </div>
       )}
       <div className="news-grid">
-        {lead ? <Lead item={lead} now={now} /> : query.isPending && <div className="panel news-lead"><Skeleton width="40%" height={32} /><Skeleton width="90%" /><Skeleton width="75%" /></div>}
         <div className="panel news-feed">
           {sources.length > 1 && (
             <div className="news-filters" role="group" aria-label={t("news.sources")}>

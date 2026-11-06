@@ -1,4 +1,3 @@
-import { useId } from "react";
 import { isRtl } from "../i18n";
 
 // 16px outline icons: 1.5px strokes with round caps and joins, one consistent set. Dots are drawn as
@@ -126,18 +125,13 @@ export function CaptionGlyph({ name }: { name: "minimize" | "maximize" | "restor
   );
 }
 
-/** The RoALT mark: an accent square under the tilted tile (src-tauri/icons/app-icon.svg). */
+/** The AltDock mark: an accent window behind a second one, on a dock bar (src-tauri/icons/app-icon.svg). */
 export function Logo({ size = 18 }: { size?: number }) {
-  const hole = useId();
   return (
     <svg width={size} height={size} viewBox="0 0 18 18" aria-hidden="true">
-      <rect x="1" y="1" width="9" height="9" rx="1.6" fill="var(--accent)" />
-      <mask id={hole}>
-        <rect width="18" height="18" fill="#fff" />
-        {/* In the tile's own (rotated) space. */}
-        <rect x="10.3" y="10.3" width="2.4" height="2.4" rx="0.5" fill="#000" />
-      </mask>
-      <rect transform="rotate(15 11.5 11.5)" x="7.5" y="7.5" width="8" height="8" rx="1.6" fill="var(--fg-3)" mask={`url(#${hole})`} />
+      <rect x="6" y="2" width="10.5" height="7" rx="1.5" fill="var(--accent)" />
+      <rect x="1.5" y="5" width="10.5" height="7.5" rx="1.5" fill="var(--fg-3)" />
+      <rect x="1.5" y="14" width="15" height="2.5" rx="1.25" fill="var(--fg-3)" />
     </svg>
   );
 }

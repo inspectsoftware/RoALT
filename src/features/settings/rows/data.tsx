@@ -17,7 +17,7 @@ import { ActionButton } from "../kit/ActionButton";
 import { useRow } from "../kit/rowError";
 import { SettingRow } from "../kit/SettingRow";
 
-const backupFilter = () => [{ name: t("settings.backupFilter"), extensions: ["roalt"] }];
+const backupFilter = () => [{ name: t("settings.backupFilter"), extensions: ["altdock", "roalt"] }];
 
 /** Open the folder or RoALT's own logs; move it elsewhere (confirmed: RoALT restarts to use it).
  * There is no Move while ROALT_DATA_DIR decides the folder. */
@@ -192,7 +192,7 @@ function BackupActions() {
         nextLabel={t("settings.backupPassword")}
         onSubmit={async ({ current, next }) => {
           const date = new Date().toISOString().slice(0, 10);
-          const path = await saveFile({ defaultPath: `RoALT-backup-${date}.roalt`, filters: backupFilter() });
+          const path = await saveFile({ defaultPath: `AltDock-backup-${date}.altdock`, filters: backupFilter() });
           // No file picked: the dialog stays, quietly.
           if (!path) throw { kind: "cancelled", message: "" };
           row.setResult(t("settings.exported", { count: await api.backupExport(path, next, master ? current : undefined) }));

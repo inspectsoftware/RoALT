@@ -99,12 +99,12 @@ pub struct Location {
 
 /// `%LOCALAPPDATA%\RoALT`: the data folder unless moved, and where location.json lives.
 pub fn default_dir() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join("RoALT")
+    std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join("AltDock")
 }
 
 /// A test run (`ROALT_DATA_DIR`): its data folder can't be moved.
 pub fn data_dir_overridden() -> bool {
-    std::env::var_os("ROALT_DATA_DIR").is_some()
+    std::env::var_os("ALTDOCK_DATA_DIR").is_some()
 }
 
 /// `ROALT_DATA_DIR` (test runs), else the folder `%LOCALAPPDATA%\RoALT\location.json` names
@@ -112,7 +112,7 @@ pub fn data_dir_overridden() -> bool {
 /// (`movedFrom`): `init` deletes its database files once the new database has opened, then
 /// drops `movedFrom`. Err: the moved folder isn't available (a message for `fatal`).
 fn data_dir() -> std::result::Result<(PathBuf, Option<PathBuf>), String> {
-    if let Some(d) = std::env::var_os("ROALT_DATA_DIR") {
+    if let Some(d) = std::env::var_os("ALTDOCK_DATA_DIR") {
         return Ok((d.into(), None));
     }
     let default = default_dir();
@@ -132,7 +132,7 @@ fn chosen_dir(default: PathBuf, json: Option<&str>) -> std::result::Result<(Path
                 Ok((default, None))
             } else {
                 Err(tr!(
-                    "RoALT's data folder {folder} isn't available (no {db}). Connect that drive and start RoALT again, \
+                    "AltDock's data folder {folder} isn't available (no {db}). Connect that drive and start AltDock again, \
                      or delete {location} to start fresh in the default folder.",
                     folder = l.data_dir.display(),
                     db = DB_FILE,
@@ -178,17 +178,17 @@ pub fn move_target(current: &Path, path: &str) -> Result<PathBuf> {
     let refuse = |why: String| Err(AppError::Invalid(why));
     let path = Path::new(path.trim());
     if !path.is_absolute() {
-        return refuse(tr!("Pick a full folder path, like D:\\RoALT."));
+        return refuse(tr!("Pick a full folder path, like D:\\AltDock."));
     }
     let target = std::path::absolute(path)?;
     if same_dir(&target, current) {
-        return refuse(tr!("RoALT already keeps its data there."));
+        return refuse(tr!("AltDock already keeps its data there."));
     }
     if path_key(&target).starts_with(&path_key(current)) {
         return refuse(tr!("Pick a folder outside the current data folder."));
     }
     if DB_FILES.iter().any(|f| target.join(f).exists()) {
-        return refuse(tr!("That folder already has a RoALT database. Pick another one."));
+        return refuse(tr!("That folder already has an AltDock database. Pick another one."));
     }
     Ok(target)
 }
@@ -230,7 +230,7 @@ fn main_window(app: &TauriApp, data_dir: &Path, skip_splash: bool) -> tauri::Res
     let bg = Color(10, 10, 10, 255);
 
     let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-        .title("RoALT")
+        .title("AltDock")
         .inner_size(splash::DEFAULT.0, splash::DEFAULT.1)
         // The minimum size is set once the splash has grown (`splash`); shown by it too.
         .visible(false)
@@ -255,7 +255,7 @@ fn main_window(app: &TauriApp, data_dir: &Path, skip_splash: bool) -> tauri::Res
 /// on the UI's WebView2 profile passes the same (WebView2 refuses a second set of options).
 pub(crate) fn cdp_args() -> Option<String> {
     #[cfg(debug_assertions)]
-    if let Ok(port) = std::env::var("ROALT_CDP_PORT") {
+    if let Ok(port) = std::env::var("ALTDOCK_CDP_PORT") {
         return Some(format!("--remote-debugging-port={port} --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"));
     }
     None
@@ -344,12 +344,12 @@ fn fatal(message: &str) -> ! {
     log::error!("{message}");
     // Before the log plugin exists `log::error!` goes nowhere, so append the line directly.
     if let Some(dir) = LOG_DIR.get()
-        && let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("roalt.log"))
+        && let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("altdock.log"))
     {
         let _ = writeln!(f, "[fatal] {message}");
     }
     // SAFETY: a plain modal message box with no owner window.
-    unsafe { MessageBoxW(None, &windows::core::HSTRING::from(message), windows::core::w!("RoALT"), MB_ICONERROR | MB_OK) };
+    unsafe { MessageBoxW(None, &windows::core::HSTRING::from(message), windows::core::w!("AltDock"), MB_ICONERROR | MB_OK) };
     std::process::exit(1)
 }
 
@@ -376,7 +376,7 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
     webview::sweep_dirty_profiles(data_dir);
     cookie_export::sweep(data_dir);
     let db_path = data_dir.join(DB_FILE);
-    let db = storage::Db::open(&db_path).map_err(|e| tr!("RoALT can't open its database {path}: {why}", path = db_path.display(), why = e.message()))?;
+    let db = storage::Db::open(&db_path).map_err(|e| tr!("AltDock can't open its database {path}: {why}", path = db_path.display(), why = e.message()))?;
     // Not on a read error: every profile would look orphaned.
     if let Ok(accounts) = db.accounts() {
         webview::sweep_orphan_profiles(data_dir, &accounts.iter().map(|a| a.id).collect::<Vec<_>>());
@@ -387,8 +387,8 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
     let vault = match record {
         Some(rec) => vault::Vault::open(&rec).map_err(|e| {
             tr!(
-                "RoALT can't open its vault on this Windows account ({why}).\n\nIf this data folder came from another PC or \
-                 Windows account, rename {path} and import a .roalt backup.",
+                "AltDock can't open its vault on this Windows account ({why}).\n\nIf this data folder came from another PC or \
+                 Windows account, rename {path} and import a .altdock backup.",
                 why = e.message(),
                 path = db_path.display()
             )
@@ -455,7 +455,7 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
     app.manage(splash::Pending::default());
     main_window(app, data_dir, settings.skip_splash).map_err(|e| {
         tr!(
-            "RoALT can't open its window ({why}).\n\nIf this PC was very busy, start RoALT again. Otherwise it needs the Microsoft Edge WebView2 Runtime: \
+            "AltDock can't open its window ({why}).\n\nIf this PC was very busy, start AltDock again. Otherwise it needs the Microsoft Edge WebView2 Runtime: \
              https://go.microsoft.com/fwlink/p/?LinkId=2124703",
             why = e
         )
@@ -518,7 +518,7 @@ fn main() {
     i18n::set("");
     let (data_dir, moved_from) = data_dir().unwrap_or_else(|e| fatal(&e));
     if let Err(e) = std::fs::create_dir_all(&data_dir) {
-        fatal(&tr!("RoALT can't create its data folder {path}: {why}", path = data_dir.display(), why = e));
+        fatal(&tr!("AltDock can't create its data folder {path}: {why}", path = data_dir.display(), why = e));
     }
     let log_dir = data_dir.join("logs");
     let _ = std::fs::create_dir_all(&log_dir);
@@ -530,12 +530,12 @@ fn main() {
         .plugin(
             tauri_plugin_log::Builder::new()
                 .clear_targets()
-                .target(Target::new(TargetKind::Folder { path: log_dir, file_name: Some("roalt".into()) }))
+                .target(Target::new(TargetKind::Folder { path: log_dir, file_name: Some("altdock".into()) }))
                 // The Debug tab (`log://log` events); its history comes from `commands::debug_tail`.
                 .target(Target::new(TargetKind::Webview))
                 .level(log::LevelFilter::Info)
-                .level_for("roalt", log::LevelFilter::Debug)
-                // roalt.log plus the 4 before it, 5 MB each.
+                .level_for("altdock", log::LevelFilter::Debug)
+                // altdock.log plus the 4 before it, 5 MB each.
                 .max_file_size(5 << 20)
                 .rotation_strategy(RotationStrategy::KeepSome(5))
                 .build(),
@@ -682,7 +682,7 @@ fn main() {
             commands::network_status,
         ]))
         .build(tauri::generate_context!())
-        .unwrap_or_else(|e| fatal(&tr!("RoALT failed to start: {why}", why = e)))
+        .unwrap_or_else(|e| fatal(&tr!("AltDock failed to start: {why}", why = e)))
         .run(|app, event| {
             // Before the Exit event: the clipboard plugin has cleaned up by then.
             if let tauri::RunEvent::ExitRequested { .. } = event {
@@ -785,7 +785,7 @@ mod tests {
     fn a_finished_move_deletes_only_the_old_database() {
         let tmp = temp_dir();
         let (old, new) = (tmp.join("old"), tmp.join("new"));
-        for f in DB_FILES.iter().chain(&["notes.txt", r"logs\roalt.log", r"webview\x"]) {
+        for f in DB_FILES.iter().chain(&["notes.txt", r"logs\altdock.log", r"webview\x"]) {
             touch(&old.join(f));
             touch(&new.join(f));
         }
@@ -805,7 +805,7 @@ mod tests {
         assert!(remove_old_db(&new, &old));
         assert_eq!(left(&old), 0);
         assert_eq!(left(&new), DB_FILES.len());
-        assert!(old.join("notes.txt").exists() && old.join(r"logs\roalt.log").exists() && old.join(r"webview\x").exists());
+        assert!(old.join("notes.txt").exists() && old.join(r"logs\altdock.log").exists() && old.join(r"webview\x").exists());
         // Already gone: nothing to do.
         assert!(remove_old_db(&new, &old));
         std::fs::remove_dir_all(&tmp).unwrap();

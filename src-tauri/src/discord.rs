@@ -168,8 +168,8 @@ impl Event {
                 "⛔ {}",
                 trn!(
                     *count,
-                    "**{name}**: RoALT gave up after {n} relaunch in {minutes} min.",
-                    "**{name}**: RoALT gave up after {n} relaunches in {minutes} min.",
+                    "**{name}**: AltDock gave up after {n} relaunch in {minutes} min.",
+                    "**{name}**: AltDock gave up after {n} relaunches in {minutes} min.",
                     name = name,
                     minutes = window_min
                 )
@@ -261,9 +261,9 @@ pub fn message(events: &[Event], ping: &str) -> Value {
         _ => 0xB4_F0_00,
     };
     let mut body = json!({
-        "username": "RoALT",
+        "username": "AltDock",
         "allowed_mentions": { "parse": [] },
-        "embeds": [{ "title": "RoALT", "description": lines.join("\n"), "color": color }],
+        "embeds": [{ "title": "AltDock", "description": lines.join("\n"), "color": color }],
     });
     if severity.is_some_and(|s| s > 0) {
         add_ping(&mut body, ping);
@@ -411,9 +411,9 @@ pub fn set(s: &App, url: Option<&str>) -> Result<DiscordStatus> {
 pub async fn test(s: &App) -> Result<()> {
     let hook = webhook(s)?.ok_or_else(|| AppError::Invalid(tr!("Set a webhook first.")))?;
     let mut body = json!({
-        "username": "RoALT",
+        "username": "AltDock",
         "allowed_mentions": { "parse": [] },
-        "embeds": [{ "title": "RoALT", "description": format!("✅ {}", tr!("Test message: RoALT's alerts reach this channel.")), "color": 0xB4_F0_00 }],
+        "embeds": [{ "title": "AltDock", "description": format!("✅ {}", tr!("Test message: AltDock's alerts reach this channel.")), "color": 0xB4_F0_00 }],
     });
     // The test pings too, so it shows the mention works.
     add_ping(&mut body, &ping(s));
@@ -713,7 +713,7 @@ mod tests {
     fn builds_one_embed_per_message() {
         let crash = Event::Crash { name: "Nova (@nova\\_builds)".into(), place_id: Some(1818) };
         let one = message(std::slice::from_ref(&crash), "");
-        assert_eq!(one["username"], "RoALT");
+        assert_eq!(one["username"], "AltDock");
         assert_eq!(one["allowed_mentions"]["parse"], json!([]));
         let embeds = one["embeds"].as_array().unwrap();
         assert_eq!(embeds.len(), 1);
@@ -760,7 +760,7 @@ mod tests {
         // News and no ping: no mention at all.
         let news = [Event::Launch { name: "A".into(), place_id: None }, Event::Restart { name: "A".into(), cause: CrashKind::Crash }];
         assert_eq!(message(&news, "<@123>").get("content"), None);
-        assert_eq!(message(&crash, ""), json!({ "username": "RoALT", "allowed_mentions": { "parse": [] }, "embeds": message(&crash, "<@1>")["embeds"] }));
+        assert_eq!(message(&crash, ""), json!({ "username": "AltDock", "allowed_mentions": { "parse": [] }, "embeds": message(&crash, "<@1>")["embeds"] }));
         // A disconnect among news still pings.
         let mixed = [news[0].clone(), Event::Disconnect { name: "B".into() }];
         assert_eq!(message(&mixed, "<@123>")["content"], "<@123>");

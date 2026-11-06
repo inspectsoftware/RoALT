@@ -6,7 +6,6 @@ import { AppMenu } from "./app/AppMenu";
 import { Shell } from "./app/Shell";
 import { TitleTools } from "./app/TitleTools";
 import { useTheme } from "./app/theme";
-import { DonateDialog } from "./features/donate/DonateDialog";
 import { PublicNetworkBanner } from "./features/settings/PublicNetworkBanner";
 import { resetLaunches } from "./features/launch/launchQueue";
 import { Splash } from "./features/splash/Splash";
@@ -42,7 +41,6 @@ function Root() {
   const dark = useTheme(settings.data);
   const [lockReason, setLockReason] = useState<LockReason>("start");
   const [islandSlot, setIslandSlot] = useState<HTMLDivElement | null>(null);
-  const [donating, setDonating] = useState(false);
   const manualLockAt = useRef(0);
   const v = vault.data;
   const s = settings.data;
@@ -145,7 +143,7 @@ function Root() {
     <div className="app">
       <TitleBar
         islandSlot={setIslandSlot}
-        start={<AppMenu unlocked={unlocked} vaultMode={v?.mode} onRefresh={refresh} onDonate={() => setDonating(true)} />}
+        start={<AppMenu unlocked={unlocked} vaultMode={v?.mode} onRefresh={refresh} />}
         tools={
           <TitleTools
             dark={dark}
@@ -179,7 +177,6 @@ function Root() {
       )}
       {/* A new recovery code no flow is showing (a recovered unlock, a lock mid-flow): up here because it must outlive what made it, as the old code is void by now. Never while locked: it would open the vault for whoever comes by. */}
       <RecoveryCodeHost unlocked={unlocked} />
-      <DonateDialog open={donating} onClose={() => setDonating(false)} />
     </div>
   );
 }

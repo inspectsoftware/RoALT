@@ -13,7 +13,6 @@ const ev = (key: "launch" | "crash" | "hang" | "disconnect" | "restart" | "memRe
 
 /** Discord's settings for the settings registry (search, jumps, rows), in screen order. */
 export const DISCORD_ENTRIES: readonly Entry[] = [
-  { id: "presence", place: { view: "discord" }, label: "settings.discord", hint: "discord.presenceShort", more: "settings.discordHint", field: "discordPresence", control: { kind: "switch" }, aliases: ["rpc", "rich presence", "status"] },
   { id: "webhook", place: { view: "discord" }, label: "discord.webhook", control: { kind: "custom" }, aliases: ["url", "channel", "alerts", "notifications"] },
   {
     id: "ping", place: { view: "discord" }, label: "discord.ping", hint: "discord.pingHint", field: "discord.ping",

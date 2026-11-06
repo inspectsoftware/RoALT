@@ -397,7 +397,7 @@ pub fn show(pid: u32, what: Show) -> Result<()> {
             let hwnd = window_to_change(pid)?;
             unhide(pid, hwnd);
             if !afk::to_front(hwnd) {
-                return Err(AppError::Invalid(tr!("Windows didn't let RoALT bring that client to the front.")));
+                return Err(AppError::Invalid(tr!("Windows didn't let AltDock bring that client to the front.")));
             }
         }
     }
@@ -874,7 +874,7 @@ mod tests {
         sweep(&[(4_000_001, Some((320, 240))), (4_000_002, Some((320, 240))), (4_000_003, None)]);
         let of = |pid| tiny().iter().find(|e| e.0 == pid).map(|e| e.1);
         assert_eq!(of(4_000_001), Some((100, 80)), "the size it was made tiny at");
-        assert_eq!(of(4_000_002), Some((320, 240)), "from before RoALT restarted");
+        assert_eq!(of(4_000_002), Some((320, 240)), "from before AltDock restarted");
         tiny().iter_mut().find(|e| e.0 == 4_000_001).unwrap().1 = (500, 400);
         sweep(&[(4_000_001, Some((320, 240))), (4_000_002, Some((320, 240)))]);
         assert_eq!(of(4_000_001), Some((500, 400)), "a size the user dragged it to stays too");

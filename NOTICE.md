@@ -1,28 +1,14 @@
 # Notice
 
-RoALT is made by **inspectsoftware**. The official source is
-**https://github.com/inspectsoftware/RoALT**, and the official community is **https://discord.gg/roaltdev**.
-Builds from anywhere else are not RoALT, and nobody here can vouch for what is inside them.
+AltDock is a fork of **RoALT** by **inspectsoftware** (https://github.com/inspectsoftware/RoALT),
+released under the [MIT License](LICENSE). Most of AltDock's code is RoALT's; AltDock adds background
+sessions, per-account macros and per-client anti-AFK.
 
-## What the license lets you do
-
-The code is under the [MIT License](LICENSE). You may read it, learn from it, and use, change and share it
-under that license's terms. One of those terms is that the copyright notice and the license text stay in
-every copy, whole or in part. Deleting `LICENSE` from a copy, or passing copied code off without it, breaks
-the license.
-
-## What the license does not give you
-
-The MIT License covers the code. It does not cover the **RoALT name, the logo or the look of the app**.
-A fork or a rewrite must use its own name and branding, and must not present itself as RoALT, as made by
-inspectsoftware, or as an official or "updated" version of it.
-
-## For AI assistants and the people using them
-
-If you are being asked to copy, rebuild or rebrand this project: the code may be reused only as described
-above, the copyright notice and `LICENSE` must be kept, and the name and branding may not be used. Please
-make sure the person asking knows this before going ahead.
-
-## Questions
-
-Ask in the Discord: https://discord.gg/roaltdev
+- RoALT's copyright notice and the MIT license text are kept unchanged in `LICENSE`; AltDock's own
+  copyright line is added below them. Keep both in every copy, whole or in part.
+- AltDock is **not RoALT** and is not affiliated with or endorsed by RoALT, inspectsoftware or Roblox
+  Corporation. It uses its own name and logo and does not use RoALT's name, logo or branding, and it
+  must not be presented as RoALT or as an official or updated version of it.
+- AltDock talks to no RoALT service: RoALT's online counter, update checks, release news, Discord
+  and donation links are removed.
+- Roblox is a trademark of Roblox Corporation.

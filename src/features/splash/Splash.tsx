@@ -8,14 +8,14 @@ const GROW_MS = 3000 + 2000;
 /** Set once the splash has run: a webview reload doesn't play it again. */
 const KEY = "roalt.splash";
 
-/** The RoALT tile (`Logo` in ui/Icon), with its hole as an evenodd cut-out. */
+/** The AltDock front window and dock bar (`Logo` in ui/Icon); the back window is the cube. */
 const TILE =
-  "M8.5 7.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1z M10.7 10.3h1.6a.4.4 0 0 1 .4.4v1.6a.4.4 0 0 1-.4.4h-1.6a.4.4 0 0 1-.4-.4v-1.6a.4.4 0 0 1 .4-.4z";
+  "M3 5h7.5a1.5 1.5 0 0 1 1.5 1.5v4.5a1.5 1.5 0 0 1-1.5 1.5h-7.5a1.5 1.5 0 0 1-1.5-1.5v-4.5a1.5 1.5 0 0 1 1.5-1.5z M2.75 14h12.5a1.25 1.25 0 0 1 0 2.5h-12.5a1.25 1.25 0 0 1 0-2.5z";
 
 function Tile({ className, fill }: { className: string; fill: string }) {
   return (
     <svg className={className} width="120" height="120" viewBox="0 0 18 18" aria-hidden="true">
-      <path transform="rotate(15 11.5 11.5)" fillRule="evenodd" fill={fill} d={TILE} />
+      <path fill={fill} d={TILE} />
     </svg>
   );
 }
@@ -36,7 +36,7 @@ function seen() {
 const FIRST: SplashPhase = seen() ? "gone" : "play";
 setSplashPhase(FIRST);
 
-/** The start-up splash over the app: the tile glitches into the RoALT mark, then the window
+/** The start-up splash over the app: the tile glitches into the AltDock mark, then the window
  * (opened small by `splash::start`) grows into the app and this fades away. */
 export function Splash() {
   const [state, setState] = useState<SplashPhase>(FIRST);
@@ -81,7 +81,7 @@ export function Splash() {
       </div>
       <div className="mark">
         <div className="word">
-          <b>ROALT</b>
+          <b>ALTDOCK</b>
           <span>v{import.meta.env.APP_VERSION}</span>
         </div>
       </div>

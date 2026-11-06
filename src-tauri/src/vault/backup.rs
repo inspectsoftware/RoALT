@@ -103,7 +103,7 @@ pub fn write(path: &Path, password: &str, payload: &BackupPayload) -> Result<()>
 /// `WrongPassword` when the password (or file) does not authenticate,
 /// `Invalid("This isn't a RoALT backup.")` on a bad magic / truncated file.
 pub fn read(path: &Path, password: &str) -> Result<BackupPayload> {
-    let not_backup = || AppError::Invalid(tr!("This isn't a RoALT backup."));
+    let not_backup = || AppError::Invalid(tr!("This isn't an AltDock backup."));
     // About 2 KB per account: far above anyone's vault, and it isn't all read into memory first.
     if fs::metadata(path)?.len() > 64 << 20 {
         return Err(not_backup());
@@ -227,7 +227,7 @@ mod tests {
         let _ = fs::remove_file(&path);
 
         for r in rejected {
-            assert!(matches!(r, Err(AppError::Invalid(m)) if m == "This isn't a RoALT backup."));
+            assert!(matches!(r, Err(AppError::Invalid(m)) if m == "This isn't an AltDock backup."));
         }
         assert!(matches!(cut_body, Err(AppError::WrongPassword)));
     }

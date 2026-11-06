@@ -1,5 +1,5 @@
-//! Discord rich presence (`Settings.discord_presence`): "Playing RoALT", idling or with the
-//! game and how many alts run, plus Get RoALT / Join Discord buttons.
+//! Discord rich presence (`Settings.discord_presence`): idling or with the game and how many alts
+//! run. No buttons: AltDock links to neither RoALT's releases nor its Discord server.
 //!
 //! Spoken to the Discord app on this PC over its local IPC pipe `\\.\pipe\discord-ipc-N`: each
 //! frame is an opcode and a length (u32 LE each), then JSON. Nothing goes over the network from
@@ -16,11 +16,10 @@ use crate::App;
 use crate::commands::{cached_game_name, now_ms};
 use crate::model::{Instance, InstanceState};
 
-/// The "RoALT" application on Discord's Developer Portal; its art asset `roalt` is the logo.
-const CLIENT_ID: &str = "1565066775752741165";
-const DOWNLOAD: &str = "https://github.com/inspectsoftware/RoALT/releases/latest";
-/// The same invite as the app's (`src/features/donate/links.ts`).
-const INVITE: &str = "https://discord.gg/roaltdev";
+/// AltDock's application on Discord's Developer Portal (its art asset `roalt` is the logo). None:
+/// AltDock has none yet (RoALT's would show "Playing RoALT"), so presence never connects and the UI
+/// hides its switch.
+const CLIENT_ID: Option<&str> = None;
 /// Discord allows about 5 activity updates per 20 s; one is sent only when it changed.
 const TICK: Duration = Duration::from_secs(5);
 
@@ -61,10 +60,11 @@ fn read_frame(pipe: &mut File) -> std::io::Result<(u32, Value)> {
 
 /// The first Discord pipe that takes our handshake.
 fn connect() -> Option<File> {
+    let client_id = CLIENT_ID?;
     (0..10).find_map(|n| {
         let mut pipe = OpenOptions::new().read(true).write(true).open(format!(r"\\.\pipe\discord-ipc-{n}")).ok()?;
         let shook = pipe
-            .write_all(&frame(HANDSHAKE, &json!({ "v": 1, "client_id": CLIENT_ID })))
+            .write_all(&frame(HANDSHAKE, &json!({ "v": 1, "client_id": client_id })))
             .and_then(|()| read_frame(&mut pipe));
         if let Err(e) = shook {
             log::debug!("discord presence: handshake on pipe {n} failed: {e}");
@@ -129,11 +129,7 @@ fn activity((details, state): &(String, String), since_ms: i64) -> Value {
         "details": details,
         "state": state,
         "timestamps": { "start": since_ms / 1000 },
-        "assets": { "large_image": "roalt", "large_text": format!("RoALT · {}", tr!("Managing Roblox alts")) },
-        "buttons": [
-            { "label": tr!("Get RoALT"), "url": DOWNLOAD },
-            { "label": tr!("Join Discord"), "url": INVITE },
-        ],
+        "assets": { "large_image": "roalt", "large_text": format!("AltDock · {}", tr!("Managing Roblox alts")) },
     })
 }
 
@@ -256,10 +252,9 @@ mod tests {
     }
 
     #[test]
-    fn activity_has_both_buttons() {
+    fn activity_has_no_buttons() {
         let a = activity(&("Idling".into(), "Managing Roblox alts".into()), 5_000);
         assert_eq!(a["timestamps"]["start"], 5);
-        assert_eq!(a["buttons"][0]["label"], "Get RoALT");
-        assert_eq!(a["buttons"][1]["url"], INVITE);
+        assert!(a.get("buttons").is_none());
     }
 }

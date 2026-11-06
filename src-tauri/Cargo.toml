@@ -1,8 +1,8 @@
 [package]
-name = "roalt"
+name = "altdock"
 version = "1.0.2"
-description = "Local-only Roblox account manager"
-authors = ["inspectsoftware"]
+description = "Local-only Roblox account manager with background sessions (a fork of RoALT)"
+authors = ["AltDock contributors", "inspectsoftware (RoALT)"]
 license = "MIT"
 edition = "2024"
 rust-version = "1.95"

@@ -39,6 +39,8 @@ ts-rs = "12"
 axum = { version = "0.8", default-features = false, features = ["tokio", "http1", "json", "query"] }
 # Backups sent to `POST /v1/accounts/import`.
 base64 = "0.23"
+# The control API's server proof (`control::proof`, HMAC-SHA256).
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

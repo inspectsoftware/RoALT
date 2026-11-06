@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use zeroize::Zeroizing;
 
-use super::TOKEN_HEADER;
+use super::{NONCE_HEADER, TOKEN_HEADER, proof, same};
 use super::types::{self, *};
 use crate::error::{AppError, Result};
 use crate::model::{AfkClientConfig, Macro, MacroInput};
@@ -26,6 +26,8 @@ pub struct ControlClient {
     http: reqwest::Client,
     base: String,
     token: Zeroizing<String>,
+    /// The server proved it knows the token (`hello`); nothing is sent before.
+    proven: tokio::sync::OnceCell<()>,
 }
 
 impl std::fmt::Debug for ControlClient {
@@ -53,7 +55,25 @@ fn http() -> Result<reqwest::Client> {
 
 impl ControlClient {
     pub fn new(port: u16, token: Zeroizing<String>) -> Result<ControlClient> {
-        Ok(ControlClient { http: http()?, base: format!("http://127.0.0.1:{port}"), token })
+        Ok(ControlClient { http: http()?, base: format!("http://127.0.0.1:{port}"), token, proven: tokio::sync::OnceCell::new() })
+    }
+
+    /// Asks the server to prove it knows the token (`control::proof` of a fresh challenge) before
+    /// anything carries the token: while a session's AltDock isn't running, any local user may
+    /// listen on its port.
+    async fn hello(&self) -> Result<()> {
+        let mut bytes = [0u8; 32];
+        getrandom::fill(&mut bytes).map_err(|e| AppError::Internal(e.to_string()))?;
+        let nonce: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        let r = self.http.get(format!("{}/v1/hello", self.base)).header(NONCE_HEADER, &nonce).send().await.map_err(|e| AppError::Network(unreachable(&e)))?;
+        let answer = if r.status().is_success() { r.json::<Hello>().await.ok() } else { None };
+        if answer.is_some_and(|h| same(h.proof.as_bytes(), proof(&self.token, &nonce).as_bytes())) {
+            return Ok(());
+        }
+        log::warn!("control client: {} didn't prove it knows the session's token; nothing sent", self.base);
+        Err(AppError::Internal(tr!(
+            "Something other than this session's AltDock answers on its port, so AltDock sent it nothing. Sign the session out and in again, or restart Windows."
+        )))
     }
 
     fn request(&self, method: Method, path: &str) -> RequestBuilder {
@@ -62,6 +82,7 @@ impl ControlClient {
 
     /// Sends it; a refusal comes back as the session's own error (`error_of`).
     async fn send(&self, req: RequestBuilder) -> Result<reqwest::Response> {
+        self.proven.get_or_try_init(|| self.hello()).await?;
         let r = req.send().await.map_err(|e| AppError::Network(unreachable(&e)))?;
         if r.status().is_success() {
             return Ok(r);
@@ -92,7 +113,9 @@ impl ControlClient {
 
     /// Gives up after `wait` (the session list must not wait on a stuck session).
     pub async fn health(&self, wait: Duration) -> Result<ControlHealth> {
-        self.json(self.request(Method::GET, "/v1/health").timeout(wait)).await
+        tokio::time::timeout(wait, self.json(self.request(Method::GET, "/v1/health")))
+            .await
+            .map_err(|_| AppError::Network("the session's AltDock didn't answer in time".into()))?
     }
 
     pub async fn state(&self) -> Result<Vec<types::ControlClient>> {

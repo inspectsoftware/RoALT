@@ -8,6 +8,8 @@
 //! - `Host` must be exactly `127.0.0.1:<port>`: a website rebound to 127.0.0.1 (DNS rebinding)
 //!   names its own host, and a browser page can't add the token header without CORS (never
 //!   allowed).
+//! - `GET /v1/hello` (no token) answers a challenge with `control::proof`: the main app sends its
+//!   token only to a server that knows it already, not to another user listening on a free port.
 //! - Answers are never cached, sniffed or framed.
 //! - It does what the UI does, through the same code: a launch is a batch like the Launch view's.
 
@@ -29,7 +31,7 @@ use tokio::sync::oneshot;
 use zeroize::Zeroizing;
 
 use super::types::*;
-use super::{ControlConfig, TOKEN_HEADER};
+use super::{ControlConfig, NONCE_HEADER, TOKEN_HEADER, nonce_ok, proof, same};
 use crate::App;
 use crate::error::{AppError, Result};
 use crate::model::{BulkRequest, ConflictPolicy, InstanceState, LaunchTarget, MacroInput, ParsedInput, SameServer, Settings};
@@ -161,11 +163,6 @@ async fn harden(mut r: Response) -> Response {
     r
 }
 
-/// Equal bytes, in time that depends on the length only (pure).
-fn same(a: &[u8], b: &[u8]) -> bool {
-    a.len() == b.len() && std::hint::black_box(a.iter().zip(b).fold(0u8, |d, (x, y)| d | (x ^ y))) == 0
-}
-
 /// The request names this server exactly: `127.0.0.1:<port>` (pure).
 fn host_ok(host: Option<&str>, port: u16) -> bool {
     host.is_some_and(|h| h.strip_prefix("127.0.0.1:").is_some_and(|p| p == port.to_string()))
@@ -185,6 +182,12 @@ async fn gate(State(c): State<Ctl>, req: Request, next: Next) -> Response {
     if !host_ok(req.headers().get(header::HOST).and_then(|v| v.to_str().ok()), c.port) {
         log::warn!("control API: refused a request for another host");
         return refuse(StatusCode::MISDIRECTED_REQUEST, "invalid", "Address the control API as 127.0.0.1 and its port.");
+    }
+    if req.uri().path() == "/v1/hello" && req.method() == axum::http::Method::GET {
+        return match req.headers().get(NONCE_HEADER).and_then(|v| v.to_str().ok()).filter(|n| nonce_ok(n)) {
+            Some(nonce) => Json(Hello { proof: proof(&c.token, nonce) }).into_response(),
+            None => refuse(StatusCode::BAD_REQUEST, "invalid", "Send a challenge."),
+        };
     }
     if !token_ok(req.headers(), &c.token) {
         log::warn!("control API: refused a request without the right token ({} {})", req.method(), req.uri().path());

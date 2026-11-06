@@ -416,10 +416,15 @@
   "The setup didn't start.": "The setup didn't start.",
   "The setup didn't finish in time. Run it again.": "The setup didn't finish in time. Run it again.",
   "{user} doesn't exist.": "{user} doesn't exist.",
-  "{file} is missing.": "{file} is missing.",
   "Created.": "Created.",
   "Repaired.": "Repaired.",
   "Remote Desktop Users wasn't found.": "Remote Desktop Users wasn't found.",
   "Deleted.": "Deleted.",
-  "Push these accounts to the session first: {names}": "Push these accounts to the session first: {names}"
+  "Push these accounts to the session first: {names}": "Push these accounts to the session first: {names}",
+  "{file} isn't a plain file.": "{file} isn't a plain file.",
+  "{file} is too big.": "{file} is too big.",
+  "{path} wasn't made by AltDock's setup. Delete it, then run the setup again.": "{path} wasn't made by AltDock's setup. Delete it, then run the setup again.",
+  "{file} isn't a session file.": "{file} isn't a session file.",
+  "{user} isn't a standard user; AltDock leaves it alone.": "{user} isn't a standard user; AltDock leaves it alone.",
+  "Something other than this session's AltDock answers on its port, so AltDock sent it nothing. Sign the session out and in again, or restart Windows.": "Something other than this session's AltDock answers on its port, so AltDock sent it nothing. Sign the session out and in again, or restart Windows."
 }

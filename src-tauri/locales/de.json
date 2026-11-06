@@ -427,10 +427,15 @@
   "The setup didn't start.": "Die Einrichtung ist nicht gestartet.",
   "The setup didn't finish in time. Run it again.": "Die Einrichtung wurde nicht rechtzeitig fertig. Führe sie erneut aus.",
   "{user} doesn't exist.": "{user} existiert nicht.",
-  "{file} is missing.": "{file} fehlt.",
   "Created.": "Erstellt.",
   "Repaired.": "Repariert.",
   "Remote Desktop Users wasn't found.": "Die Gruppe Remotedesktopbenutzer wurde nicht gefunden.",
   "Deleted.": "Gelöscht.",
-  "Push these accounts to the session first: {names}": "Übertrage diese Konten zuerst in die Sitzung: {names}"
+  "Push these accounts to the session first: {names}": "Übertrage diese Konten zuerst in die Sitzung: {names}",
+  "{file} isn't a plain file.": "{file} ist keine gewöhnliche Datei.",
+  "{file} is too big.": "{file} ist zu groß.",
+  "{path} wasn't made by AltDock's setup. Delete it, then run the setup again.": "{path} wurde nicht von der AltDock-Einrichtung angelegt. Lösche es und führe die Einrichtung erneut aus.",
+  "{file} isn't a session file.": "{file} ist keine Sitzungsdatei.",
+  "{user} isn't a standard user; AltDock leaves it alone.": "{user} ist kein Standardbenutzer; AltDock lässt dieses Konto unverändert.",
+  "Something other than this session's AltDock answers on its port, so AltDock sent it nothing. Sign the session out and in again, or restart Windows.": "Auf dem Port dieser Sitzung antwortet etwas anderes als ihr AltDock, deshalb hat AltDock nichts dorthin gesendet. Melde die Sitzung ab und wieder an oder starte Windows neu."
 }

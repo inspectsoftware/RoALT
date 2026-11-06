@@ -23,6 +23,39 @@ pub use types::ControlMode;
 pub const TOKEN_HEADER: &str = "x-altdock-token";
 /// The command-line flag of the autostart.
 pub const SESSION_ARG: &str = "--session";
+/// The header of `GET /v1/hello`'s challenge: 64 hex digits the main app picked.
+pub const NONCE_HEADER: &str = "x-altdock-nonce";
+
+/// HMAC-SHA256 (RFC 2104) (pure).
+pub fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut block = Zeroizing::new([0u8; 64]);
+    if key.len() > 64 {
+        block[..32].copy_from_slice(&Sha256::digest(key));
+    } else {
+        block[..key.len()].copy_from_slice(key);
+    }
+    let pad = |b: u8| Zeroizing::new(block.map(|k| k ^ b));
+    let inner = Sha256::new().chain_update(*pad(0x36)).chain_update(message).finalize();
+    Sha256::new().chain_update(*pad(0x5c)).chain_update(inner).finalize().into()
+}
+
+/// The session's answer to a challenge (pure): proof that it knows the token, without sending
+/// it. Any local user can listen on a session's port while its AltDock isn't running, so the
+/// main app sends the token (and pushed accounts) only after this proof (`client`).
+pub fn proof(token: &str, nonce: &str) -> String {
+    hmac_sha256(token.as_bytes(), format!("altdock-control-server\0{nonce}").as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A challenge as the server takes it: 64 hex digits (pure).
+pub fn nonce_ok(nonce: &str) -> bool {
+    nonce.len() == 64 && nonce.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Equal bytes, in time that depends on the length only (pure).
+pub fn same(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && std::hint::black_box(a.iter().zip(b).fold(0u8, |d, (x, y)| d | (x ^ y))) == 0
+}
 
 /// A session's control config, checked (`parse_config`).
 #[derive(Deserialize)]
@@ -151,6 +184,26 @@ mod tests {
             let err = parse_config(&bad).unwrap_err();
             assert!(!err.contains(TOKEN), "{err}");
         }
+    }
+
+    #[test]
+    fn proves_the_token_without_sending_it() {
+        let hex = |b: [u8; 32]| b.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        // RFC 4231, test cases 2 and 6 (a key longer than a block).
+        assert_eq!(hex(hmac_sha256(b"Jefe", b"what do ya want for nothing?")), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+        assert_eq!(
+            hex(hmac_sha256(&[0xaa; 131], b"Test Using Larger Than Block-Size Key - Hash Key First")),
+            "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"
+        );
+        let nonce = "ab".repeat(32);
+        let p = proof(TOKEN, &nonce);
+        assert_eq!(p.len(), 64);
+        assert!(!p.contains(TOKEN));
+        assert_ne!(p, proof(TOKEN, &"cd".repeat(32)));
+        assert_ne!(p, proof(&TOKEN.replace('0', "1"), &nonce));
+        assert!(nonce_ok(&nonce));
+        assert!(!nonce_ok(&nonce[1..]) && !nonce_ok(&"zz".repeat(32)) && !nonce_ok(""));
+        assert!(same(b"ab", b"ab") && !same(b"ab", b"ac") && !same(b"a", b"ab"));
     }
 
     #[test]

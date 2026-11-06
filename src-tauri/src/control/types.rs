@@ -172,6 +172,12 @@ pub struct ControlError {
     pub message: String,
 }
 
+/// `GET /v1/hello`'s answer: `control::proof` of the challenge (not for the UI).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Hello {
+    pub proof: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

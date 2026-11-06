@@ -310,6 +310,10 @@ pub struct Settings {
     /// AutoHotkey64.exe the user picked; "" to look for it (`macros::find_ahk`).
     pub ahk_path: String,
     // ---- end AltDock: Stream A ----
+    // ---- AltDock: Stream C ----
+    /// Background sessions (`sessions`); their secrets are in the vault.
+    pub sessions: Vec<crate::sessions::types::SessionConfig>,
+    // ---- end AltDock: Stream C ----
 }
 
 /// The network RoALT runs on (`network`). Never its name: streamers show RoALT on screen.
@@ -522,6 +526,9 @@ panic_hotkey: String::new(),
             // ---- AltDock: Stream A ----
             ahk_path: String::new(),
             // ---- end AltDock: Stream A ----
+            // ---- AltDock: Stream C ----
+            sessions: Vec::new(),
+            // ---- end AltDock: Stream C ----
         }
     }
 }
@@ -624,6 +631,11 @@ pub struct SettingsPatch {
     #[ts(optional)]
     pub ahk_path: Option<String>,
     // ---- end AltDock: Stream A ----
+    // ---- AltDock: Stream C ----
+    /// The whole session list, each checked like `session_save` does.
+    #[ts(optional)]
+    pub sessions: Option<Vec<crate::sessions::types::SessionConfig>>,
+    // ---- end AltDock: Stream C ----
 }
 
 /// What a Roblox log clean-up deleted (`logs_clean`).

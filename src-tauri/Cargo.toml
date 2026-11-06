@@ -88,6 +88,19 @@ windows = { version = "0.62", features = [
 windows-future = "0.3"
 webview2-com = "0.39"
 
+# ---- AltDock: Stream C ----
+# More `windows` features for the sessions manager (Cargo merges them with the list above).
+[target.'cfg(target_os = "windows")'.dependencies.windows]
+version = "0.62"
+features = [
+  "Win32_NetworkManagement_NetManagement",
+  "Win32_Security_Authorization",
+  "Win32_Security_Credentials",
+  "Win32_Storage_FileSystem",
+  "Win32_System_RemoteDesktop",
+]
+# ---- end AltDock: Stream C ----
+
 # Line numbers in backtraces, no variable info in the debugger: keeps target\debug small.
 [profile.dev]
 debug = "line-tables-only"

@@ -23,6 +23,9 @@ import type {
   RobloxClient, Settings, VaultMode,
 } from "../api";
 import type { AfkClientConfig, Macro, MacroAssignment, MacroInput, MacroRun } from "../api"; // AltDock: Stream A
+// ---- AltDock: Stream C ----
+import type { HealthCheck, SessionConfig, SessionControl, SessionView, SetupResult, WtsState } from "../api";
+// ---- end AltDock: Stream C ----
 
 const MIN = 60_000;
 const DAY = 86_400_000;
@@ -81,6 +84,7 @@ let settings: Settings = {
   autoUpdate: false, selfUpdate: true, tabLayout: "top", discordPresence: true, onlineCount: true, minimizeOnLaunch: false, microWidth: 320, microHeight: 240, tinyOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0, lowGraphics: true, skipSplash: false, protectMain: true, muteOnLaunch: false, windowLayout: "off", lighterRendering: true, renderFlags: { msaa: "x1", texture: "lowest", mode: "default", graySky: false, noGrass: true, lowestFrm: true, pauseVoxelizer: false },
   allowPublicNetworks: true, language: "",
   ahkPath: "", // AltDock: Stream A
+  sessions: [], // ---- AltDock: Stream C ----
 };
 
 // Outdated, so Settings offers the update and the Launch view warns before a batch.
@@ -850,6 +854,128 @@ function streamA(cmd: string, args: Args): Promise<unknown> | undefined {
 async function handle(cmd: string, args: Args): Promise<unknown> {
   const a = streamA(cmd, args); // AltDock: Stream A
   if (a !== undefined) return a;
+// ---- AltDock: Stream C ----
+// Sessions: RDP Wrapper is installed and knows this Windows; everything "Set up" fixes fails until
+// it has run (the admin prompt "is declined" when ?setup=declined). Starting a session signs its
+// alt user in after a second, in a hidden window; a session named "Broken" never answers its control API.
+const sessionState = new Map<string, { wts: WtsState; open: boolean; visible: boolean }>();
+let sessionsSetUp = false;
+const sessionsChanged = () => void emit("sessions://changed");
+function sessionHealth(): HealthCheck[] {
+  const fixed = (id: string, title: string, detail: string): HealthCheck => ({ id, ok: sessionsSetUp, title, detail, fix: sessionsSetUp ? null : "setup" });
+  return [
+    { id: "rdpWrapper", ok: true, title: "RDP Wrapper installed", detail: "C:\\Program Files\\RDP Wrapper\\rdpwrap.dll", fix: null },
+    { id: "rdpWrapperIni", ok: true, title: "rdpwrap.ini supports this Windows", detail: "termsrv.dll 10.0.26100.7171 is listed.", fix: null },
+    { id: "listener", ok: true, title: "Remote Desktop listening", detail: "Port 3389 answers.", fix: null },
+    fixed("connections", "Remote connections allowed", "fDenyTSConnections"),
+    fixed("singleSession", "Several sessions allowed", "fSingleSessionPerUser"),
+    fixed("suppressMinimized", "Sessions keep drawing when hidden", "RemoteDesktop_SuppressWhenMinimized"),
+    fixed("hardwareGraphics", "Graphics card used in sessions", "bEnumerateHWBeforeSW"),
+    fixed("firstLogon", "No first sign-in screens", "DisablePrivacyExperience, EnableFirstLogonAnimation"),
+    fixed("programCopy", "Program copy for sessions up to date", "C:\\ProgramData\\AltDock\\app\\altdock.exe"),
+    fixed("autostart", "AltDock starts in sessions", "AltDockSession"),
+    fixed("altUsers", "Session users ready", settings.sessions.length ? settings.sessions.map((c) => c.windowsUser).join(", ") : "No sessions yet."),
+    fixed("rdpSigning", "Session files signed and trusted", "The signing certificate isn't trusted yet."),
+  ];
+}
+function sessionView(config: SessionConfig): SessionView {
+  const st = sessionState.get(config.name) ?? { wts: "none" as WtsState, open: false, visible: false };
+  const control: SessionControl =
+    st.wts === "none" || config.name === "Broken"
+      ? { kind: "down", reason: "error sending request for url (http://127.0.0.1:" + config.port + "/v1/health)" }
+      : { kind: "ok", health: { version: "1.0.2", windowsUser: config.windowsUser, sessionId: 2 + settings.sessions.indexOf(config), mode: config.mode, vaultLocked: false, robloxInstalled: true, clients: 0 } };
+  return { config, wts: st.wts, windowVisible: st.visible, windowOpen: st.open, control };
+}
+async function handleSessions(cmd: string, args: Args): Promise<unknown> {
+  const find = () => settings.sessions.find((c) => c.name === args.name);
+  switch (cmd) {
+    case "sessions_health":
+      await sleep(400);
+      return sessionHealth();
+    case "sessions_setup": {
+      const unknown = (args.names as string[]).find((n) => !settings.sessions.some((c) => c.name === n));
+      if (unknown) return fail("invalid", `There is no session ${unknown}.`);
+      await sleep(1500);
+      if (new URLSearchParams(location.search).get("setup") === "declined") return fail("invalid", "The session setup needs admin rights; the prompt was declined.");
+      sessionsSetUp = true;
+      sessionsChanged();
+      const users = settings.sessions.filter((c) => !args.names.length || args.names.includes(c.name)).map((c) => c.windowsUser);
+      return {
+        steps: [
+          { id: "suppressMinimized", ok: true, detail: "" },
+          ...["connections", "singleSession", "hardwareGraphics", "firstLogon"].map((id) => ({ id, ok: true, detail: "" })),
+          ...users.flatMap((u) => [{ id: `user:${u}`, ok: true, detail: "Created." }, { id: `remoteDesktopUsers:${u}`, ok: true, detail: "Remote Desktop Users" }]),
+          { id: "programCopy", ok: true, detail: "C:\\ProgramData\\AltDock\\app\\altdock.exe" },
+          { id: "certificate", ok: true, detail: "3F2A9C0E4B7D61A85C2E90F1B3D4A6C7E8F90123" },
+        ],
+        thumbprint: "3F2A9C0E4B7D61A85C2E90F1B3D4A6C7E8F90123",
+      } satisfies SetupResult;
+    }
+    case "sessions_list":
+      return settings.sessions.map(sessionView);
+    case "session_save": {
+      const c = args.config as SessionConfig;
+      const name = c.name.trim();
+      if (!name || name.length > 32) return fail("invalid", "A session name needs 1 to 32 characters.");
+      if (!/^[A-Za-z0-9 _-]+$/.test(name)) return fail("invalid", "A session name may only have letters, digits, spaces, - and _.");
+      if (c.width < 640 || c.width > 3840 || c.height < 480 || c.height > 2160) return fail("invalid", "The session size must be 640×480 to 3840×2160.");
+      if (c.mode === "dedicated" && c.accountIds.length > 1) return fail("invalid", "A dedicated session runs one account.");
+      const old = settings.sessions.find((o) => o.name.toLowerCase() === name.toLowerCase());
+      let n = old ? Number(old.windowsUser.split("-")[1]) : 1;
+      if (!old) while (settings.sessions.some((o) => o.windowsUser === `altdock-${n}`)) n++;
+      const saved: SessionConfig = { ...c, name: old?.name ?? name, windowsUser: `altdock-${n}`, address: `127.0.0.${n + 1}`, port: 47610 + n };
+      settings.sessions = old ? settings.sessions.map((o) => (o === old ? saved : o)) : [...settings.sessions, saved];
+      sessionsChanged();
+      return saved;
+    }
+    case "session_remove": {
+      const c = find();
+      if (!c) return fail("notFound", "Not found.");
+      if (args.deleteUser && (sessionState.get(c.name)?.wts ?? "none") !== "none")
+        return fail("invalid", "Log the session off first: its Windows user is still signed in.");
+      await sleep(args.deleteUser ? 1200 : 200);
+      settings.sessions = settings.sessions.filter((o) => o !== c);
+      sessionState.delete(c.name);
+      sessionsChanged();
+      return args.deleteUser ? { steps: [{ id: `remove:${c.windowsUser}`, ok: true, detail: "Deleted." }], thumbprint: null } : null;
+    }
+    case "session_start": {
+      const c = find();
+      if (!c) return fail("notFound", "Not found.");
+      if (!sessionsSetUp) return fail("invalid", "Run the setup for this session first.");
+      if (sessionState.get(c.name)?.open) return null;
+      setTimeout(() => {
+        sessionState.set(c.name, { wts: "active", open: true, visible: false });
+        sessionsChanged();
+      }, 1000);
+      return null;
+    }
+    case "session_window": {
+      const c = find();
+      const st = c && sessionState.get(c.name);
+      if (!st?.open) return fail("invalid", "The session isn't open.");
+      st.visible = !!args.show;
+      sessionsChanged();
+      return st.visible;
+    }
+    case "session_disconnect": {
+      const c = find();
+      const st = c && sessionState.get(c.name);
+      if (c && st?.open) sessionState.set(c.name, { wts: "disconnected", open: false, visible: false });
+      sessionsChanged();
+      return null;
+    }
+    default:
+      console.warn("[mock ipc] unhandled", cmd);
+      return null;
+  }
+}
+// ---- end AltDock: Stream C ----
+
+async function handle(cmd: string, args: Args): Promise<unknown> {
+  // ---- AltDock: Stream C ----
+  if (cmd.startsWith("session")) return handleSessions(cmd, args);
+  // ---- end AltDock: Stream C ----
   switch (cmd) {
     case "vault_status":
       return { mode: vault.mode, locked: vault.locked, accounts: accounts.length, autoLockMinutes: settings.autoLockMinutes, hasRecovery: !!vault.recovery };

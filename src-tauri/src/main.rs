@@ -27,6 +27,9 @@ mod control;
 // ---- AltDock: Stream A ----
 mod macros;
 // ---- end AltDock: Stream A ----
+// ---- AltDock: Stream C ----
+mod sessions;
+// ---- end AltDock: Stream C ----
 
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -542,6 +545,12 @@ fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
 }
 
 fn main() {
+    // ---- AltDock: Stream C ----
+    // `--altdock-setup <plan.json>`: the elevated session setup, done before anything else starts.
+    if let Some(code) = sessions::setup::elevated_entry() {
+        std::process::exit(code);
+    }
+    // ---- end AltDock: Stream C ----
     // ---- AltDock: Stream B ---- session mode (`control`), decided before anything is made: the
     // autostart runs `--session` for every user, and quits here for those AltDock doesn't manage.
     let session_arg = std::env::args().skip(1).any(|a| a == control::SESSION_ARG);
@@ -746,6 +755,30 @@ fn main() {
             instances::afk::anti_afk_client_get,
             instances::afk::anti_afk_client_set,
             // ---- end AltDock: Stream A ----
+            // ---- AltDock: Stream C ----
+            sessions::commands::sessions_health,
+            sessions::commands::sessions_setup,
+            sessions::commands::sessions_list,
+            sessions::commands::session_save,
+            sessions::commands::session_remove,
+            sessions::commands::session_start,
+            sessions::commands::session_window,
+            sessions::commands::session_disconnect,
+            // TODO(merge): with Stream B's control client, `mod remote` in sessions/mod.rs and:
+            // sessions::remote::session_logoff,
+            // sessions::remote::session_push_accounts,
+            // sessions::remote::session_push_macros,
+            // sessions::remote::remote_state,
+            // sessions::remote::remote_thumbnail,
+            // sessions::remote::remote_launch,
+            // sessions::remote::remote_close,
+            // sessions::remote::remote_kill_all,
+            // sessions::remote::remote_afk,
+            // sessions::remote::remote_macro_assign,
+            // sessions::remote::remote_macro_run,
+            // sessions::remote::remote_macro_stop,
+            // sessions::remote::remote_roblox_install,
+            // ---- end AltDock: Stream C ----
         ]))
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| fatal(&tr!("AltDock failed to start: {why}", why = e)))

@@ -5,8 +5,13 @@ import type { Density } from "./Density";
 import type { DiscordEvents } from "./DiscordEvents";
 import type { MemThrottle } from "./MemThrottle";
 import type { RenderFlags } from "./RenderFlags";
+import type { SessionConfig } from "./SessionConfig";
 import type { TabLayout } from "./TabLayout";
 import type { Theme } from "./Theme";
 import type { WindowLayout } from "./WindowLayout";
 
-export type SettingsPatch = { theme?: Theme, tabLayout?: TabLayout, accent?: string, backgroundDim?: number, density?: Density, autoLockMinutes?: number, clipboardClearSeconds?: number, cacheMinutes?: number, protectSharedLogin?: boolean, launchDelayMs?: number, autoRejoin?: boolean, autoRestartOnCrash?: boolean, breakerMax?: number, breakerWindowMin?: number, closeGraceS?: number, launchArgs?: string, closeToTray?: boolean, skipSplash?: boolean, protectMain?: boolean, muteOnLaunch?: boolean, windowLayout?: WindowLayout, memRestartMb?: number, memThrottle?: MemThrottle, trimEveryMin?: number, autoSpread?: boolean, fairCap?: boolean, adaptive?: Adaptive, antiAfk?: AntiAfk, discord?: DiscordEvents, autoUpdate?: boolean, selfUpdate?: boolean, discordPresence?: boolean, onlineCount?: boolean, minimizeOnLaunch?: boolean, panicHotkey?: string, cleanLogs?: boolean, fpsCap?: number, lowGraphics?: boolean, lighterRendering?: boolean, renderFlags?: RenderFlags, microWidth?: number, microHeight?: number, tinyOnLaunch?: boolean, allowPublicNetworks?: boolean, language?: string, ahkPath?: string, };
+export type SettingsPatch = { theme?: Theme, tabLayout?: TabLayout, accent?: string, backgroundDim?: number, density?: Density, autoLockMinutes?: number, clipboardClearSeconds?: number, cacheMinutes?: number, protectSharedLogin?: boolean, launchDelayMs?: number, autoRejoin?: boolean, autoRestartOnCrash?: boolean, breakerMax?: number, breakerWindowMin?: number, closeGraceS?: number, launchArgs?: string, closeToTray?: boolean, skipSplash?: boolean, protectMain?: boolean, muteOnLaunch?: boolean, windowLayout?: WindowLayout, memRestartMb?: number, memThrottle?: MemThrottle, trimEveryMin?: number, autoSpread?: boolean, fairCap?: boolean, adaptive?: Adaptive, antiAfk?: AntiAfk, discord?: DiscordEvents, autoUpdate?: boolean, selfUpdate?: boolean, discordPresence?: boolean, onlineCount?: boolean, minimizeOnLaunch?: boolean, panicHotkey?: string, cleanLogs?: boolean, fpsCap?: number, lowGraphics?: boolean, lighterRendering?: boolean, renderFlags?: RenderFlags, microWidth?: number, microHeight?: number, tinyOnLaunch?: boolean, allowPublicNetworks?: boolean, language?: string, ahkPath?: string, 
+/**
+ * The whole session list, each checked like `session_save` does.
+ */
+sessions?: Array<SessionConfig>, };

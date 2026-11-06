@@ -3045,6 +3045,11 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
         }
         v.launch_delay_ms = d;
     }
+    // ---- AltDock: Stream C ----
+    if let Some(list) = patch.sessions {
+        v.sessions = crate::sessions::checked_list(list, &v.sessions)?;
+    }
+    // ---- end AltDock: Stream C ----
     // Multi-instance itself goes through multi_instance_set (it has to take or drop the lock).
     if let Some(p) = patch.protect_shared_login
         && p != v.protect_shared_login

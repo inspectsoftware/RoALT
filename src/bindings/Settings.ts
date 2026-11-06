@@ -5,6 +5,7 @@ import type { Density } from "./Density";
 import type { DiscordEvents } from "./DiscordEvents";
 import type { MemThrottle } from "./MemThrottle";
 import type { RenderFlags } from "./RenderFlags";
+import type { SessionConfig } from "./SessionConfig";
 import type { TabLayout } from "./TabLayout";
 import type { Theme } from "./Theme";
 import type { WindowLayout } from "./WindowLayout";
@@ -187,4 +188,8 @@ language: string,
 /**
  * AutoHotkey64.exe the user picked; "" to look for it (`macros::find_ahk`).
  */
-ahkPath: string, };
+ahkPath: string, 
+/**
+ * Background sessions (`sessions`); their secrets are in the vault.
+ */
+sessions: Array<SessionConfig>, };

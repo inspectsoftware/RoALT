@@ -50,9 +50,9 @@ User's session                               Background session(s) (alt Windows 
 |---|---|
 | Data folder (per Windows user) | `%LOCALAPPDATA%\AltDock` (not `RoALT`: must never touch a real RoALT install) |
 | Tauri identifier | `dev.altdock.app` |
-| Shared program copy for alt users | `%ProgramData%\AltDock\app\altdock.exe` (+ resources); ACL: Administrators full, main user modify, alt users read/execute |
+| Shared program copy for alt users | `%ProgramData%\AltDock\app\altdock.exe` (+ resources); owner Administrators; ACL: Administrators and SYSTEM full, main user and alt users read/execute (the HKLM Run value runs it for every user, so only administrators may change it; updates go through the elevated setup) |
 | Managed alt user list | `%ProgramData%\AltDock\users.json` `{ "users": ["altdock-1", …] }` |
-| Control config per alt user | `%ProgramData%\AltDock\control\<windows-user>.json` `{ "port": 47611, "token": "<64 hex>", "mode": "shared"|"dedicated" }`; ACL: that alt user read, main user full, Administrators full |
+| Control config per alt user | `%ProgramData%\AltDock\control\<windows-user>.json` `{ "port": 47611, "token": "<64 hex>", "mode": "shared"|"dedicated" }`; ACL: that alt user read, Administrators and SYSTEM full (the folder: Administrators and SYSTEM only) |
 | Autostart | `HKLM\Software\Microsoft\Windows\CurrentVersion\Run` value `AltDockSession` = `"%ProgramData%\AltDock\app\altdock.exe" --session` — exits at once unless the user is in `users.json` |
 | Alt Windows users | `altdock-1`, `altdock-2`, … hidden from the sign-in screen |
 | Loopback addresses | `127.0.0.2` for session 1, `127.0.0.3` for session 2, … (one Credential Manager entry `TERMSRV/<addr>` each) |
@@ -110,7 +110,9 @@ start path in `main.rs`, `axum` in `Cargo.toml`.
 
 Start from RoALT 0.6.7's `remote.rs` (commit `b093ddc^`): router, constant-time token compare,
 hardening. Drop TLS, PIN, LAN binding, certificates: **bind 127.0.0.1 only**, header
-`X-AltDock-Token: <token>` on every request, compared in constant time; `Host` must be
+`X-AltDock-Token: <token>` on every request, compared in constant time (after review: `GET /v1/hello`
+with `X-AltDock-Nonce` answers `{ proof: HMAC-SHA256(token, "altdock-control-server\0" + nonce) }`
+without the token, and the client sends the token only after checking that proof); `Host` must be
 `127.0.0.1:<port>`; JSON only; 1 MB body limit.
 
 Session mode (`altdock.exe --session` or any start where a control config exists for the current
@@ -169,6 +171,9 @@ Owns: `src-tauri/src/sessions/` (`mod.rs`, `health.rs`, `setup.rs`, `users.rs`, 
   code-signing certificate (LocalMachine\My + Root) and lists its thumbprint in
   `TrustedCertThumbprints`, and signs each `.rdp` with `rdpsign.exe /sha256 <thumbprint>`.
   It writes a result JSON next to the plan; the main app reads it.
+  *(Review: the plan is `setup-<32 hex>.json`, opened once without following links and wiped after
+  reading; the result goes back into the same file. Only the plan folder's own `sessions\*.rdp`
+  files with exactly `rdp::build`'s settings are signed, as a copy in an admin-only folder.)*
 - **Credentials**: `CredWriteW` `TERMSRV/<address>` (`CRED_TYPE_DOMAIN_PASSWORD`) in the main
   user's store — no elevation.
 - **.rdp file** (main data folder, `sessions\<name>.rdp`): `full address`, `username`, fixed

@@ -437,5 +437,14 @@
   "{path} wasn't made by AltDock's setup. Delete it, then run the setup again.": "{path} wurde nicht von der AltDock-Einrichtung angelegt. Lösche es und führe die Einrichtung erneut aus.",
   "{file} isn't a session file.": "{file} ist keine Sitzungsdatei.",
   "{user} isn't a standard user; AltDock leaves it alone.": "{user} ist kein Standardbenutzer; AltDock lässt dieses Konto unverändert.",
-  "Something other than this session's AltDock answers on its port, so AltDock sent it nothing. Sign the session out and in again, or restart Windows.": "Auf dem Port dieser Sitzung antwortet etwas anderes als ihr AltDock, deshalb hat AltDock nichts dorthin gesendet. Melde die Sitzung ab und wieder an oder starte Windows neu."
+  "Something other than this session's AltDock answers on its port, so AltDock sent it nothing. Sign the session out and in again, or restart Windows.": "Auf dem Port dieser Sitzung antwortet etwas anderes als ihr AltDock, deshalb hat AltDock nichts dorthin gesendet. Melde die Sitzung ab und wieder an oder starte Windows neu.",
+  "Log every session off first: {users} still signed in.": "Melde zuerst alle Sitzungen ab. Noch angemeldet: {users}.",
+  "Remote Desktop only from this PC": "Remotedesktop nur von diesem PC",
+  "Other computers can't reach Remote Desktop here (firewall rule {rule}).": "Andere Computer erreichen den Remotedesktop hier nicht (Firewallregel {rule}).",
+  "The firewall rule {rule} is there, but Windows Firewall is off for the current network, so it blocks nothing.": "Die Firewallregel {rule} ist vorhanden, aber die Windows-Firewall ist für das aktuelle Netzwerk aus, also sperrt sie nichts.",
+  "Other computers on the network can reach Remote Desktop here: the firewall rule {rule} is missing.": "Andere Computer im Netzwerk erreichen den Remotedesktop hier: Die Firewallregel {rule} fehlt.",
+  "Restored.": "Wiederhergestellt.",
+  "Removed.": "Entfernt.",
+  "No record of the previous values: only those that still say what AltDock set are removed.": "Keine Aufzeichnung der früheren Werte: Nur Werte, die noch auf AltDocks Einstellung stehen, werden entfernt.",
+  "{path} wasn't made by AltDock's setup; it was left alone.": "{path} wurde nicht von der AltDock-Einrichtung angelegt und bleibt unverändert."
 }

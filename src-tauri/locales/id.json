@@ -426,5 +426,14 @@
   "{path} wasn't made by AltDock's setup. Delete it, then run the setup again.": "{path} wasn't made by AltDock's setup. Delete it, then run the setup again.",
   "{file} isn't a session file.": "{file} isn't a session file.",
   "{user} isn't a standard user; AltDock leaves it alone.": "{user} isn't a standard user; AltDock leaves it alone.",
-  "Something other than this session's AltDock answers on its port, so AltDock sent it nothing. Sign the session out and in again, or restart Windows.": "Something other than this session's AltDock answers on its port, so AltDock sent it nothing. Sign the session out and in again, or restart Windows."
+  "Something other than this session's AltDock answers on its port, so AltDock sent it nothing. Sign the session out and in again, or restart Windows.": "Something other than this session's AltDock answers on its port, so AltDock sent it nothing. Sign the session out and in again, or restart Windows.",
+  "Log every session off first: {users} still signed in.": "Log every session off first: {users} still signed in.",
+  "Remote Desktop only from this PC": "Remote Desktop only from this PC",
+  "Other computers can't reach Remote Desktop here (firewall rule {rule}).": "Other computers can't reach Remote Desktop here (firewall rule {rule}).",
+  "The firewall rule {rule} is there, but Windows Firewall is off for the current network, so it blocks nothing.": "The firewall rule {rule} is there, but Windows Firewall is off for the current network, so it blocks nothing.",
+  "Other computers on the network can reach Remote Desktop here: the firewall rule {rule} is missing.": "Other computers on the network can reach Remote Desktop here: the firewall rule {rule} is missing.",
+  "Restored.": "Restored.",
+  "Removed.": "Removed.",
+  "No record of the previous values: only those that still say what AltDock set are removed.": "No record of the previous values: only those that still say what AltDock set are removed.",
+  "{path} wasn't made by AltDock's setup; it was left alone.": "{path} wasn't made by AltDock's setup; it was left alone."
 }

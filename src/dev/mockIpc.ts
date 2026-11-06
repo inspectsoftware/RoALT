@@ -1573,7 +1573,8 @@ if (preview.get("scenario") === "busy") {
 // Roblox not installed there yet ("Install Roblox" takes ~3 s) and no accounts pushed (launching
 // asks for that first). A session has its own account ids (here 100 + this app's); its clients
 // carry the Roblox user id. Launched clients start, join and play on timers; CPU and memory drift.
-// ?sessions=down: Farm's control API doesn't answer.
+// ?sessions=down: Farm's control API doesn't answer. "Remove from this PC" (~2 s; refused while a
+// session is signed in) clears the list and fails every setup check again until "Set up".
 import type {
   AfkClientConfig as SAfk, ControlClient as SClient, HealthCheck as SCheck, ImportAnswer, LaunchAnswer, SessionConfig as SConfig, SessionView as SView,
   SetupResult, WtsState as SWts,
@@ -1599,6 +1600,7 @@ function sClient(accountId: number, state: SClient["state"], placeName: string |
 const sUsers = new Set(["altdock-1", "altdock-2"]);
 let sProgramCurrent = false;
 let sSigned = false;
+let sSetUp = true;
 const sessions: SMock[] = [
   {
     config: { name: "Farm", windowsUser: "altdock-1", address: "127.0.0.2", port: 47611, mode: "shared", accountIds: [2, 3, 5], width: 1280, height: 720 },
@@ -1637,13 +1639,18 @@ function sHealth(): SCheck[] {
     check("rdpWrapper", true, "RDP Wrapper installed", "C:\\Program Files\\RDP Wrapper\\rdpwrap.dll", "rdpWrapper"),
     check("rdpWrapperIni", true, "rdpwrap.ini supports this Windows", "termsrv.dll 10.0.26100.7171 is listed.", "rdpWrapperIni"),
     check("listener", true, "Remote Desktop listening", "Port 3389 answers.", "restart"),
-    check("connections", true, "Remote connections allowed", "fDenyTSConnections", "setup"),
-    check("singleSession", true, "Several sessions allowed", "fSingleSessionPerUser", "setup"),
+    check("connections", sSetUp, "Remote connections allowed", "fDenyTSConnections", "setup"),
+    check(
+      "remoteRdpBlocked", sSetUp, "Remote Desktop only from this PC",
+      sSetUp ? "Other computers can't reach Remote Desktop here (firewall rule AltDock: block remote RDP)." : "Other computers on the network can reach Remote Desktop here: the firewall rule AltDock: block remote RDP is missing.",
+      "setup",
+    ),
+    check("singleSession", sSetUp, "Several sessions allowed", "fSingleSessionPerUser", "setup"),
     check("suppressMinimized", true, "Sessions keep drawing when hidden", "RemoteDesktop_SuppressWhenMinimized", "setup"),
-    check("hardwareGraphics", true, "Graphics card used in sessions", "bEnumerateHWBeforeSW", "setup"),
-    check("firstLogon", true, "No first sign-in screens", "DisablePrivacyExperience, EnableFirstLogonAnimation", "setup"),
-    check("programCopy", sProgramCurrent, "Program copy for sessions up to date", sProgramCurrent ? copy : `${copy} is another version.`, "setup"),
-    check("autostart", true, "AltDock starts in sessions", "AltDockSession", "setup"),
+    check("hardwareGraphics", sSetUp, "Graphics card used in sessions", "bEnumerateHWBeforeSW", "setup"),
+    check("firstLogon", sSetUp, "No first sign-in screens", "DisablePrivacyExperience, EnableFirstLogonAnimation", "setup"),
+    check("programCopy", sProgramCurrent, "Program copy for sessions up to date", sProgramCurrent ? copy : sSetUp ? `${copy} is another version.` : `${copy} is missing.`, "setup"),
+    check("autostart", sSetUp, "AltDock starts in sessions", "AltDockSession", "setup"),
     check("altUsers", !missing.length, "Session users ready", !users.length ? "No sessions yet." : missing.length ? `Missing or not in Remote Desktop Users: ${missing.join(", ")}` : users.join(", "), "setup"),
     check("rdpSigning", sSigned, "Session files signed and trusted", sSigned ? "3F2A9C0E4B7D61A85C2E90F1B3D4A6C7E8F90123" : "The signing certificate isn't trusted yet.", "setup"),
   ];
@@ -1685,7 +1692,7 @@ async function sessionsHandle(cmd: string, args: Args): Promise<unknown> {
       if (unknown) return fail("invalid", `There is no session ${unknown}.`);
       await sleep(2000);
       if (preview.get("setup") === "declined") return fail("invalid", "The session setup needs admin rights; the prompt was declined.");
-      [sProgramCurrent, sSigned] = [true, true];
+      [sProgramCurrent, sSigned, sSetUp] = [true, true, true];
       const chosen = sessions.filter((s) => !args.names.length || args.names.includes(s.config.name));
       for (const s of chosen) sUsers.add(s.config.windowsUser);
       sSync();
@@ -1693,12 +1700,39 @@ async function sessionsHandle(cmd: string, args: Args): Promise<unknown> {
         steps: [
           { id: "suppressMinimized", ok: true, detail: "" },
           ...chosen.map((s) => ({ id: `credentials:${s.config.name}`, ok: true, detail: "" })),
+          { id: "firewall", ok: true, detail: "AltDock: block remote RDP" },
           ...["connections", "singleSession", "hardwareGraphics", "firstLogon"].map((id) => ({ id, ok: true, detail: "" })),
           ...chosen.map((s) => ({ id: `user:${s.config.windowsUser}`, ok: true, detail: "Created." })),
           { id: "programCopy", ok: true, detail: "C:\\ProgramData\\AltDock\\app\\altdock.exe" },
           { id: "certificate", ok: true, detail: "3F2A9C0E4B7D61A85C2E90F1B3D4A6C7E8F90123" },
         ],
         thumbprint: "3F2A9C0E4B7D61A85C2E90F1B3D4A6C7E8F90123",
+      } satisfies SetupResult;
+    }
+    case "sessions_uninstall": {
+      const on = sessions.filter((s) => s.wts !== "none").map((s) => s.config.windowsUser);
+      if (on.length) return fail("invalid", `Log every session off first: ${on.join(", ")} still signed in.`);
+      await sleep(2000);
+      if (preview.get("setup") === "declined") return fail("invalid", "The session setup needs admin rights; the prompt was declined.");
+      const users = [...sUsers];
+      if (args.deleteUsers) sUsers.clear();
+      sessions.splice(0);
+      [sProgramCurrent, sSigned, sSetUp] = [false, false, false];
+      sSync();
+      return {
+        steps: [
+          { id: "restoreState", ok: true, detail: "C:\\ProgramData\\AltDock\\restore.json" },
+          { id: "firewall", ok: true, detail: "AltDock: block remote RDP" },
+          { id: "autostart", ok: true, detail: "" },
+          { id: "certificate", ok: true, detail: "3F2A9C0E4B7D61A85C2E90F1B3D4A6C7E8F90123" },
+          { id: "trustedThumbprints", ok: true, detail: "Removed." },
+          ...["connections", "singleSession", "hardwareGraphics", "firstLogon"].map((id) => ({ id, ok: true, detail: "Restored." })),
+          ...users.map((u) => (args.deleteUsers ? { id: `remove:${u}`, ok: true, detail: "Deleted." } : { id: `hide:${u}`, ok: true, detail: "Removed." })),
+          { id: "sharedFolder", ok: true, detail: "C:\\ProgramData\\AltDock" },
+          { id: "credentials", ok: true, detail: "127.0.0.2, 127.0.0.3" },
+          { id: "sessionFiles", ok: true, detail: "" },
+        ],
+        thumbprint: null,
       } satisfies SetupResult;
     }
     case "sessions_list":

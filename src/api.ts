@@ -386,6 +386,11 @@ export const api = {
   sessionsHealth: () => invoke<HealthCheck[]>("sessions_health"),
   /** Sets the PC up for these sessions (all when empty) after one admin prompt; each step's outcome. */
   sessionsSetup: (names: string[] = []) => invoke<SetupResult>("sessions_setup", { names }),
+  /** "Remove from this PC" after one admin prompt: undoes every machine-wide change Set up made (firewall
+   * rule, autostart, certificate, settings, the ProgramData copy), with `deleteUsers` the alt Windows users
+   * and their profiles too; then the sessions' sign-ins, .rdp files and the session list. Refused while a
+   * session is signed in. */
+  sessionsUninstall: (deleteUsers: boolean) => invoke<SetupResult>("sessions_uninstall", { deleteUsers }),
   /** Each session's Windows state, window and whether its AltDock answers (asked for at most 1.5 s). */
   sessionsList: () => invoke<SessionView[]>("sessions_list"),
   /** Adds or changes a session (by name); the answer has its Windows user, address and port. */

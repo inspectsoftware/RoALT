@@ -117,14 +117,27 @@ pub struct PlanUser {
     pub mode: SessionMode,
 }
 
+/// What an elevated run is for.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum SetupAction {
+    /// Set the PC up (or repair it, or remove single users).
+    #[default]
+    Setup,
+    /// "Remove from this PC": undo every machine-wide change the setup made.
+    Uninstall,
+}
+
 /// What `--altdock-setup <plan.json>` does. Written by the main app into its own data folder
 /// (only the user and administrators can read it) and deleted by the elevated side once read.
 #[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SetupPlan {
+    pub action: SetupAction,
     /// The main user's SID (`S-1-5-21-...`), for the ACLs.
     pub main_user_sid: String,
-    /// Every alt user AltDock manages after this run (`users.json`).
+    /// Every alt user AltDock manages after this run (`users.json`); for an uninstall, the alt
+    /// users the main app knows.
     pub managed_users: Vec<String>,
     /// Alt users to create or repair.
     pub users: Vec<PlanUser>,
@@ -136,6 +149,8 @@ pub struct SetupPlan {
     pub thumbprint: Option<String>,
     /// Policies, program copy, autostart and certificate too (false: only remove users).
     pub system: bool,
+    /// Uninstall only: delete the alt users and their profiles too.
+    pub delete_users: bool,
 }
 
 /// One step of the elevated setup.

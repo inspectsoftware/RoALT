@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { asError, api, type FixKind, type HealthCheck } from "../../api";
 import { t } from "../../i18n";
@@ -6,6 +7,7 @@ import { Button } from "../../ui/Button";
 import { Icon } from "../../ui/Icon";
 import { StatusDot, StatusPill } from "../../ui/Status";
 import { friendly, toast, toastError } from "../../ui/Toast";
+import { UninstallDialog } from "./Dialogs";
 import { sk, useAct, useHealth } from "./queries";
 
 /** RDP Wrapper's own instructions: AltDock never downloads or installs it. */
@@ -47,9 +49,11 @@ function Check({ c }: { c: HealthCheck }) {
 }
 
 /** What background sessions need on this PC, each check with its fix, and the one "Set up" that runs
- * the elevated setup (one UAC prompt) for every session. */
-export function HealthPanel({ names }: { names: string[] }) {
+ * the elevated setup (one UAC prompt) for every session; apart from those, "Remove from this PC",
+ * which undoes it all. `users`: the sessions' Windows users. */
+export function HealthPanel({ names, users }: { names: string[]; users: string[] }) {
   const health = useHealth();
+  const [uninstalling, setUninstalling] = useState(false);
   const { busy, run } = useAct();
   const checks = health.data ?? [];
   const failing = checks.filter((c) => !c.ok);
@@ -84,7 +88,10 @@ export function HealthPanel({ names }: { names: string[] }) {
           {busy === "setup" ? t("sessions.health.settingUp") : t("sessions.health.setup")}
         </Button>
       </header>
-      <p className="text-[13px] text-fg-2 max-w-[72ch]">{t("sessions.health.lead")}</p>
+      <div className="flex flex-col gap-1.5 max-w-[72ch]">
+        <p className="text-[13px] text-fg-2">{t("sessions.health.lead")}</p>
+        <p className="text-[13px] text-fg-2">{t("sessions.health.firewallNote")}</p>
+      </div>
 
       {health.isError ? (
         <p className="alert">{friendly(asError(health.error))}</p>
@@ -110,6 +117,17 @@ export function HealthPanel({ names }: { names: string[] }) {
           )}
         </>
       )}
+
+      <div className="ses-uninstall" role="group" aria-labelledby="ses-uninstall-title">
+        <div className="min-w-0 flex-1">
+          <h3 id="ses-uninstall-title" className="font-medium">{t("sessions.uninstall.title")}</h3>
+          <p className="text-[13px] text-fg-3">{t("sessions.uninstall.lead")}</p>
+        </div>
+        <Button size="md" icon="trash" variant="danger" disabled={busy === "setup"} onClick={() => setUninstalling(true)}>
+          {t("sessions.uninstall.button")}
+        </Button>
+      </div>
+      <UninstallDialog open={uninstalling} onClose={() => setUninstalling(false)} users={users} />
     </section>
   );
 }

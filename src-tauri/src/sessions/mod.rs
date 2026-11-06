@@ -6,6 +6,7 @@
 
 pub mod health;
 pub mod rdp;
+pub mod restore;
 pub mod setup;
 pub mod types;
 
@@ -13,6 +14,8 @@ pub mod types;
 pub mod commands;
 #[cfg(windows)]
 pub mod creds;
+#[cfg(windows)]
+pub mod firewall;
 #[cfg(windows)]
 mod reg;
 #[cfg(windows)]
@@ -39,6 +42,8 @@ pub const MAX_SESSIONS: u32 = 32;
 pub const APP_EXE: &str = "altdock.exe";
 /// HKLM Run value that starts AltDock in each alt user's session.
 pub const RUN_VALUE: &str = "AltDockSession";
+/// The Windows Firewall rule that keeps other computers away from this PC's Remote Desktop.
+pub const FIREWALL_RULE: &str = "AltDock: block remote RDP";
 const MAX_NAME: usize = 32;
 
 /// `%ProgramData%\AltDock`: the program copy, `users.json` and the control configs.
@@ -67,7 +72,7 @@ pub fn slot(n: u32) -> (String, String, u16) {
 }
 
 /// The slot number of an alt user name (`altdock-3` → 3).
-fn slot_of(user: &str) -> Option<u32> {
+pub(crate) fn slot_of(user: &str) -> Option<u32> {
     user.strip_prefix(USER_PREFIX)?.parse().ok().filter(|n| (1..=MAX_SESSIONS).contains(n))
 }
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type AccountSummary, type SessionConfig, type SessionMode } from "../../api";
-import { useAccounts } from "../../data";
+import { qk, useAccounts } from "../../data";
 import { t } from "../../i18n";
 import { Button } from "../../ui/Button";
 import { Segmented } from "../../ui/controls";
@@ -177,6 +177,55 @@ export function RemoveDialog({ session, onClose }: { session: SessionConfig | nu
       <DialogFooter>
         <Button size="md" onClick={onClose} data-autofocus>{t("common.cancel")}</Button>
         <Button size="md" variant="danger" busy={busy === "remove"} onClick={remove}>{t("common.remove")}</Button>
+      </DialogFooter>
+    </Dialog>
+  );
+}
+
+/** "Remove from this PC": says what goes before the admin prompt; the alt Windows users (and their
+ * profiles) only when ticked. Every session leaves the list. */
+export function UninstallDialog({ open, onClose, users }: { open: boolean; onClose: () => void; users: string[] }) {
+  const { busy, run } = useAct();
+  const [deleteUsers, setDeleteUsers] = useState(false);
+  useEffect(() => {
+    if (open) setDeleteUsers(false);
+  }, [open]);
+  const remove = () => {
+    if (busy) return;
+    let failed: string[] = [];
+    const go = async () => void (failed = (await api.sessionsUninstall(deleteUsers)).steps.filter((s) => !s.ok).map((s) => s.id));
+    void run("uninstall", go, [sk.all, qk.settings]).then((ok) => {
+      if (!ok) return;
+      if (failed.length) toast(t("sessions.uninstall.failed", { count: failed.length, steps: failed.join(", ") }), "error");
+      else toast(t("sessions.uninstall.done"));
+      onClose();
+    });
+  };
+  return (
+    <Dialog open={open} onClose={onClose} title={t("sessions.uninstall.dialogTitle")} width={500}>
+      <DialogBody className="flex flex-col gap-4">
+        <div className="flex flex-col gap-2">
+          <p className="text-fg-2">{t("sessions.uninstall.text")}</p>
+          <ul className="ses-uninstall-list">
+            <li>{t("sessions.uninstall.itemFirewall")}</li>
+            <li>{t("sessions.uninstall.itemSettings")}</li>
+            <li>{t("sessions.uninstall.itemProgram")}</li>
+            <li>{t("sessions.uninstall.itemCertificate")}</li>
+            <li>{t("sessions.uninstall.itemSessions")}</li>
+          </ul>
+          <p className="text-[13px] text-fg-3">{t("sessions.uninstall.keeps")}</p>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Checkbox checked={deleteUsers} onChange={setDeleteUsers} label={t("sessions.uninstall.deleteUsers")} />
+          {users.length > 0 && <p className="meta mono pl-7">{users.join(", ")}</p>}
+        </div>
+        {deleteUsers && <p className="alert text-[13px]">{t("sessions.uninstall.deleteUsersHint")}</p>}
+      </DialogBody>
+      <DialogFooter>
+        <Button size="md" onClick={onClose} data-autofocus>{t("common.cancel")}</Button>
+        <Button size="md" variant="danger" icon="shield" busy={busy === "uninstall"} onClick={remove}>
+          {busy === "uninstall" ? t("sessions.uninstall.removing") : t("sessions.uninstall.confirm")}
+        </Button>
       </DialogFooter>
     </Dialog>
   );

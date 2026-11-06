@@ -758,6 +758,7 @@ fn main() {
             // ---- AltDock: Stream C ----
             sessions::commands::sessions_health,
             sessions::commands::sessions_setup,
+            sessions::commands::sessions_uninstall,
             sessions::commands::sessions_list,
             sessions::commands::session_save,
             sessions::commands::session_remove,

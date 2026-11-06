@@ -67,10 +67,7 @@ pub fn thumbprint_listed(list: &str, thumbprint: &str) -> bool {
     !want.is_empty() && list.split(',').any(|t| normalize_thumbprint(t) == want)
 }
 
-/// A thumbprint as compared and stored: uppercase hex, nothing else.
-pub fn normalize_thumbprint(t: &str) -> String {
-    t.chars().filter(char::is_ascii_hexdigit).collect::<String>().to_ascii_uppercase()
-}
+pub use super::restore::normalize_thumbprint;
 
 /// The list with `thumbprint` added (pure); the ones there stay, in their order.
 pub fn with_thumbprint(list: &str, thumbprint: &str) -> String {
@@ -97,7 +94,7 @@ mod system {
     use super::*;
     use crate::sessions::reg::{self, HKCU, HKLM};
     use crate::sessions::types::{FixKind, HealthCheck, SessionConfig};
-    use crate::sessions::{RUN_VALUE, app_exe, creds, rdp, run_command, users};
+    use crate::sessions::{FIREWALL_RULE, RUN_VALUE, app_exe, creds, firewall, rdp, run_command, users};
 
     /// A file's numeric version (`a.b.c.d`), from its version resource.
     pub fn file_version(path: &Path) -> Option<String> {
@@ -223,6 +220,18 @@ mod system {
         ));
         let deny = effective(reg::dword(HKLM, reg::TS_POLICY, "fDenyTSConnections"), reg::dword(HKLM, reg::TS_CONTROL, "fDenyTSConnections"), 1);
         out.push(check("connections", deny == 0, tr!("Remote connections allowed"), "fDenyTSConnections".into(), FixKind::Setup));
+        let blocked = firewall::status();
+        out.push(check(
+            "remoteRdpBlocked",
+            blocked.is_some(),
+            tr!("Remote Desktop only from this PC"),
+            match blocked {
+                Some(true) => tr!("Other computers can't reach Remote Desktop here (firewall rule {rule}).", rule = FIREWALL_RULE),
+                Some(false) => tr!("The firewall rule {rule} is there, but Windows Firewall is off for the current network, so it blocks nothing.", rule = FIREWALL_RULE),
+                None => tr!("Other computers on the network can reach Remote Desktop here: the firewall rule {rule} is missing.", rule = FIREWALL_RULE),
+            },
+            FixKind::Setup,
+        ));
         let single = effective(reg::dword(HKLM, reg::TS_POLICY, "fSingleSessionPerUser"), reg::dword(HKLM, reg::TS_CONTROL, "fSingleSessionPerUser"), 1);
         out.push(check("singleSession", single == 0, tr!("Several sessions allowed"), "fSingleSessionPerUser".into(), FixKind::Setup));
         let suppress = reg::dword(HKCU, reg::RDP_CLIENT, "RemoteDesktop_SuppressWhenMinimized") == Some(2);

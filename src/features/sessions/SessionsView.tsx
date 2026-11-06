@@ -37,7 +37,7 @@ export function SessionsView({ accounts }: { accounts: AccountSummary[] }) {
           </Button>
         </header>
 
-        <HealthPanel names={configs.map((c) => c.name)} />
+        <HealthPanel names={configs.map((c) => c.name)} users={configs.map((c) => c.windowsUser)} />
 
         {sessions.isError ? (
           <div role="alert" className="notice" data-tone="attention">

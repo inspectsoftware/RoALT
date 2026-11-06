@@ -10,11 +10,15 @@
 //! theirs, tokens hex, the main user a user, `.rdp` files AltDock's own session files next to the
 //! plan, and the program it copies is always itself. Everything it writes in `%ProgramData%\AltDock`
 //! only administrators can change: the HKLM autostart runs that program for every user.
+//!
+//! The same entry undoes it all ("Remove from this PC", `SetupAction::Uninstall`): the setup
+//! records each registry value's previous state in `restore.json` before it first changes it
+//! (`restore`), and the uninstall puts them back from there.
 
 use std::path::{Path, PathBuf};
 
-use super::types::{SessionMode, SetupPlan};
-use super::{MAX_SESSIONS, PORT_BASE, USER_PREFIX};
+use super::types::{SessionMode, SetupAction, SetupPlan};
+use super::{PORT_BASE, slot_of};
 
 pub const FLAG: &str = "--altdock-setup";
 
@@ -42,10 +46,6 @@ pub fn rdp_file_ok(file: &Path, plan: &Path) -> bool {
         && file.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".rdp")).is_some_and(name_ok)
 }
 
-fn user_slot(name: &str) -> Option<u32> {
-    name.strip_prefix(USER_PREFIX)?.parse().ok().filter(|n| (1..=MAX_SESSIONS).contains(n))
-}
-
 /// A user account's SID, `S-1-5-21-...` (digits and dashes only, so it can go into an SDDL
 /// string): never a group such as Everyone or Users.
 fn is_user_sid(s: &str) -> bool {
@@ -57,13 +57,21 @@ pub fn check_plan(p: &SetupPlan) -> Result<(), String> {
     if !is_user_sid(&p.main_user_sid) {
         return Err(format!("bad main user SID {:?}", p.main_user_sid));
     }
+    match p.action {
+        SetupAction::Setup if p.delete_users => return Err("deleteUsers is for an uninstall".into()),
+        // An uninstall only reads which alt users the main app knows; it writes nothing of the plan's.
+        SetupAction::Uninstall if !p.users.is_empty() || !p.remove_users.is_empty() || !p.rdp_files.is_empty() || p.thumbprint.is_some() || p.system => {
+            return Err("an uninstall plan names alt users only".into());
+        }
+        _ => {}
+    }
     for name in p.managed_users.iter().chain(&p.remove_users).chain(p.users.iter().map(|u| &u.name)) {
-        if user_slot(name).is_none() {
+        if slot_of(name).is_none() {
             return Err(format!("not an AltDock user: {name:?}"));
         }
     }
     for u in &p.users {
-        if user_slot(&u.name).map(|n| PORT_BASE + n as u16) != Some(u.port) {
+        if slot_of(&u.name).map(|n| PORT_BASE + n as u16) != Some(u.port) {
             return Err(format!("wrong control port for {}", u.name));
         }
         if u.token.len() != 64 || !u.token.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -121,6 +129,32 @@ pub fn control_file_sddl(alt: &str) -> String {
     format!("O:BAD:PAI(A;;FA;;;BA)(A;;FA;;;SY)(A;;FR;;;{alt})")
 }
 
+/// `restore.json` (pure): administrators only, though it sits in the folder everyone may read.
+pub fn admin_file_sddl() -> String {
+    "O:BAD:PAI(A;;FA;;;BA)(A;;FA;;;SY)".into()
+}
+
+/// The alt users a `users.json` names (pure); anything not `altdock-<n>` is ignored.
+pub fn users_in_json(bytes: &[u8]) -> Vec<String> {
+    let v: serde_json::Value = serde_json::from_slice(bytes).unwrap_or_default();
+    v.get("users")
+        .and_then(|u| u.as_array())
+        .map(|a| a.iter().filter_map(|u| u.as_str()).filter(|u| slot_of(u).is_some()).map(str::to_owned).collect())
+        .unwrap_or_default()
+}
+
+/// The alt users an uninstall looks at (pure): the main app's, `users.json`'s and those whose
+/// sign-in screen entry `restore.json` recorded, each once, `altdock-<n>` only.
+pub fn uninstall_users(plan: &[String], listed: &[String], hidden: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for u in plan.iter().chain(listed).chain(hidden) {
+        if slot_of(u).is_some() && !out.iter().any(|o| o.eq_ignore_ascii_case(u)) {
+            out.push(u.clone());
+        }
+    }
+    out
+}
+
 #[cfg(windows)]
 pub use system::*;
 
@@ -152,9 +186,9 @@ mod system {
     use crate::error::{AppError, Result};
     use crate::sessions::health::{normalize_thumbprint, with_thumbprint};
     use crate::sessions::reg::{self, HKLM};
+    use crate::sessions::restore::{self, POLICIES, Prior, RegData, RestoreState, TRUSTED_THUMBPRINTS, Undo, undo, undo_thumbprints};
     use crate::sessions::types::SetupResult;
-    use crate::sessions::rdp;
-    use crate::sessions::{APP_EXE, RUN_VALUE, app_exe, program_data, random, run_command, users};
+    use crate::sessions::{APP_EXE, RUN_VALUE, app_exe, firewall, program_data, random, rdp, run_command, users};
 
     /// How long the elevated setup may take once the prompt is answered.
     const TIMEOUT: Duration = Duration::from_secs(300);
@@ -304,23 +338,34 @@ mod system {
     }
 
     fn execute(plan: &SetupPlan, plan_path: &Path, r: &mut SetupResult) {
+        match plan.action {
+            SetupAction::Setup => set_up(plan, plan_path, r),
+            SetupAction::Uninstall => uninstall(plan, r),
+        }
+    }
+
+    fn set_up(plan: &SetupPlan, plan_path: &Path, r: &mut SetupResult) {
+        let main = plan.main_user_sid.as_str();
+        let root = program_data();
+        // Before any value changes: where its previous state goes.
+        let existing: Vec<String> = plan.managed_users.iter().filter_map(|u| users::sid_of(u)).collect();
+        let mut record = Recorder::open(&root, main, &existing);
         if plan.system {
-            policies(r);
+            r.push("firewall", firewall::add());
+            policies(&mut record, r);
         }
         for u in &plan.users {
             r.push(format!("user:{}", u.name), users::create_or_repair(&u.name, &u.password));
             r.push(format!("remoteDesktopUsers:{}", u.name), users::add_to_remote_desktop_users(&u.name));
-            r.push(format!("hide:{}", u.name), reg::set_dword(HKLM, reg::USER_LIST, &u.name, 0).map(|()| String::new()));
+            r.push(format!("hide:{}", u.name), record.set(reg::USER_LIST, &u.name, RegData::Dword(0)).map(|()| String::new()));
         }
         // Their control configs go with `control_configs` (no longer managed).
         for name in &plan.remove_users {
             let _ = reg::delete(HKLM, reg::USER_LIST, name);
             r.push(format!("remove:{name}"), users::delete(name));
         }
-        let main = plan.main_user_sid.as_str();
         // Alt users that don't exist (a failed create) can't be in an ACL.
         let alts: Vec<String> = plan.managed_users.iter().filter_map(|u| users::sid_of(u)).collect();
-        let root = program_data();
         let shared = secure_dir(&root, &shared_sddl(main, &alts));
         r.push("sharedFolder", shared.clone().map(|()| root.display().to_string()));
         r.push(
@@ -339,8 +384,7 @@ mod system {
             Ok((sha1, sha256)) => {
                 r.thumbprint = Some(sha1.clone());
                 r.push("certificate", Ok(sha1.clone()));
-                let list = reg::string(HKLM, reg::TS_POLICY, "TrustedCertThumbprints").unwrap_or_default();
-                r.push("trustedThumbprints", reg::set_string(HKLM, reg::TS_POLICY, "TrustedCertThumbprints", &with_thumbprint(&list, &sha1)).map(|()| String::new()));
+                r.push("trustedThumbprints", record.trust(&sha1).map(|()| String::new()));
                 for f in &plan.rdp_files {
                     r.push(format!("sign:{}", f.file_stem().unwrap_or_default().to_string_lossy()), sign(f, plan_path, &sha256));
                 }
@@ -349,22 +393,236 @@ mod system {
         }
     }
 
-    fn policies(r: &mut SetupResult) {
-        let set = |values: &[(&str, &str, u32)]| -> std::result::Result<String, String> {
-            for (key, value, data) in values {
-                reg::set_dword(HKLM, key, value, *data)?;
+    /// `restore::POLICIES`, one result per step (its first failure).
+    fn policies(record: &mut Recorder, r: &mut SetupResult) {
+        let mut steps: Vec<(&str, std::result::Result<String, String>)> = Vec::new();
+        for p in POLICIES {
+            if p.only_if_present && reg::prior(HKLM, p.key, p.value) == Prior::Absent {
+                continue;
             }
-            Ok(String::new())
-        };
-        let mut connections = set(&[(reg::TS_CONTROL, "fDenyTSConnections", 0)]);
-        // A policy saying no would win over the setting.
-        if connections.is_ok() && reg::dword(HKLM, reg::TS_POLICY, "fDenyTSConnections").is_some() {
-            connections = set(&[(reg::TS_POLICY, "fDenyTSConnections", 0)]);
+            let outcome = record.set(p.key, p.value, RegData::Dword(p.data)).map(|()| String::new());
+            match steps.last_mut() {
+                Some((step, done)) if *step == p.step => {
+                    if done.is_ok() {
+                        *done = outcome;
+                    }
+                }
+                _ => steps.push((p.step, outcome)),
+            }
         }
-        r.push("connections", connections);
-        r.push("singleSession", set(&[(reg::TS_POLICY, "fSingleSessionPerUser", 0)]));
-        r.push("hardwareGraphics", set(&[(reg::TS_POLICY, "bEnumerateHWBeforeSW", 1)]));
-        r.push("firstLogon", set(&[(reg::OOBE_POLICY, "DisablePrivacyExperience", 1), (reg::SYSTEM_POLICY, "EnableFirstLogonAnimation", 0)]));
+        for (step, outcome) in steps {
+            r.push(step, outcome);
+        }
+    }
+
+    /// `restore.json` while the setup runs: each value's previous state is written there (as an
+    /// administrators-only file) before the value first changes; a value whose state can't be
+    /// kept isn't changed.
+    struct Recorder {
+        path: PathBuf,
+        state: RestoreState,
+        /// A setup from before `restore.json` ran here: values that already say what AltDock sets
+        /// have an unknown previous state.
+        earlier: bool,
+        ready: std::result::Result<(), String>,
+    }
+
+    impl Recorder {
+        fn open(root: &Path, main: &str, alts: &[String]) -> Recorder {
+            let path = root.join(restore::FILE);
+            let mut earlier = root.join("users.json").is_file() || reg::string(HKLM, reg::RUN, RUN_VALUE).is_some();
+            let mut state = RestoreState::default();
+            let ready = secure_dir(root, &shared_sddl(main, alts)).and_then(|()| {
+                match read_admin_file(&path)? {
+                    Some(bytes) => match serde_json::from_slice::<RestoreState>(&bytes) {
+                        Ok(s) => state.merge(s),
+                        // Damaged: what AltDock's values say now can't be told from before.
+                        Err(e) => {
+                            log::warn!("{} is damaged ({e}); starting over", path.display());
+                            earlier = true;
+                        }
+                    },
+                    None if path.exists() => earlier = true,
+                    None => {}
+                }
+                Ok(())
+            });
+            Recorder { path, state, earlier, ready }
+        }
+
+        fn save(&self) -> std::result::Result<(), String> {
+            let json = serde_json::to_vec_pretty(&self.state).map_err(|e| e.to_string())?;
+            // Written aside, then moved over the old one: never a moment without it.
+            let new = self.path.with_extension("json.new");
+            write_new(&new, &json, Some(&admin_file_sddl()))?;
+            std::fs::rename(&new, &self.path).map_err(|e| format!("{}: {e}", self.path.display()))
+        }
+
+        /// Sets an HKLM value, its previous state recorded first.
+        fn set(&mut self, key: &str, value: &str, data: RegData) -> std::result::Result<(), String> {
+            self.ready.clone()?;
+            if self.state.record(key, value, reg::prior(HKLM, key, value), &data, self.earlier) {
+                self.save()?;
+            }
+            reg::set(HKLM, key, value, &data)
+        }
+
+        /// Adds the signing certificate to `TrustedCertThumbprints`, the list's previous state and
+        /// the thumbprint recorded first.
+        fn trust(&mut self, sha1: &str) -> std::result::Result<(), String> {
+            self.ready.clone()?;
+            let now = reg::prior(HKLM, reg::TS_POLICY, TRUSTED_THUMBPRINTS);
+            let list = match now.data() {
+                Some(RegData::String(s)) => s.clone(),
+                _ => String::new(),
+            };
+            let target = RegData::String(with_thumbprint(&list, sha1));
+            let recorded = self.state.record(reg::TS_POLICY, TRUSTED_THUMBPRINTS, now, &target, self.earlier);
+            if self.state.add_thumbprint(sha1) || recorded {
+                self.save()?;
+            }
+            reg::set(HKLM, reg::TS_POLICY, TRUSTED_THUMBPRINTS, &target)
+        }
+    }
+
+    /// Reads a file only administrators can have made (owned by Administrators, SYSTEM or this
+    /// administrator), never through a link. None when there is none, or it is someone else's.
+    fn read_admin_file(path: &Path) -> std::result::Result<Option<Vec<u8>>, String> {
+        let f = match File::options()
+            .access_mode(GENERIC_READ | READ_CONTROL)
+            .share_mode(1)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+        {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        };
+        let info = handle_info(&f)?;
+        let plain = info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY) == 0 && info.nNumberOfLinks == 1;
+        if !plain || !owned_by_admins(&f) {
+            log::warn!("{} isn't the setup's own file; ignored", path.display());
+            return Ok(None);
+        }
+        let mut bytes = Vec::new();
+        (&f).take(MAX_READ).read_to_end(&mut bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(Some(bytes))
+    }
+
+    /// Carries out one `Undo` on an HKLM value.
+    fn apply(u: Undo, key: &str, value: &str) -> std::result::Result<String, String> {
+        match u {
+            Undo::Keep => Ok(String::new()),
+            Undo::Set(data) => reg::set(HKLM, key, value, &data).map(|()| tr!("Restored.")),
+            Undo::Delete => reg::delete(HKLM, key, value).map(|()| tr!("Removed.")),
+        }
+    }
+
+    // ---------- uninstall ----------
+
+    /// "Remove from this PC": the autostart, the signing certificates and their trust, the
+    /// policies and settings (back to what they were), with `delete_users` the alt users and their
+    /// profiles, the firewall rule, and `%ProgramData%\AltDock` last (it holds `restore.json`).
+    fn uninstall(plan: &SetupPlan, r: &mut SetupResult) {
+        let root = program_data();
+        let read = |name: &str| read_admin_file(&root.join(name)).ok().flatten();
+        let (mut state, have_file) = match read(restore::FILE).map(|b| serde_json::from_slice::<RestoreState>(&b)) {
+            Some(Ok(s)) => (s, true),
+            _ => (RestoreState::default(), false),
+        };
+        // Only what the setup itself sets is ever written back.
+        state.values.retain(|v| restore::restorable(&v.key, &v.value));
+        r.push(
+            "restoreState",
+            Ok(if have_file {
+                root.join(restore::FILE).display().to_string()
+            } else {
+                tr!("No record of the previous values: only those that still say what AltDock set are removed.")
+            }),
+        );
+        let listed = read("users.json").map(|b| users_in_json(&b)).unwrap_or_default();
+
+        r.push("autostart", reg::delete(HKLM, reg::RUN, RUN_VALUE).map(|()| String::new()));
+
+        let mut ours = state.thumbprints.clone();
+        match remove_certificates() {
+            Ok(removed) => {
+                r.push("certificate", Ok(removed.join(", ")));
+                ours.extend(removed);
+            }
+            Err(e) => r.push("certificate", Err(e)),
+        }
+        let now = reg::prior(HKLM, reg::TS_POLICY, TRUSTED_THUMBPRINTS);
+        let list = match now.data() {
+            Some(RegData::String(s)) => Some(s.as_str()),
+            _ => None,
+        };
+        let u = undo_thumbprints(list, &ours, state.prior(reg::TS_POLICY, TRUSTED_THUMBPRINTS));
+        r.push("trustedThumbprints", apply(u, reg::TS_POLICY, TRUSTED_THUMBPRINTS));
+
+        let mut steps: Vec<(&str, std::result::Result<String, String>)> = Vec::new();
+        for p in POLICIES {
+            let now = reg::prior(HKLM, p.key, p.value);
+            let fallback = p.fallback.map(RegData::Dword);
+            let u = undo(state.prior(p.key, p.value), have_file, now.data(), &RegData::Dword(p.data), fallback.as_ref());
+            let outcome = apply(u, p.key, p.value);
+            match steps.last_mut() {
+                Some((step, done)) if *step == p.step => {
+                    if done.is_ok() {
+                        *done = outcome;
+                    }
+                }
+                _ => steps.push((p.step, outcome)),
+            }
+        }
+        for (step, outcome) in steps {
+            r.push(step, outcome);
+        }
+
+        for name in uninstall_users(&plan.managed_users, &listed, &state.hidden_users()) {
+            if plan.delete_users {
+                let deleted = users::delete(&name);
+                if deleted.is_ok() {
+                    let _ = reg::delete(HKLM, reg::USER_LIST, &name);
+                }
+                r.push(format!("remove:{name}"), deleted);
+            } else {
+                let now = reg::prior(HKLM, reg::USER_LIST, &name);
+                let u = undo(state.prior(reg::USER_LIST, &name), have_file, now.data(), &RegData::Dword(0), None);
+                r.push(format!("hide:{name}"), apply(u, reg::USER_LIST, &name));
+            }
+        }
+        // Only now that Remote Desktop is back as it was (off, unless it was on before AltDock).
+        r.push("firewall", firewall::remove());
+        r.push("sharedFolder", remove_shared(&root));
+    }
+
+    /// Deletes `%ProgramData%\AltDock` when the setup made it (owned by administrators); never
+    /// follows a link: one in its place is removed itself, and `std::fs::remove_dir_all` deletes
+    /// through handles, removing links (symlinks, junctions) inside without following them.
+    fn remove_shared(root: &Path) -> std::result::Result<String, String> {
+        let fail = |e: std::io::Error| format!("{}: {e}", root.display());
+        match std::fs::symlink_metadata(root) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+            Err(e) => return Err(fail(e)),
+            Ok(m) if m.file_type().is_symlink() || m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 => {
+                return remove_entry(root).map(|()| String::new()).map_err(fail);
+            }
+            Ok(_) => {}
+        }
+        let left = tr!("{path} wasn't made by AltDock's setup; it was left alone.", path = root.display());
+        let dir = File::options()
+            .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES)
+            .share_mode(7)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(root)
+            .map_err(fail)?;
+        let attributes = handle_info(&dir)?.dwFileAttributes;
+        if attributes & FILE_ATTRIBUTE_DIRECTORY == 0 || attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !owned_by_admins(&dir) {
+            return Err(left);
+        }
+        drop(dir);
+        std::fs::remove_dir_all(root).map(|()| root.display().to_string()).map_err(fail)
     }
 
     /// The control configs, each readable by its own alt user only; configs of users AltDock
@@ -598,16 +856,83 @@ mod system {
             return None;
         }
         let cert = Cert(found);
-        // SAFETY: a live context; its info and the name blobs live as long as it.
-        let ours = unsafe {
-            let info = &*(*cert.0).pCertInfo;
-            let blob = |b: &CRYPT_INTEGER_BLOB| std::slice::from_raw_parts(b.pbData, b.cbData as usize);
-            blob(&info.Subject) == subject && blob(&info.Issuer) == subject
-        };
-        if !ours {
+        if !self_signed_ours(cert.0, subject) {
             return None;
         }
         property(&cert, CERT_KEY_PROV_INFO_PROP_ID).map(|_| cert)
+    }
+
+    /// The certificate's subject and issuer are both `subject` (`CERT_SUBJECT`, encoded).
+    fn self_signed_ours(cert: *const CERT_CONTEXT, subject: &[u8]) -> bool {
+        // SAFETY: a live context; its info and the name blobs live as long as it.
+        unsafe {
+            let info = &*(*cert).pCertInfo;
+            let blob = |b: &CRYPT_INTEGER_BLOB| std::slice::from_raw_parts(b.pbData, b.cbData as usize);
+            blob(&info.Subject) == subject && blob(&info.Issuer) == subject
+        }
+    }
+
+    /// Takes every certificate the setup made (self-signed, `CERT_SUBJECT`) out of LocalMachine's
+    /// `MY` and `Root`, with the key container it made for it; their SHA-1 thumbprints. No other
+    /// certificate is touched.
+    fn remove_certificates() -> std::result::Result<Vec<String>, String> {
+        let subject = subject_name()?;
+        let mut removed: Vec<String> = Vec::new();
+        let mut failed: Vec<String> = Vec::new();
+        for (name, keys) in [(w!("MY"), true), (w!("Root"), false)] {
+            let store = open_store(name)?;
+            let mut prev: *const CERT_CONTEXT = std::ptr::null();
+            loop {
+                // SAFETY: `prev` is the last context this enumeration returned (freed by the call).
+                let c = unsafe { CertEnumCertificatesInStore(store.0, (!prev.is_null()).then_some(prev)) };
+                if c.is_null() {
+                    break;
+                }
+                prev = c;
+                if !self_signed_ours(c, &subject) {
+                    continue;
+                }
+                // Deleting frees the context it is given: a copy, so the enumeration goes on.
+                // SAFETY: `c` is live.
+                let copy = Cert(unsafe { CertDuplicateCertificateContext(Some(c)) });
+                let thumbprint = property(&copy, CERT_SHA1_HASH_PROP_ID).map(|t| hex(&t)).unwrap_or_default();
+                if keys {
+                    delete_key(&copy);
+                }
+                let raw = copy.0;
+                std::mem::forget(copy);
+                // SAFETY: `raw` is the copy just made; the call frees it, even when it fails.
+                match unsafe { CertDeleteCertificateFromStore(raw) } {
+                    Ok(()) if !removed.contains(&thumbprint) => removed.push(thumbprint),
+                    Ok(()) => {}
+                    Err(e) => failed.push(format!("{thumbprint}: {}", e.message())),
+                }
+            }
+        }
+        if failed.is_empty() { Ok(removed) } else { Err(failed.join("; ")) }
+    }
+
+    /// Deletes the machine key container `make_certificate` made for `cert` (named
+    /// `AltDock-RDP-<hex>`); any other key is left alone.
+    fn delete_key(cert: &Cert) {
+        let Some(buf) = property(cert, CERT_KEY_PROV_INFO_PROP_ID) else { return };
+        if buf.len() < size_of::<CRYPT_KEY_PROV_INFO>() {
+            return;
+        }
+        // SAFETY: the property is a CRYPT_KEY_PROV_INFO whose strings point into `buf`, alive here.
+        let info = unsafe { std::ptr::read_unaligned(buf.as_ptr().cast::<CRYPT_KEY_PROV_INFO>()) };
+        // SAFETY: NUL-terminated strings inside `buf` (or null).
+        let container = unsafe { info.pwszContainerName.to_string() }.unwrap_or_default();
+        if !container.starts_with("AltDock-RDP-") || info.dwFlags.0 & CRYPT_MACHINE_KEYSET.0 == 0 || info.dwProvType != PROV_RSA_AES {
+            return;
+        }
+        let mut prov = 0usize;
+        // SAFETY: the strings live in `buf`; CRYPT_DELETEKEYSET hands back no context to release.
+        if let Err(e) = unsafe {
+            CryptAcquireContextW(&mut prov, PCWSTR(info.pwszContainerName.0), PCWSTR(info.pwszProvName.0), info.dwProvType, CRYPT_DELETEKEYSET | CRYPT_MACHINE_KEYSET.0)
+        } {
+            log::debug!("key container {container} not deleted: {}", e.message());
+        }
     }
 
     /// A self-signed code-signing certificate (RSA 2048, SHA-256, 10 years) with its key in a new
@@ -738,6 +1063,7 @@ mod tests {
 
     fn plan() -> SetupPlan {
         SetupPlan {
+            action: SetupAction::Setup,
             main_user_sid: "S-1-5-21-1004336348-1177238915-682003330-1001".into(),
             managed_users: vec!["altdock-1".into(), "altdock-2".into()],
             users: vec![PlanUser {
@@ -751,6 +1077,7 @@ mod tests {
             rdp_files: vec![PathBuf::from(r"C:\Users\you\AppData\Local\AltDock\sessions\Farm.rdp")],
             thumbprint: Some("A".repeat(40)),
             system: true,
+            delete_users: false,
         }
     }
 
@@ -805,6 +1132,61 @@ mod tests {
         assert!(bad(|p| p.thumbprint = Some("nothex".into())));
     }
 
+    fn uninstall_plan() -> SetupPlan {
+        SetupPlan {
+            action: SetupAction::Uninstall,
+            main_user_sid: "S-1-5-21-1004336348-1177238915-682003330-1001".into(),
+            managed_users: vec!["altdock-1".into()],
+            delete_users: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn uninstall_plans_name_alt_users_only() {
+        let p = uninstall_plan();
+        assert!(check_plan(&p).is_ok());
+        let back: SetupPlan = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(back.action, SetupAction::Uninstall);
+        assert!(back.delete_users);
+        assert!(serde_json::to_string(&p).unwrap().contains(r#""action":"uninstall""#));
+        assert!(check_plan(&SetupPlan { delete_users: false, managed_users: vec![], ..uninstall_plan() }).is_ok());
+        let bad = |f: fn(&mut SetupPlan)| {
+            let mut p = uninstall_plan();
+            f(&mut p);
+            check_plan(&p).is_err()
+        };
+        assert!(bad(|p| p.managed_users.push("Administrator".into())));
+        assert!(bad(|p| p.managed_users.push("altdock-33".into())));
+        assert!(bad(|p| p.main_user_sid = "S-1-1-0".into()));
+        // An uninstall writes nothing the plan brings: no users, files, certificates or setup.
+        assert!(bad(|p| p.users = plan().users));
+        assert!(bad(|p| p.remove_users.push("altdock-2".into())));
+        assert!(bad(|p| p.rdp_files.push(PathBuf::from(r"C:\d\sessions\Farm.rdp"))));
+        assert!(bad(|p| p.thumbprint = Some("A".repeat(40))));
+        assert!(bad(|p| p.system = true));
+        // Deleting every alt user is for an uninstall only.
+        let mut setup = plan();
+        setup.delete_users = true;
+        assert!(check_plan(&setup).is_err());
+        // Plans from before the action existed don't read.
+        let mut old: serde_json::Value = serde_json::to_value(plan()).unwrap();
+        old.as_object_mut().unwrap().remove("action");
+        assert!(serde_json::from_value::<SetupPlan>(old).is_err());
+    }
+
+    #[test]
+    fn uninstall_finds_the_alt_users() {
+        assert_eq!(users_in_json(br#"{"users":["altdock-1","Administrator","altdock-0",7,"altdock-2"]}"#), ["altdock-1", "altdock-2"]);
+        assert!(users_in_json(b"not json").is_empty());
+        assert!(users_in_json(br#"{"users":"altdock-1"}"#).is_empty());
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            uninstall_users(&s(&["altdock-1", "you"]), &s(&["ALTDOCK-1", "altdock-3"]), &s(&["altdock-2", "altdock-99"])),
+            ["altdock-1", "altdock-3", "altdock-2"]
+        );
+    }
+
     #[test]
     fn setup_arguments_and_files() {
         let args = |a: &[&str]| a.iter().map(std::ffi::OsString::from).collect::<Vec<_>>();
@@ -843,7 +1225,7 @@ mod tests {
             shared_sddl(main, &["S-1-5-21-1-2-3-1002".into()]),
             "O:BAD:PAI(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)(A;OICI;0x1200a9;;;S-1-5-21-1-2-3-1001)(A;OICI;0x1200a9;;;S-1-5-21-1-2-3-1002)"
         );
-        for sddl in [shared_sddl(main, &["S-1-5-21-1-2-3-1002".into()]), private_dir_sddl(), control_file_sddl("S-1-5-21-1-2-3-1002")] {
+        for sddl in [shared_sddl(main, &["S-1-5-21-1-2-3-1002".into()]), private_dir_sddl(), control_file_sddl("S-1-5-21-1-2-3-1002"), admin_file_sddl()] {
             assert!(sddl.starts_with("O:BAD:P"), "{sddl}");
             // Full control or modify for no one but BA and SY; no CREATOR OWNER, Users or Everyone.
             for ace in sddl.split('(').skip(1) {
@@ -854,6 +1236,8 @@ mod tests {
             }
         }
         assert!(!private_dir_sddl().contains(main));
+        // restore.json: nobody but administrators reads (or changes) what gets put back.
+        assert_eq!(admin_file_sddl(), "O:BAD:PAI(A;;FA;;;BA)(A;;FA;;;SY)");
         assert!(control_file_sddl("S-1-5-21-1-2-3-1002").ends_with("(A;;FR;;;S-1-5-21-1-2-3-1002)"));
     }
 }

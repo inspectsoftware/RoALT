@@ -2,7 +2,7 @@
 //! mstsc takes it from: never in the `.rdp` file or on a command line. No elevation needed.
 
 use windows::Win32::Foundation::ERROR_NOT_FOUND;
-use windows::Win32::Security::Credentials::{CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_DOMAIN_PASSWORD, CREDENTIALW, CredDeleteW, CredWriteW};
+use windows::Win32::Security::Credentials::{CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_DOMAIN_PASSWORD, CREDENTIALW, CredDeleteW, CredFree, CredReadW, CredWriteW};
 use windows::core::{HSTRING, PWSTR};
 use zeroize::Zeroizing;
 
@@ -44,4 +44,23 @@ pub fn delete(address: &str) -> Result<()> {
         Err(e) if e.code() != ERROR_NOT_FOUND.to_hresult() => Err(AppError::Internal(e.message())),
         _ => Ok(()),
     }
+}
+
+/// Removes the credential for `address` when it is an alt user's (`<computer>\altdock-<n>`), as
+/// `write` stores it; true when one was removed. Anything else of that name stays.
+pub fn delete_ours(address: &str) -> Result<bool> {
+    let name = HSTRING::from(target(address));
+    let mut cred: *mut CREDENTIALW = std::ptr::null_mut();
+    // SAFETY: the credential is allocated by CredReadW and freed below.
+    if unsafe { CredReadW(&name, CRED_TYPE_DOMAIN_PASSWORD, None, &mut cred) }.is_err() || cred.is_null() {
+        return Ok(false);
+    }
+    // SAFETY: `cred` is the credential just read; its user name is a NUL-terminated string or null.
+    let user = unsafe { (*cred).UserName.to_string() }.unwrap_or_default();
+    // SAFETY: allocated by CredReadW.
+    unsafe { CredFree(cred.cast()) };
+    if !user.rsplit('\\').next().is_some_and(|u| super::slot_of(u).is_some()) {
+        return Ok(false);
+    }
+    delete(address).map(|()| true)
 }

@@ -56,6 +56,24 @@
     align-items: center;
     gap: 4px;
   }
+  /* "Remove from this PC": apart from Set up, below the checks. */
+  .ses-uninstall {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
+    margin-top: 4px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+  }
+  .ses-uninstall-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-left: 1.25em;
+    list-style: disc;
+    color: var(--fg);
+  }
 
   /* ---- A session ---- */
   .ses-actions {

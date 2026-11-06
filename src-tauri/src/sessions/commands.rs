@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter, State};
 
-use super::types::{HealthCheck, PlanUser, SessionConfig, SessionControl, SessionView, SetupPlan, SetupResult, WtsState};
-use super::{checked, creds, health, rdp, reg, remote, secret_key, setup, users, window, wts};
+use super::types::{HealthCheck, PlanUser, SessionConfig, SessionControl, SessionView, SetupAction, SetupPlan, SetupResult, WtsState};
+use super::{MAX_SESSIONS, checked, creds, health, rdp, reg, remote, secret_key, setup, slot, slot_of, users, window, wts};
 use crate::App;
 use crate::error::{AppError, Result};
 use crate::vault::Secret;
@@ -109,6 +109,7 @@ pub async fn sessions_setup(app: AppHandle, s: State<'_, App>, names: Vec<String
         rdp_files.push(ensure_rdp(&s.data_dir, c)?);
     }
     let plan = SetupPlan {
+        action: SetupAction::Setup,
         main_user_sid: users::current_user_sid().ok_or_else(|| AppError::Internal("could not read the current user's SID".into()))?,
         managed_users: all.iter().map(|c| c.windows_user.clone()).collect(),
         users: plan_users,
@@ -116,6 +117,7 @@ pub async fn sessions_setup(app: AppHandle, s: State<'_, App>, names: Vec<String
         rdp_files,
         thumbprint: s.db.setting_value(THUMBPRINT)?,
         system: true,
+        delete_users: false,
     };
     let data_dir = s.data_dir.clone();
     let mut result = blocking(move || setup::run(&data_dir, &plan)).await?;
@@ -210,6 +212,83 @@ pub async fn session_remove(app: AppHandle, s: State<'_, App>, name: String, del
     log::info!("session {name} removed{}", if delete_user { " with its Windows user" } else { "" });
     changed(&app);
     Ok(result)
+}
+
+/// "Remove from this PC": one admin prompt undoes every machine-wide change the setup made
+/// (firewall rule, autostart, signing certificates, policies and settings back to what they were,
+/// `%ProgramData%\AltDock`), with `delete_users` the alt users and their profiles too. Then this
+/// user's side: the sessions' Credential Manager entries, `.rdp` files and secrets, and the session
+/// list. Refused while an alt user is signed in; declining the prompt removes nothing.
+#[tauri::command]
+pub async fn sessions_uninstall(app: AppHandle, s: State<'_, App>, delete_users: bool) -> Result<SetupResult> {
+    let all = sessions(&s)?;
+    let signed_in: Vec<String> = blocking(|| {
+        Ok(wts::sessions().into_iter().filter(|w| w.state != WtsState::None && slot_of(&w.user).is_some()).map(|w| w.user).collect())
+    })
+    .await?;
+    if !signed_in.is_empty() {
+        return Err(AppError::Invalid(tr!("Log every session off first: {users} still signed in.", users = signed_in.join(", "))));
+    }
+    for c in &all {
+        if let Some(w) = window::find(&c.address) {
+            let _ = window::close(w);
+        }
+    }
+    let plan = SetupPlan {
+        action: SetupAction::Uninstall,
+        main_user_sid: users::current_user_sid().ok_or_else(|| AppError::Internal("could not read the current user's SID".into()))?,
+        managed_users: all.iter().map(|c| c.windows_user.clone()).collect(),
+        delete_users,
+        ..Default::default()
+    };
+    let data_dir = s.data_dir.clone();
+    let mut result = blocking(move || setup::run(&data_dir, &plan)).await?;
+
+    // This user's side, which the elevated run can't reach.
+    let mut gone = Vec::new();
+    let mut failed = Vec::new();
+    for n in 1..=MAX_SESSIONS {
+        match creds::delete_ours(&slot(n).1) {
+            Ok(true) => gone.push(slot(n).1),
+            Ok(false) => {}
+            Err(e) => failed.push(e.to_string()),
+        }
+    }
+    result.push("credentials", if failed.is_empty() { Ok(gone.join(", ")) } else { Err(failed.join("; ")) });
+    result.push("sessionFiles", remove_rdp_files(&s.data_dir));
+    for c in &all {
+        for kind in ["password", "token"] {
+            s.db.set_setting_value(&secret_key(&c.name, kind), None)?;
+        }
+    }
+    s.db.set_setting_value(THUMBPRINT, None)?;
+    let mut v = s.db.settings()?;
+    v.sessions.clear();
+    s.db.save_settings(&v)?;
+    log::info!("removed from this PC{}: {} of {} steps ok", if delete_users { " with the alt users" } else { "" }, result.steps.iter().filter(|s| s.ok).count(), result.steps.len());
+    for step in result.steps.iter().filter(|s| !s.ok) {
+        log::warn!("removal step {} failed: {}", step.id, step.detail);
+    }
+    changed(&app);
+    Ok(result)
+}
+
+/// Deletes the `.rdp` files in the data folder's `sessions` folder (only AltDock writes there),
+/// and the folder once it is empty.
+fn remove_rdp_files(data_dir: &Path) -> std::result::Result<String, String> {
+    let dir = data_dir.join("sessions");
+    let mut failed = Vec::new();
+    for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("rdp"))
+            && e.file_type().is_ok_and(|t| t.is_file())
+            && let Err(err) = std::fs::remove_file(&p)
+        {
+            failed.push(format!("{}: {err}", p.display()));
+        }
+    }
+    let _ = std::fs::remove_dir(&dir);
+    if failed.is_empty() { Ok(String::new()) } else { Err(failed.join("; ")) }
 }
 
 /// Opens the session in a hidden mstsc window. Refused while RDP Wrapper doesn't support this

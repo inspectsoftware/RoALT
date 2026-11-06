@@ -102,6 +102,29 @@ pub fn same_settings(on_disk: &str, built: &str) -> bool {
     a == b
 }
 
+/// `text` is a session file `build` made (maybe signed since), for one of AltDock's slots: the
+/// elevated setup signs nothing else with the certificate this PC trusts (pure).
+pub fn is_ours(text: &str) -> bool {
+    let value = |key: &str| text.lines().map(str::trim).find_map(|l| l.strip_prefix(key));
+    let (Some(address), Some(username), Some(width), Some(height)) =
+        (value("full address:s:"), value("username:s:"), value("desktopwidth:i:"), value("desktopheight:i:"))
+    else {
+        return false;
+    };
+    let Some(n) = address.strip_prefix("127.0.0.").and_then(|n| n.parse::<u32>().ok()).filter(|n| (2..=super::MAX_SESSIONS + 1).contains(n)) else {
+        return false;
+    };
+    let (user, own_address, _) = super::slot(n - 1);
+    // `<computer>\altdock-<n>` for that address's own alt user.
+    let user_ok = username.rsplit_once('\\').is_some_and(|(pc, u)| !pc.is_empty() && !pc.chars().any(char::is_control) && u.eq_ignore_ascii_case(&user));
+    let (Ok(width), Ok(height)) = (width.parse::<u32>(), height.parse::<u32>()) else { return false };
+    if address != own_address || !user_ok || !(640..=3840).contains(&width) || !(480..=2160).contains(&height) {
+        return false;
+    }
+    let c = SessionConfig { name: String::new(), windows_user: user, address: own_address, port: 0, mode: super::types::SessionMode::Shared, account_ids: Vec::new(), width, height };
+    same_settings(text, &build(&c, username))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,6 +189,26 @@ mod tests {
         let other = build(&SessionConfig { width: 1920, ..cfg() }, "x");
         assert!(!same_settings(&signed, &other));
         assert!(!is_signed("signature:s:\r\n"));
+    }
+
+    #[test]
+    fn only_session_files_are_ours() {
+        let t = build(&cfg(), r"PC\altdock-1");
+        assert!(is_ours(&t));
+        assert!(is_ours(&format!("{t}signscope:s:Full Address\r\nsignature:s:AQAB\r\n")));
+        assert!(is_ours(&build(&SessionConfig { width: 1920, height: 1080, ..cfg() }, r"PC\altdock-1")));
+        // Anything added, changed or pointed elsewhere isn't signed.
+        assert!(!is_ours(&format!("{t}redirectdrives:i:1\r\n")));
+        assert!(!is_ours(&format!("{t}full address:s:evil.example\r\n")));
+        assert!(!is_ours(&t.replace("redirectclipboard:i:0", "redirectclipboard:i:1")));
+        assert!(!is_ours(&t.replace("127.0.0.2", "10.0.0.2")));
+        assert!(!is_ours(&t.replace("127.0.0.2", "127.0.0.02")));
+        assert!(!is_ours(&t.replace(r"PC\altdock-1", r"PC\Administrator")));
+        assert!(!is_ours(&t.replace(r"PC\altdock-1", r"PC\altdock-2")));
+        assert!(!is_ours(&t.replace(r"PC\altdock-1", "altdock-1")));
+        assert!(!is_ours(&build(&SessionConfig { width: 100, ..cfg() }, r"PC\altdock-1")));
+        assert!(!is_ours(""));
+        assert!(!is_ours("full address:s:127.0.0.2\r\n"));
     }
 
     #[test]

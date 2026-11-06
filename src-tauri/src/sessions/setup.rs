@@ -1,13 +1,15 @@
 //! The one-prompt setup. The main app writes a `SetupPlan` (with the alt users' passwords and
 //! control tokens) to a randomly named file in its own data folder and starts the same exe
 //! elevated with `--altdock-setup <plan.json>` (`ShellExecuteExW` "runas", like `instances::qos`).
-//! That process deletes the plan as soon as it has read it, does each step (going on past
-//! failures where that is safe), writes `<plan>.result.json` next to it and exits before Tauri
-//! starts. Passwords never appear on a command line.
+//! That process opens the plan once (never through a link), wipes it as soon as it has read it,
+//! does each step (going on past failures where that is safe), writes its result into the same
+//! file and exits before Tauri starts. Passwords never appear on a command line.
 //!
-//! The plan file is as writable as anything else of the user's, so the elevated side trusts
-//! nothing in it it can check: user names must be `altdock-<n>`, ports theirs, tokens hex, files
-//! `.rdp` files, and the program it copies is always itself.
+//! The plan file, its folder and its path are as writable as anything else of the user's, so the
+//! elevated side trusts nothing in them it can check: user names must be `altdock-<n>`, ports
+//! theirs, tokens hex, the main user a user, `.rdp` files AltDock's own session files next to the
+//! plan, and the program it copies is always itself. Everything it writes in `%ProgramData%\AltDock`
+//! only administrators can change: the HKLM autostart runs that program for every user.
 
 use std::path::{Path, PathBuf};
 
@@ -24,25 +26,35 @@ pub fn plan_arg(args: &[std::ffi::OsString]) -> Option<PathBuf> {
     }
 }
 
-/// Where the elevated side writes its result: `<plan>.result.json` (pure).
-pub fn result_path(plan: &Path) -> PathBuf {
-    let mut p = plan.as_os_str().to_owned();
-    p.push(".result.json");
-    PathBuf::from(p)
+/// The plan is a file the main app named: `<folder>\setup-<32 hex>.json` (pure). The elevated
+/// side opens nothing else the command line names.
+pub fn plan_name_ok(plan: &Path) -> bool {
+    plan.is_absolute()
+        && plan.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+            n.strip_prefix("setup-").and_then(|n| n.strip_suffix(".json")).is_some_and(|h| h.len() == 32 && h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+        })
+}
+
+/// A `.rdp` file the setup may sign: `<plan's folder>\sessions\<session name>.rdp` (pure).
+pub fn rdp_file_ok(file: &Path, plan: &Path) -> bool {
+    let name_ok = |n: &str| !n.is_empty() && n.len() <= 32 && n.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_ ".contains(&b));
+    plan.parent().is_some_and(|d| file.parent() == Some(d.join("sessions").as_path()))
+        && file.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".rdp")).is_some_and(name_ok)
 }
 
 fn user_slot(name: &str) -> Option<u32> {
     name.strip_prefix(USER_PREFIX)?.parse().ok().filter(|n| (1..=MAX_SESSIONS).contains(n))
 }
 
-/// A SID as `S-1-...` (digits and dashes only, so it can go into an SDDL string).
-fn is_sid(s: &str) -> bool {
-    s.len() < 200 && s.strip_prefix("S-1-").is_some_and(|r| !r.is_empty() && r.bytes().all(|b| b.is_ascii_digit() || b == b'-'))
+/// A user account's SID, `S-1-5-21-...` (digits and dashes only, so it can go into an SDDL
+/// string): never a group such as Everyone or Users.
+fn is_user_sid(s: &str) -> bool {
+    s.len() < 200 && s.strip_prefix("S-1-5-21-").is_some_and(|r| !r.is_empty() && r.bytes().all(|b| b.is_ascii_digit() || b == b'-'))
 }
 
 /// Refuses a plan the main app could not have written (pure).
 pub fn check_plan(p: &SetupPlan) -> Result<(), String> {
-    if !is_sid(&p.main_user_sid) {
+    if !is_user_sid(&p.main_user_sid) {
         return Err(format!("bad main user SID {:?}", p.main_user_sid));
     }
     for name in p.managed_users.iter().chain(&p.remove_users).chain(p.users.iter().map(|u| &u.name)) {
@@ -82,29 +94,31 @@ pub fn control_json(port: u16, token: &str, mode: SessionMode) -> zeroize::Zeroi
     zeroize::Zeroizing::new(serde_json::json!({ "port": port, "token": token, "mode": mode }).to_string())
 }
 
-/// Modify: read, write, execute, delete, without changing permissions.
-const MODIFY: &str = "0x1301bf";
 /// Read and execute.
 const READ_EXECUTE: &str = "0x1200a9";
 
-/// `%ProgramData%\AltDock` and its `app` folder (pure): administrators and SYSTEM full, the main
-/// user modify, the alt users read and execute; nothing inherited from ProgramData.
+/// `%ProgramData%\AltDock` and its `app` folder (pure): owned by administrators, who (with
+/// SYSTEM) are the only ones that may change anything in it; the main user and the alt users read
+/// and execute. Nothing inherited from ProgramData (where every user may create folders). The
+/// HKLM autostart runs `app\altdock.exe` for whoever signs in, administrators too: anyone else
+/// able to write there could run code as them.
 pub fn shared_sddl(main: &str, alts: &[String]) -> String {
-    let mut s = format!("D:PAI(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)(A;OICI;{MODIFY};;;{main})");
+    let mut s = format!("O:BAD:PAI(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)(A;OICI;{READ_EXECUTE};;;{main})");
     for a in alts {
         s.push_str(&format!("(A;OICI;{READ_EXECUTE};;;{a})"));
     }
     s
 }
 
-/// The `control` folder (pure): no alt user may list it or read another's token.
-pub fn control_dir_sddl(main: &str) -> String {
-    format!("D:PAI(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)(A;OICI;FA;;;{main})")
+/// The `control` folder (and the setup's own scratch folder) (pure): administrators only; no alt
+/// user may list it or read another's token, and the main app keeps its tokens in its vault.
+pub fn private_dir_sddl() -> String {
+    "O:BAD:PAI(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)".into()
 }
 
-/// One control config (pure): its alt user may read it, the main user and administrators all.
-pub fn control_file_sddl(main: &str, alt: &str) -> String {
-    format!("D:PAI(A;;FA;;;BA)(A;;FA;;;SY)(A;;FA;;;{main})(A;;FR;;;{alt})")
+/// One control config (pure): its alt user may read it, administrators change it.
+pub fn control_file_sddl(alt: &str) -> String {
+    format!("O:BAD:PAI(A;;FA;;;BA)(A;;FA;;;SY)(A;;FR;;;{alt})")
 }
 
 #[cfg(windows)]
@@ -112,21 +126,26 @@ pub use system::*;
 
 #[cfg(windows)]
 mod system {
+    use std::fs::File;
+    use std::io::{Read, Seek, SeekFrom, Write};
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    use std::os::windows::io::AsRawHandle;
     use std::os::windows::process::CommandExt;
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 
-    use windows::Win32::Foundation::{ERROR_CANCELLED, HLOCAL, LocalFree, WAIT_OBJECT_0};
-    use windows::Win32::Security::Authorization::{
-        ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1, SE_FILE_OBJECT, SetNamedSecurityInfoW,
-    };
+    use windows::Win32::Foundation::{ERROR_CANCELLED, HANDLE, HLOCAL, LocalFree, WAIT_OBJECT_0};
+    use windows::Win32::Security::Authorization::{ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1, SE_FILE_OBJECT};
     use windows::Win32::Security::Cryptography::*;
-    use windows::Win32::Security::{ACL, DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR};
+    use windows::Win32::Security::{
+        DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SetKernelObjectSecurity,
+    };
+    use windows::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle};
     use windows::Win32::System::SystemInformation::GetSystemTime;
     use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
     use windows::Win32::UI::Shell::{SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW};
     use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
-    use windows::core::{BOOL, HSTRING, Owned, PCWSTR, PSTR, PWSTR, w};
+    use windows::core::{HSTRING, Owned, PCWSTR, PSTR, PWSTR, w};
     use zeroize::Zeroizing;
 
     use super::*;
@@ -134,6 +153,7 @@ mod system {
     use crate::sessions::health::{normalize_thumbprint, with_thumbprint};
     use crate::sessions::reg::{self, HKLM};
     use crate::sessions::types::SetupResult;
+    use crate::sessions::rdp;
     use crate::sessions::{APP_EXE, RUN_VALUE, app_exe, program_data, random, run_command, users};
 
     /// How long the elevated setup may take once the prompt is answered.
@@ -147,10 +167,9 @@ mod system {
     // ---------- main app side ----------
 
     /// Runs `plan` elevated: Windows asks for admin rights first. Declining the prompt is an error;
-    /// failed steps are in the result.
+    /// failed steps are in the result, which the elevated side writes into the plan's file.
     pub fn run(data_dir: &Path, plan: &SetupPlan) -> Result<SetupResult> {
         let path = data_dir.join(format!("setup-{}.json", hex(&random(16)).to_ascii_lowercase()));
-        let result = result_path(&path);
         let json = Zeroizing::new(serde_json::to_vec(plan).map_err(|e| AppError::Internal(e.to_string()))?);
         {
             use std::io::Write;
@@ -158,13 +177,13 @@ mod system {
             f.write_all(&json)?;
         }
         let outcome = elevate(&path);
-        // The elevated side deletes it at once; this is for when it never ran.
+        // The result, or (the elevated side never ran) the plan, which holds passwords: gone either way.
+        let read = std::fs::read(&path);
         let _ = std::fs::remove_file(&path);
         outcome?;
-        let read = std::fs::read(&result);
-        let _ = std::fs::remove_file(&result);
-        let bytes = read.map_err(|_| AppError::Internal(tr!("The setup ended without a result.")))?;
-        serde_json::from_slice(&bytes).map_err(|e| AppError::Internal(e.to_string()))
+        read.ok()
+            .and_then(|b| serde_json::from_slice::<SetupResult>(&b).ok())
+            .ok_or_else(|| AppError::Internal(tr!("The setup ended without a result.")))
     }
 
     fn elevate(plan: &Path) -> Result<()> {
@@ -209,29 +228,82 @@ mod system {
 
     // ---------- elevated side ----------
 
+    const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const READ_CONTROL: u32 = 0x0002_0000;
+    const WRITE_DAC: u32 = 0x0004_0000;
+    const WRITE_OWNER: u32 = 0x0008_0000;
+    const FILE_READ_ATTRIBUTES: u32 = 0x80;
+    const GENERIC_READ: u32 = 0x8000_0000;
+    const GENERIC_WRITE: u32 = 0x4000_0000;
+    /// Largest plan, and largest `.rdp` file the setup reads.
+    const MAX_READ: u64 = 1 << 20;
+
+    /// Opens the file named, never what a link of that name points at; nobody else may open it
+    /// meanwhile.
+    fn open_own(path: &Path) -> std::result::Result<File, String> {
+        let f = File::options()
+            .access_mode(GENERIC_READ | GENERIC_WRITE)
+            .share_mode(0)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let info = handle_info(&f)?;
+        // A link, a folder or a second name (a hard link to someone else's file) isn't the user's own file.
+        if info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY) != 0 || info.nNumberOfLinks != 1 {
+            return Err(tr!("{file} isn't a plain file.", file = path.display()));
+        }
+        if f.metadata().map_err(|e| e.to_string())?.len() > MAX_READ {
+            return Err(tr!("{file} is too big.", file = path.display()));
+        }
+        Ok(f)
+    }
+
+    fn handle_info(f: &File) -> std::result::Result<BY_HANDLE_FILE_INFORMATION, String> {
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: `f` is an open handle; `info` is a local.
+        unsafe { GetFileInformationByHandle(HANDLE(f.as_raw_handle()), &mut info) }.map_err(|e| e.message())?;
+        Ok(info)
+    }
+
+    /// Replaces the whole content of an open file.
+    fn rewrite(f: &mut File, bytes: &[u8]) -> std::io::Result<()> {
+        f.seek(SeekFrom::Start(0))?;
+        f.set_len(0)?;
+        f.write_all(bytes)?;
+        f.flush()
+    }
+
     /// Called first thing in `main`: Some(exit code) when this process is the elevated setup,
     /// which has then done its work.
     pub fn elevated_entry() -> Option<i32> {
         let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
         let plan_path = plan_arg(&args)?;
         crate::i18n::set("");
-        let read = std::fs::read(&plan_path).map(Zeroizing::new);
-        // Gone before anything else happens: it holds passwords.
-        let _ = std::fs::remove_file(&plan_path);
+        if !plan_name_ok(&plan_path) {
+            return Some(2);
+        }
+        let Ok(mut file) = open_own(&plan_path) else { return Some(2) };
+        let mut bytes = Zeroizing::new(Vec::new());
+        let read = file.read_to_end(&mut bytes).map_err(|e| e.to_string());
+        // Wiped before anything else happens: it holds passwords.
+        let _ = rewrite(&mut file, &vec![0u8; bytes.len()]).and_then(|()| file.set_len(0));
         let mut result = SetupResult::default();
         let plan = read
-            .map_err(|e| e.to_string())
-            .and_then(|b| serde_json::from_slice::<SetupPlan>(&b).map_err(|e| e.to_string()))
+            .and_then(|_| serde_json::from_slice::<SetupPlan>(&bytes).map_err(|e| e.to_string()))
             .and_then(|p| check_plan(&p).map(|()| p));
+        drop(bytes);
         match plan {
-            Ok(plan) => execute(&plan, &mut result),
+            Ok(plan) => execute(&plan, &plan_path, &mut result),
             Err(e) => result.push("plan", Err(e)),
         }
-        let written = serde_json::to_vec(&result).ok().is_some_and(|j| std::fs::write(result_path(&plan_path), j).is_ok());
+        let written = serde_json::to_vec(&result).ok().is_some_and(|j| rewrite(&mut file, &j).is_ok());
         Some(if written { 0 } else { 1 })
     }
 
-    fn execute(plan: &SetupPlan, r: &mut SetupResult) {
+    fn execute(plan: &SetupPlan, plan_path: &Path, r: &mut SetupResult) {
         if plan.system {
             policies(r);
         }
@@ -240,9 +312,8 @@ mod system {
             r.push(format!("remoteDesktopUsers:{}", u.name), users::add_to_remote_desktop_users(&u.name));
             r.push(format!("hide:{}", u.name), reg::set_dword(HKLM, reg::USER_LIST, &u.name, 0).map(|()| String::new()));
         }
+        // Their control configs go with `control_configs` (no longer managed).
         for name in &plan.remove_users {
-            let control = program_data().join("control").join(format!("{name}.json"));
-            let _ = std::fs::remove_file(control);
             let _ = reg::delete(HKLM, reg::USER_LIST, name);
             r.push(format!("remove:{name}"), users::delete(name));
         }
@@ -250,16 +321,16 @@ mod system {
         // Alt users that don't exist (a failed create) can't be in an ACL.
         let alts: Vec<String> = plan.managed_users.iter().filter_map(|u| users::sid_of(u)).collect();
         let root = program_data();
-        let shared = std::fs::create_dir_all(&root).map_err(|e| e.to_string()).and_then(|()| set_acl(&root, &shared_sddl(main, &alts)));
+        let shared = secure_dir(&root, &shared_sddl(main, &alts));
         r.push("sharedFolder", shared.clone().map(|()| root.display().to_string()));
         r.push(
             "usersJson",
-            shared.clone().and_then(|()| std::fs::write(root.join("users.json"), users_json(&plan.managed_users)).map_err(|e| e.to_string())).map(|()| String::new()),
+            shared.clone().and_then(|()| write_new(&root.join("users.json"), users_json(&plan.managed_users).as_bytes(), None)).map(|()| String::new()),
         );
         if shared.is_ok() {
             control_configs(plan, r);
         }
-        if !plan.system {
+        if !plan.system || shared.is_err() {
             return;
         }
         r.push("programCopy", copy_program(main, &alts));
@@ -271,7 +342,7 @@ mod system {
                 let list = reg::string(HKLM, reg::TS_POLICY, "TrustedCertThumbprints").unwrap_or_default();
                 r.push("trustedThumbprints", reg::set_string(HKLM, reg::TS_POLICY, "TrustedCertThumbprints", &with_thumbprint(&list, &sha1)).map(|()| String::new()));
                 for f in &plan.rdp_files {
-                    r.push(format!("sign:{}", f.file_stem().unwrap_or_default().to_string_lossy()), sign(f, &sha256));
+                    r.push(format!("sign:{}", f.file_stem().unwrap_or_default().to_string_lossy()), sign(f, plan_path, &sha256));
                 }
             }
             Err(e) => r.push("certificate", Err(e)),
@@ -296,92 +367,142 @@ mod system {
         r.push("firstLogon", set(&[(reg::OOBE_POLICY, "DisablePrivacyExperience", 1), (reg::SYSTEM_POLICY, "EnableFirstLogonAnimation", 0)]));
     }
 
-    /// The control configs, each readable by its own alt user only.
+    /// The control configs, each readable by its own alt user only; configs of users AltDock
+    /// doesn't manage (any more) go.
     fn control_configs(plan: &SetupPlan, r: &mut SetupResult) {
         let dir = program_data().join("control");
-        let made = std::fs::create_dir_all(&dir).map_err(|e| e.to_string()).and_then(|()| set_acl(&dir, &control_dir_sddl(&plan.main_user_sid)));
-        if let Err(e) = made {
+        if let Err(e) = secure_dir(&dir, &private_dir_sddl()) {
             // Without its ACL the folder would let every alt user read every token.
             r.push("controlFolder", Err(e));
             return;
+        }
+        for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let name = e.file_name().to_string_lossy().to_lowercase();
+            let managed = plan.managed_users.iter().any(|u| format!("{}.json", u.to_lowercase()) == name);
+            if !managed || !e.file_type().is_ok_and(|t| t.is_file()) {
+                let _ = remove_entry(&e.path());
+            }
         }
         for u in &plan.users {
             let path = dir.join(format!("{}.json", u.name));
             let outcome = users::sid_of(&u.name)
                 .ok_or_else(|| tr!("{user} doesn't exist.", user = u.name))
-                .and_then(|alt| {
-                    std::fs::write(&path, control_json(u.port, &u.token, u.mode).as_bytes()).map_err(|e| e.to_string())?;
-                    set_acl(&path, &control_file_sddl(&plan.main_user_sid, &alt)).inspect_err(|_| {
-                        let _ = std::fs::remove_file(&path);
-                    })
-                })
+                .and_then(|alt| write_new(&path, control_json(u.port, &u.token, u.mode).as_bytes(), Some(&control_file_sddl(&alt))))
                 .map(|()| path.display().to_string());
             r.push(format!("control:{}", u.name), outcome);
         }
     }
 
-    /// Copies this exe (and DLLs beside it) to `%ProgramData%\AltDock\app`. A running copy (a
-    /// session still open) is renamed aside first: Windows allows that, not overwriting it.
+    /// Removes a file, a folder tree or a link (only the link) of that name.
+    fn remove_entry(path: &Path) -> std::io::Result<()> {
+        match std::fs::symlink_metadata(path) {
+            Ok(m) if m.file_type().is_symlink() || m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 => {
+                std::fs::remove_dir(path).or_else(|_| std::fs::remove_file(path))
+            }
+            Ok(m) if m.is_dir() => std::fs::remove_dir_all(path),
+            Ok(_) => std::fs::remove_file(path),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Writes a new file in place of whatever had that name (so never through an old link), with
+    /// its folder's permissions or `sddl`'s, set before anything is in it.
+    fn write_new(path: &Path, bytes: &[u8], sddl: Option<&str>) -> std::result::Result<(), String> {
+        let fail = |e: std::io::Error| format!("{}: {e}", path.display());
+        remove_entry(path).map_err(fail)?;
+        let mut f =
+            File::options().write(true).access_mode(GENERIC_WRITE | READ_CONTROL | WRITE_DAC | WRITE_OWNER).create_new(true).open(path).map_err(fail)?;
+        if let Some(sddl) = sddl {
+            apply_sddl(&f, sddl).inspect_err(|_| {
+                let _ = std::fs::remove_file(path);
+            })?;
+        }
+        f.write_all(bytes).and_then(|()| f.flush()).map_err(fail)
+    }
+
+    /// Makes `path` a folder owned by administrators with exactly `sddl`'s permissions. Refused
+    /// when something else has that name (a link, a file) or another user made the folder: they
+    /// could still hold it open, or have put things in it.
+    fn secure_dir(path: &Path, sddl: &str) -> std::result::Result<(), String> {
+        let ours = tr!("{path} wasn't made by AltDock's setup. Delete it, then run the setup again.", path = path.display());
+        match std::fs::symlink_metadata(path) {
+            Ok(m) if m.is_dir() && m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0 => {}
+            Ok(_) => return Err(ours),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => std::fs::create_dir(path).map_err(|e| format!("{}: {e}", path.display()))?,
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        }
+        let dir = File::options()
+            .access_mode(READ_CONTROL | WRITE_DAC | WRITE_OWNER | FILE_READ_ATTRIBUTES)
+            .share_mode(7)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let attributes = handle_info(&dir)?.dwFileAttributes;
+        if attributes & FILE_ATTRIBUTE_DIRECTORY == 0 || attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !owned_by_admins(&dir) {
+            return Err(ours);
+        }
+        apply_sddl(&dir, sddl)
+    }
+
+    /// The object's owner is Administrators, SYSTEM, or the administrator running this setup.
+    fn owned_by_admins(f: &File) -> bool {
+        let mut owner = PSID::default();
+        let mut sd = PSECURITY_DESCRIPTOR::default();
+        // SAFETY: `f` is open with READ_CONTROL; the descriptor is LocalAlloc'd and freed below.
+        let r = unsafe { GetSecurityInfo(HANDLE(f.as_raw_handle()), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION, Some(&mut owner), None, None, None, Some(&mut sd)) };
+        if r.is_err() {
+            return false;
+        }
+        let sid = users::sid_string(owner);
+        // SAFETY: allocated by GetSecurityInfo; `owner` points into it and isn't used after.
+        unsafe { LocalFree(Some(HLOCAL(sd.0))) };
+        sid.is_some_and(|s| s == "S-1-5-32-544" || s == "S-1-5-18" || users::current_user_sid().is_some_and(|me| me == s))
+    }
+
+    /// Sets the owner and the (protected) DACL `sddl` names on the open object itself: nothing is
+    /// propagated by name, so no link below it is followed.
+    fn apply_sddl(f: &File, sddl: &str) -> std::result::Result<(), String> {
+        let mut sd = PSECURITY_DESCRIPTOR::default();
+        // SAFETY: the descriptor is LocalAlloc'd and freed below.
+        unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(&HSTRING::from(sddl), SDDL_REVISION_1, &mut sd, None) }.map_err(|e| e.message())?;
+        let info = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION;
+        // SAFETY: `f` is open with WRITE_DAC and WRITE_OWNER; `sd` is the descriptor just made.
+        let r = unsafe { SetKernelObjectSecurity(HANDLE(f.as_raw_handle()), info, sd) }.map_err(|e| e.message());
+        // SAFETY: allocated by ConvertStringSecurityDescriptorToSecurityDescriptorW.
+        unsafe { LocalFree(Some(HLOCAL(sd.0))) };
+        r
+    }
+
+    /// Copies this exe (and DLLs beside it) to `%ProgramData%\AltDock\app`, after emptying it:
+    /// nothing but these may be there. A running copy (a session still open) is renamed aside
+    /// first: Windows allows that, not deleting it.
     fn copy_program(main: &str, alts: &[String]) -> std::result::Result<String, String> {
         let own = std::env::current_exe().map_err(|e| e.to_string())?;
         let target = app_exe();
         let dir = target.parent().ok_or("no app folder")?.to_owned();
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        set_acl(&dir, &shared_sddl(main, alts))?;
-        // Old copies left by earlier runs, now unused.
-        for e in std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
-            if e.file_name().to_string_lossy().contains(".old-") {
-                let _ = std::fs::remove_file(e.path());
-            }
-        }
-        let place = |from: &Path, to: &Path| -> std::result::Result<(), String> {
-            if to.exists() && std::fs::remove_file(to).is_err() {
-                let aside = to.with_file_name(format!("{}.old-{}", to.file_name().unwrap_or_default().to_string_lossy(), hex(&random(4))));
-                std::fs::rename(to, aside).map_err(|e| e.to_string())?;
-            }
-            std::fs::copy(from, to).map(|_| ()).map_err(|e| format!("{}: {e}", to.display()))
-        };
-        place(&own, &target)?;
+        secure_dir(&dir, &shared_sddl(main, alts))?;
+        let mut files = vec![(own.clone(), target.clone())];
         if let Some(src) = own.parent() {
             for e in std::fs::read_dir(src).map_err(|e| e.to_string())?.flatten() {
                 let p = e.path();
-                if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("dll")) {
-                    place(&p, &dir.join(e.file_name()))?;
+                if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("dll")) && e.file_type().is_ok_and(|t| t.is_file()) {
+                    files.push((p, dir.join(e.file_name())));
                 }
             }
         }
+        for e in std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+            let p = e.path();
+            if remove_entry(&p).is_err() && !e.file_name().to_string_lossy().contains(".old-") {
+                let aside = p.with_file_name(format!("{}.old-{}", e.file_name().to_string_lossy(), hex(&random(4))));
+                std::fs::rename(&p, aside).map_err(|e| format!("{}: {e}", p.display()))?;
+            }
+        }
+        for (from, to) in &files {
+            std::fs::copy(from, to).map_err(|e| format!("{}: {e}", to.display()))?;
+        }
         debug_assert!(target.ends_with(APP_EXE));
         Ok(target.display().to_string())
-    }
-
-    /// Replaces the DACL of `path` with the one in `sddl`, not inheriting from its parent.
-    fn set_acl(path: &Path, sddl: &str) -> std::result::Result<(), String> {
-        let mut sd = PSECURITY_DESCRIPTOR::default();
-        // SAFETY: the descriptor is LocalAlloc'd and freed below.
-        unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(&HSTRING::from(sddl), SDDL_REVISION_1, &mut sd, None) }
-            .map_err(|e| e.message())?;
-        let mut present = BOOL::default();
-        let mut defaulted = BOOL::default();
-        let mut dacl: *mut ACL = std::ptr::null_mut();
-        // SAFETY: `sd` is the descriptor just made; `dacl` points into it until it is freed.
-        let outcome = unsafe { GetSecurityDescriptorDacl(sd, &mut present, &mut dacl, &mut defaulted) }.map_err(|e| e.message()).and_then(|()| {
-            // SAFETY: as above; the path string lives through the call.
-            let r = unsafe {
-                SetNamedSecurityInfoW(
-                    &HSTRING::from(path.as_os_str()),
-                    SE_FILE_OBJECT,
-                    DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                    None,
-                    None,
-                    Some(dacl),
-                    None,
-                )
-            };
-            if r.is_ok() { Ok(()) } else { Err(format!("{}: {}", path.display(), windows::core::Error::from(r.to_hresult()).message())) }
-        });
-        // SAFETY: allocated by ConvertStringSecurityDescriptorToSecurityDescriptorW.
-        unsafe { LocalFree(Some(HLOCAL(sd.0))) };
-        outcome
     }
 
     // ---------- signing ----------
@@ -433,11 +554,12 @@ mod system {
     /// The signing certificate: the one made before when it is still in LocalMachine\My with its
     /// key, else a new one. Either way it is put in Root too. Its SHA-1 and SHA-256 thumbprints.
     fn certificate(earlier: Option<&str>) -> std::result::Result<(String, String), String> {
+        let subject = subject_name()?;
         let my = open_store(w!("MY"))?;
-        let cert = match earlier.and_then(|t| find(&my, t)) {
+        let cert = match earlier.and_then(|t| find(&my, t, &subject)) {
             Some(c) => c,
             None => {
-                let c = make_certificate()?;
+                let c = make_certificate(subject)?;
                 // SAFETY: both are live; the store keeps its own copy.
                 unsafe { CertAddCertificateContextToStore(Some(my.0), c.0, CERT_STORE_ADD_REPLACE_EXISTING, None) }.map_err(|e| e.message())?;
                 c
@@ -451,8 +573,22 @@ mod system {
         Ok((hex(&sha1), hex(&sha256)))
     }
 
-    /// The certificate with that SHA-1 thumbprint, if its private key is still known.
-    fn find(store: &Store, thumbprint: &str) -> Option<Cert> {
+    /// The encoded `CERT_SUBJECT`.
+    fn subject_name() -> std::result::Result<Vec<u8>, String> {
+        let subject = HSTRING::from(CERT_SUBJECT);
+        let mut len = 0u32;
+        // SAFETY: asks for the size, then fills a buffer of that size.
+        unsafe { CertStrToNameW(X509_ASN_ENCODING, &subject, CERT_X500_NAME_STR, None, None, &mut len, None) }.map_err(|e| e.message())?;
+        let mut name = vec![0u8; len as usize];
+        unsafe { CertStrToNameW(X509_ASN_ENCODING, &subject, CERT_X500_NAME_STR, None, Some(name.as_mut_ptr()), &mut len, None) }.map_err(|e| e.message())?;
+        name.truncate(len as usize);
+        Ok(name)
+    }
+
+    /// The certificate with that SHA-1 thumbprint, if it is one this setup made (self-signed, our
+    /// subject) and its private key is still known. The plan names the thumbprint: any other
+    /// certificate of the machine's must never end up in Root through it.
+    fn find(store: &Store, thumbprint: &str, subject: &[u8]) -> Option<Cert> {
         let t = normalize_thumbprint(thumbprint);
         let mut bytes: Vec<u8> = (0..t.len() / 2).filter_map(|i| u8::from_str_radix(&t[i * 2..i * 2 + 2], 16).ok()).collect();
         let blob = CRYPT_INTEGER_BLOB { cbData: bytes.len() as u32, pbData: bytes.as_mut_ptr() };
@@ -462,20 +598,23 @@ mod system {
             return None;
         }
         let cert = Cert(found);
+        // SAFETY: a live context; its info and the name blobs live as long as it.
+        let ours = unsafe {
+            let info = &*(*cert.0).pCertInfo;
+            let blob = |b: &CRYPT_INTEGER_BLOB| std::slice::from_raw_parts(b.pbData, b.cbData as usize);
+            blob(&info.Subject) == subject && blob(&info.Issuer) == subject
+        };
+        if !ours {
+            return None;
+        }
         property(&cert, CERT_KEY_PROV_INFO_PROP_ID).map(|_| cert)
     }
 
     /// A self-signed code-signing certificate (RSA 2048, SHA-256, 10 years) with its key in a new
     /// machine key container.
-    fn make_certificate() -> std::result::Result<Cert, String> {
+    fn make_certificate(mut name: Vec<u8>) -> std::result::Result<Cert, String> {
         // Subject and issuer.
-        let subject = HSTRING::from(CERT_SUBJECT);
-        let mut len = 0u32;
-        // SAFETY: asks for the size, then fills a buffer of that size.
-        unsafe { CertStrToNameW(X509_ASN_ENCODING, &subject, CERT_X500_NAME_STR, None, None, &mut len, None) }.map_err(|e| e.message())?;
-        let mut name = vec![0u8; len as usize];
-        unsafe { CertStrToNameW(X509_ASN_ENCODING, &subject, CERT_X500_NAME_STR, None, Some(name.as_mut_ptr()), &mut len, None) }.map_err(|e| e.message())?;
-        let name_blob = CRYPT_INTEGER_BLOB { cbData: len, pbData: name.as_mut_ptr() };
+        let name_blob = CRYPT_INTEGER_BLOB { cbData: name.len() as u32, pbData: name.as_mut_ptr() };
 
         // The key.
         let mut container: Vec<u16> = format!("AltDock-RDP-{}", hex(&random(8))).encode_utf16().chain([0]).collect();
@@ -553,25 +692,40 @@ mod system {
         made
     }
 
-    /// Signs a `.rdp` file in place with `rdpsign.exe /sha256 <thumbprint>`.
-    fn sign(file: &Path, sha256: &str) -> std::result::Result<String, String> {
-        if !file.is_file() {
-            return Err(tr!("{file} is missing.", file = file.display()));
+    /// Signs one of the main app's session files with `rdpsign.exe /sha256 <thumbprint>`: read
+    /// through one handle, checked to be a file `rdp::build` made, signed as a copy in a folder
+    /// only administrators can write, then written back through the same handle. Nothing else the
+    /// user could name gets signed, and nothing of theirs is opened by path twice.
+    fn sign(file: &Path, plan: &Path, sha256: &str) -> std::result::Result<String, String> {
+        if !rdp_file_ok(file, plan) {
+            return Err(tr!("{file} isn't a session file.", file = file.display()));
         }
+        let mut f = open_own(file)?;
+        let mut bytes = Vec::new();
+        f.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+        if !rdp::is_ours(&rdp::decode(&bytes)) {
+            return Err(tr!("{file} isn't a session file.", file = file.display()));
+        }
+        let scratch = program_data().join("sign");
+        secure_dir(&scratch, &private_dir_sddl())?;
+        let copy = scratch.join(format!("{}.rdp", hex(&random(8))));
+        write_new(&copy, &bytes, None)?;
         let root = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| r"C:\Windows".into());
         let out = std::process::Command::new(root.join(r"System32\rdpsign.exe"))
             .arg("/sha256")
             .arg(sha256)
-            .arg(file)
+            .arg(&copy)
             .creation_flags(0x0800_0000)
-            .output()
-            .map_err(|e| e.to_string())?;
-        if out.status.success() {
-            Ok(file.display().to_string())
-        } else {
+            .output();
+        let signed = std::fs::read(&copy);
+        let _ = std::fs::remove_file(&copy);
+        let out = out.map_err(|e| e.to_string())?;
+        if !out.status.success() {
             let text = String::from_utf8_lossy(&out.stdout).trim().to_owned() + " " + String::from_utf8_lossy(&out.stderr).trim();
-            Err(format!("rdpsign {:?}: {}", out.status.code(), text.trim()))
+            return Err(format!("rdpsign {:?}: {}", out.status.code(), text.trim()));
         }
+        rewrite(&mut f, &signed.map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        Ok(file.display().to_string())
     }
 }
 
@@ -615,6 +769,8 @@ mod tests {
         assert_eq!(back.thumbprint, p.thumbprint);
         assert!(back.system);
         assert!(check_plan(&back).is_ok());
+        // The main app reads the result from the plan's file: a plan never reads as a result.
+        assert!(serde_json::from_str::<SetupResult>(&json).is_err());
 
         let mut r = SetupResult::default();
         r.push("a", Ok("done".into()));
@@ -633,6 +789,10 @@ mod tests {
             check_plan(&p).is_err()
         };
         assert!(bad(|p| p.main_user_sid = "S-1-5-21-1)(A;;FA;;;WD".into()));
+        // Groups (Everyone, Users, Authenticated Users) would get the ACEs meant for one user.
+        assert!(bad(|p| p.main_user_sid = "S-1-1-0".into()));
+        assert!(bad(|p| p.main_user_sid = "S-1-5-32-545".into()));
+        assert!(bad(|p| p.main_user_sid = "S-1-5-11".into()));
         assert!(bad(|p| p.managed_users.push("Administrator".into())));
         assert!(bad(|p| p.remove_users.push("you".into())));
         assert!(bad(|p| p.remove_users.push("altdock-0".into())));
@@ -652,7 +812,24 @@ mod tests {
         assert_eq!(plan_arg(&args(&["altdock.exe"])), None);
         assert_eq!(plan_arg(&args(&["altdock.exe", "--session"])), None);
         assert_eq!(plan_arg(&args(&["altdock.exe", FLAG])), None);
-        assert_eq!(result_path(Path::new(r"C:\d\setup-1.json")), PathBuf::from(r"C:\d\setup-1.json.result.json"));
+        let hex = "0123456789abcdef0123456789abcdef";
+        assert!(plan_name_ok(&PathBuf::from(format!(r"C:\d\setup-{hex}.json"))));
+        for bad in [
+            r"C:\d\setup-1.json".to_owned(),
+            format!(r"C:\d\setup-{}.json", hex.to_uppercase()),
+            format!(r"C:\d\setup-{hex}.json.txt"),
+            format!("setup-{hex}.json"),
+            r"C:\Windows\System32\config\SAM".to_owned(),
+        ] {
+            assert!(!plan_name_ok(Path::new(&bad)), "{bad}");
+        }
+        let plan = PathBuf::from(format!(r"C:\d\setup-{hex}.json"));
+        assert!(rdp_file_ok(Path::new(r"C:\d\sessions\Farm 1.rdp"), &plan));
+        assert!(!rdp_file_ok(Path::new(r"C:\d\Farm.rdp"), &plan));
+        assert!(!rdp_file_ok(Path::new(r"C:\e\sessions\Farm.rdp"), &plan));
+        assert!(!rdp_file_ok(Path::new(r"C:\d\sessions\x\Farm.rdp"), &plan));
+        assert!(!rdp_file_ok(Path::new(r"C:\d\sessions\Farm.txt"), &plan));
+        assert!(!rdp_file_ok(Path::new(r"C:\d\sessions\.rdp"), &plan));
         assert_eq!(users_json(&["altdock-1".into()]), r#"{"users":["altdock-1"]}"#);
         let c: serde_json::Value = serde_json::from_str(&control_json(47611, "ab", SessionMode::Shared)).unwrap();
         assert_eq!(c, serde_json::json!({ "port": 47611, "token": "ab", "mode": "shared" }));
@@ -661,11 +838,22 @@ mod tests {
     #[test]
     fn acls() {
         let main = "S-1-5-21-1-2-3-1001";
+        // Only administrators and SYSTEM may write what the HKLM autostart runs for everyone.
         assert_eq!(
             shared_sddl(main, &["S-1-5-21-1-2-3-1002".into()]),
-            "D:PAI(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)(A;OICI;0x1301bf;;;S-1-5-21-1-2-3-1001)(A;OICI;0x1200a9;;;S-1-5-21-1-2-3-1002)"
+            "O:BAD:PAI(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)(A;OICI;0x1200a9;;;S-1-5-21-1-2-3-1001)(A;OICI;0x1200a9;;;S-1-5-21-1-2-3-1002)"
         );
-        assert!(!control_dir_sddl(main).contains("1002"));
-        assert!(control_file_sddl(main, "S-1-5-21-1-2-3-1002").ends_with("(A;;FR;;;S-1-5-21-1-2-3-1002)"));
+        for sddl in [shared_sddl(main, &["S-1-5-21-1-2-3-1002".into()]), private_dir_sddl(), control_file_sddl("S-1-5-21-1-2-3-1002")] {
+            assert!(sddl.starts_with("O:BAD:P"), "{sddl}");
+            // Full control or modify for no one but BA and SY; no CREATOR OWNER, Users or Everyone.
+            for ace in sddl.split('(').skip(1) {
+                let trustee = ace.trim_end_matches(')').rsplit(';').next().unwrap();
+                let rights = ace.split(';').nth(2).unwrap();
+                assert!(["BA", "SY"].contains(&trustee) || rights == "0x1200a9" || rights == "FR", "{ace}");
+                assert!(!["CO", "BU", "WD", "AU", "IU"].contains(&trustee), "{ace}");
+            }
+        }
+        assert!(!private_dir_sddl().contains(main));
+        assert!(control_file_sddl("S-1-5-21-1-2-3-1002").ends_with("(A;;FR;;;S-1-5-21-1-2-3-1002)"));
     }
 }

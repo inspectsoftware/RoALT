@@ -35,8 +35,31 @@ pub fn exists(name: &str) -> bool {
     r == NERR_SUCCESS
 }
 
+/// The account's privilege level (user, administrator, guest); None when it doesn't exist.
+fn privilege(name: &str) -> Option<windows::Win32::NetworkManagement::NetManagement::USER_PRIV> {
+    let mut buf: *mut u8 = std::ptr::null_mut();
+    // SAFETY: level 1 hands back one USER_INFO_1, read and then freed.
+    let r = unsafe { NetUserGetInfo(PCWSTR::null(), &HSTRING::from(name), 1, &mut buf) };
+    // SAFETY: on success `buf` holds a USER_INFO_1.
+    let out = (r == NERR_SUCCESS && !buf.is_null()).then(|| unsafe { (*(buf as *const USER_INFO_1)).usri1_priv });
+    if !buf.is_null() {
+        // SAFETY: allocated by NetUserGetInfo.
+        unsafe { NetApiBufferFree(Some(buf.cast())) };
+    }
+    out
+}
+
+/// Refuses an existing `altdock-<n>` that isn't a plain user: the plan comes from an unelevated
+/// process, and must not reset the password of (or delete) an administrator that has that name.
+fn plain_user(name: &str) -> Result<(), String> {
+    match privilege(name) {
+        Some(p) if p != USER_PRIV_USER => Err(tr!("{user} isn't a standard user; AltDock leaves it alone.", user = name)),
+        _ => Ok(()),
+    }
+}
+
 /// A SID as `S-1-...`.
-fn sid_string(sid: PSID) -> Option<String> {
+pub fn sid_string(sid: PSID) -> Option<String> {
     let mut s = PWSTR::null();
     // SAFETY: `sid` is a valid SID; the string is LocalAlloc'd and freed below.
     unsafe { ConvertSidToStringSidW(sid, &mut s) }.ok()?;
@@ -154,6 +177,7 @@ pub fn create_or_repair(name: &str, password: &Zeroizing<String>) -> Result<Stri
         let r = unsafe { NetUserAdd(PCWSTR::null(), 1, (&raw const info).cast(), None) };
         return if r == NERR_SUCCESS { Ok(tr!("Created.")) } else { Err(net_error(r)) };
     }
+    plain_user(name)?;
     let pass = USER_INFO_1003 { usri1003_password: PWSTR(wpass.as_mut_ptr()) };
     // SAFETY: `pass` and its string live through the call.
     let r = unsafe { NetUserSetInfo(PCWSTR::null(), PCWSTR(wname.as_ptr()), 1003, (&raw const pass).cast(), None) };
@@ -178,6 +202,7 @@ pub fn add_to_remote_desktop_users(name: &str) -> Result<String, String> {
 
 /// Deletes the user and its profile folder (a missing user is fine). Elevated only.
 pub fn delete(name: &str) -> Result<String, String> {
+    plain_user(name)?;
     let sid = sid_of(name);
     // SAFETY: the string lives through the call.
     let r = unsafe { NetUserDel(PCWSTR::null(), &HSTRING::from(name)) };

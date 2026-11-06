@@ -207,12 +207,74 @@ and the locale files.
 - Reuse the dashboard's card look (`features/dashboard/ClientCard.tsx` styles) where it fits.
 - Works in `npm run dev` against mocks for every new command.
 
+## Integrated API (after the merge)
+
+This is what the code does now; where it differs from the stream sections above, this wins.
+
+**Types** (Rust is the source of truth; every `#[ts(export)]` type has its file in `src/bindings/`):
+`control::types` (`ControlHealth`, `ControlMode`, `ControlClient`, `ControlAccount`, the request and
+answer bodies), `model` (Stream A: `Macro`, `MacroInput`, `MacroRun`, `MacroAssignment`,
+`AfkAction`, `AfkClientConfig`), `sessions::types` (`SessionConfig`, `SessionMode`, `SessionView`,
+`SessionControl = {kind:"ok",health} | {kind:"down",reason}`, `WtsState`, `HealthCheck`,
+`FixKind = setup | rdpWrapper | rdpWrapperIni | restart`, `SetupResult`, `SetupStep`).
+
+**Account ids**: a session has its own database. `ControlClient` and `ControlAccount` carry the
+session's `accountId` and the Roblox `userId`; the UI matches its own accounts by `userId`.
+Commands fed from the session's answers (`remote_afk`, `remote_macro_assign`, `remote_macro_run`,
+`remote_macro_stop`, `remote_close`) take the session's ids; `remote_launch` and
+`session_push_accounts` take the main app's ids (`remote_launch` maps them by Roblox user and
+refuses accounts not pushed yet).
+
+**`GET /v1/state`** rows also have `userId` and `macroAutorun` (the assigned macro's autorun flag;
+false without one); `afk` is `instances::afk::client_config`, `macroRun` from `macros::runs`.
+`POST /v1/macros` is `macros::save` then `macros::sync_hotkeys`; `POST /v1/macro/assign` emits
+`macros://assignments` in the session. Session mode forces `multi_instance`, `close_to_tray` and
+the global `anti_afk.enabled` on (each client's own `AfkClientConfig.enabled` decides).
+
+**Client** (`control::client::ControlClient`): `new(port, token)` (one shared reqwest client, no
+proxy, no redirects, 5 s; import/close/kill-all 120 s), `health(wait)`, `state`, `accounts`,
+`import_accounts(&[u8], password)`, `launch`, `close`, `kill_all`, `thumbnail(id, w, known)`, `afk`,
+`macros`, `macro_save`, `macro_assign`, `macro_run`, `macro_stop`, `roblox_install`, `logoff`.
+
+**Commands** (`src/api.ts` has one wrapper each, `src/dev/mockIpc.ts` one mock each):
+
+| Command | Args → answer |
+|---|---|
+| `sessions_health` | → `HealthCheck[]` |
+| `sessions_setup` | `names` (empty: all) → `SetupResult` |
+| `sessions_list` | → `SessionView[]`; every session's `/v1/health` asked in parallel, ≤ 1.5 s each |
+| `session_save` | `config` → `SessionConfig` (slot assigned or kept) |
+| `session_remove` | `name, deleteUser` → `SetupResult \| null` |
+| `session_start` / `session_disconnect` | `name` |
+| `session_window` | `name, show` → shown now (`bool`) |
+| `session_logoff` | `name` |
+| `session_push_accounts` | `name, accountIds` (main ids) → `ImportAnswer { imported, failed }` |
+| `session_push_macros` | `name, macroIds` → count; only trusted macros, without hotkeys; same name replaced |
+| `remote_state` / `remote_macros` | `name` → `ControlClient[]` / `Macro[]` (session ids) |
+| `remote_thumbnail` | `name, id, maxW, known` → bytes as `instance_thumbnail` |
+| `remote_launch` | `name, accountIds` (main ids), `target` → `LaunchAnswer { started, batchId }` |
+| `remote_close` | `name, id, force` |
+| `remote_kill_all` / `remote_roblox_install` | `name` |
+| `remote_afk` | `name, accountId, config: AfkClientConfig` |
+| `remote_macro_assign` | `name, accountId, macroId \| null, autorun` |
+| `remote_macro_run` / `remote_macro_stop` | `name, macroId, instanceIds` / `name, instanceId` |
+
+**Still needs a real Windows run** (only compiled for `x86_64-pc-windows-gnu` and tested against
+mocks here): the elevated setup end to end (users, ACLs, policies, certificate, `rdpsign`), RDP
+Wrapper version check and hidden mstsc window, session-mode start from the HKLM Run value, the
+control API over loopback between two sessions (token, `Host` check, push of accounts and macros,
+thumbnails from a session without a console), anti-AFK and AutoHotkey macros inside a disconnected
+or hidden session (focus, `SendInput`, rendering while hidden), `ExitWindowsEx` logoff, and the
+`opener` permission for the RDP Wrapper link.
+
 ## Checking
 
 The cloud workspace can't run Windows. Rust for Windows is checked with:
 
 ```
-cd src-tauri && RUSTC_BOOTSTRAP=1 cargo check -Zbuild-std --target x86_64-pc-windows-gnu
+cd src-tauri && RUSTC_BOOTSTRAP=1 CARGO_TARGET_DIR=/home/claude/target-win cargo check -Zbuild-std --target x86_64-pc-windows-gnu --all-targets
 ```
 
-(if the coordinator confirms it works). The UI is checked with `npm run build` (tsc + vite).
+(and the same with `clippy`). The UI is checked with `npm run build` (tsc + i18n check + vite).
+`npm run bindings` needs Windows; on Linux the bindings come from a scratch crate that includes
+`control/types.rs`, `sessions/types.rs` and model's Stream A block and runs ts-rs' export tests.

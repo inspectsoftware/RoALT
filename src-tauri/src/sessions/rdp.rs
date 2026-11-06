@@ -72,7 +72,7 @@ pub fn encode(text: &str) -> Vec<u8> {
 pub fn decode(bytes: &[u8]) -> String {
     match bytes {
         [0xFF, 0xFE, rest @ ..] => {
-            String::from_utf16_lossy(&rest.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect::<Vec<_>>())
+            String::from_utf16_lossy(&rest.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect::<Vec<_>>())
         }
         [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
         _ => String::from_utf8_lossy(bytes).into_owned(),

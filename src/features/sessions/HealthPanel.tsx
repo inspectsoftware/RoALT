@@ -1,5 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { asError, sessionsApi, type FixKind, type HealthCheck } from "../../api";
+import { asError, api, type FixKind, type HealthCheck } from "../../api";
 import { t } from "../../i18n";
 import { Disclosure, Skeleton } from "../../ui/Bits";
 import { Button } from "../../ui/Button";
@@ -8,22 +8,29 @@ import { StatusDot, StatusPill } from "../../ui/Status";
 import { friendly, toast, toastError } from "../../ui/Toast";
 import { sk, useAct, useHealth } from "./queries";
 
-/** How a failing check gets fixed, in a line under it. Unknown shapes (the backend's enum may grow)
- * show nothing rather than break the panel. */
+/** RDP Wrapper's own instructions: AltDock never downloads or installs it. */
+const RDP_WRAPPER = "https://github.com/stascorp/rdpwrap";
+
+/** How a failing check gets fixed, in a line under it. */
 function Fix({ fix }: { fix: FixKind | null }) {
-  if (fix === null) return null;
-  if (fix === "setup") return <p className="ses-fix">{t("sessions.health.fixSetup")}</p>;
-  if (typeof fix === "object" && "link" in fix)
-    return (
-      <p className="ses-fix">
-        <button type="button" className="linkbtn" onClick={() => openUrl(fix.link).catch(toastError)}>
-          {t("sessions.health.fixLink")}
-          <Icon name="external" size={12} />
-        </button>
-      </p>
-    );
-  if (typeof fix === "object" && "manual" in fix) return <p className="ses-fix">{fix.manual}</p>;
-  return null;
+  switch (fix) {
+    case null:
+      return null;
+    case "setup":
+      return <p className="ses-fix">{t("sessions.health.fixSetup")}</p>;
+    case "restart":
+      return <p className="ses-fix">{t("sessions.health.fixRestart")}</p>;
+    case "rdpWrapper":
+    case "rdpWrapperIni":
+      return (
+        <p className="ses-fix">
+          <button type="button" className="linkbtn" onClick={() => openUrl(RDP_WRAPPER).catch(toastError)}>
+            {t("sessions.health.fixLink")}
+            <Icon name="external" size={12} />
+          </button>
+        </p>
+      );
+  }
 }
 
 function Check({ c }: { c: HealthCheck }) {
@@ -47,8 +54,14 @@ export function HealthPanel({ names }: { names: string[] }) {
   const checks = health.data ?? [];
   const failing = checks.filter((c) => !c.ok);
   const passing = checks.filter((c) => c.ok);
-  const setup = () =>
-    void run("setup", () => sessionsApi.sessionsSetup(names), [sk.health]).then((ok) => ok && toast(t("sessions.health.setupDone")));
+  const setup = () => {
+    let failed: string[] = [];
+    void run("setup", async () => void (failed = (await api.sessionsSetup(names)).steps.filter((s) => !s.ok).map((s) => s.id)), [sk.health]).then((ok) => {
+      if (!ok) return;
+      if (failed.length) toast(t("sessions.health.setupFailed", { count: failed.length, steps: failed.join(", ") }), "error");
+      else toast(t("sessions.health.setupDone"));
+    });
+  };
   // Setup can fix it only when some failing check says so (or there is nothing to say).
   const fixable = failing.some((c) => c.fix === "setup");
 

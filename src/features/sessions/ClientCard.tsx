@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { sessionsApi, type AccountSummary, type AfkAction, type AfkClientConfig, type ControlClient, type SessionMacro } from "../../api";
+import { api, type AccountSummary, type AfkAction, type AfkClientConfig, type ControlClient, type Macro } from "../../api";
 import { t } from "../../i18n";
 import { Button, IconButton } from "../../ui/Button";
 import { NumberField, Switch, TextField } from "../../ui/controls";
@@ -20,7 +20,7 @@ const choiceOf = (a: AfkAction): ActionChoice => (typeof a === "object" ? "key" 
 function AfkControls({ session, c, act }: { session: string; c: ControlClient; act: ReturnType<typeof useAct> }) {
   const [customOpen, setCustomOpen] = useState(false);
   const cfg = c.afk;
-  const send = (next: AfkClientConfig) => act.run("afk", () => sessionsApi.remoteAfk(session, c.accountId, next), [sk.state(session)]);
+  const send = (next: AfkClientConfig) => act.run("afk", () => api.remoteAfk(session, c.accountId, next), [sk.state(session)]);
   const choice: ActionChoice = customOpen ? "key" : choiceOf(cfg.action);
   const key = typeof cfg.action === "object" ? cfg.action.key : "";
   const label = t("sessions.client.afk");
@@ -73,22 +73,17 @@ function AfkControls({ session, c, act }: { session: string; c: ControlClient; a
 }
 
 /** The macro assigned to this client's account, whether it starts by itself in a game, and Run/Stop. */
-function MacroControls({ session, c, macros, act }: { session: string; c: ControlClient; macros: SessionMacro[]; act: ReturnType<typeof useAct> }) {
-  // TODO(merge): `macroAutorun` comes from the backend once ControlClient has it; until then the
-  // last choice made here.
-  const [autorunLocal, setAutorunLocal] = useState(true);
-  const autorun = c.macroAutorun ?? autorunLocal;
-  const assign = (macroId: number | null, auto: boolean) => {
-    setAutorunLocal(auto);
-    void act.run("assign", () => sessionsApi.remoteMacroAssign(session, c.accountId, macroId, auto), [sk.state(session)]);
-  };
+function MacroControls({ session, c, macros, act }: { session: string; c: ControlClient; macros: Macro[]; act: ReturnType<typeof useAct> }) {
+  const autorun = c.macroAutorun;
+  const assign = (macroId: number | null, auto: boolean) =>
+    void act.run("assign", () => api.remoteMacroAssign(session, c.accountId, macroId, auto), [sk.state(session)]);
   const running = c.macroRun;
   const inGame = c.state === "inGame";
   const none = "none";
   return (
     <div className="ses-row">
       <div className="flex items-center gap-2 min-w-0">
-        <Switch checked={autorun} disabled={c.macroAssigned === null} label={t("sessions.client.autorunFor", { name: c.username })} onChange={(on) => assign(c.macroAssigned, on)} />
+        <Switch checked={autorun && c.macroAssigned !== null} disabled={c.macroAssigned === null} label={t("sessions.client.autorunFor", { name: c.username })} onChange={(on) => assign(c.macroAssigned, on)} />
         <span className="ses-row-label" data-tip={t("sessions.client.autorunHint")}>{t("sessions.client.autorun")}</span>
       </div>
       <div className="ses-row-controls">
@@ -97,10 +92,10 @@ function MacroControls({ session, c, macros, act }: { session: string; c: Contro
           value={c.macroAssigned === null ? none : String(c.macroAssigned)}
           className="ses-select ses-macro"
           options={[{ value: none, label: macros.length ? t("sessions.client.noMacro") : t("sessions.client.noMacros") }, ...macros.map((m) => ({ value: String(m.id), label: m.name }))]}
-          onChange={(v) => assign(v === none ? null : Number(v), autorun)}
+          onChange={(v) => assign(v === none ? null : Number(v), c.macroAssigned === null ? true : autorun)}
         />
         {running ? (
-          <Button size="sm" icon="stop" busy={act.busy === "stop"} onClick={() => void act.run("stop", () => sessionsApi.remoteMacroStop(session, c.instanceId), [sk.state(session)])}>
+          <Button size="sm" icon="stop" busy={act.busy === "stop"} onClick={() => void act.run("stop", () => api.remoteMacroStop(session, c.instanceId), [sk.state(session)])}>
             {t("sessions.client.stop")}
           </Button>
         ) : (
@@ -110,7 +105,7 @@ function MacroControls({ session, c, macros, act }: { session: string; c: Contro
             busy={act.busy === "run"}
             disabled={c.macroAssigned === null || !inGame}
             data-tip={!inGame ? t("sessions.client.runInGame") : undefined}
-            onClick={() => c.macroAssigned !== null && void act.run("run", () => sessionsApi.remoteMacroRun(session, c.macroAssigned!, [c.instanceId]), [sk.state(session)])}
+            onClick={() => c.macroAssigned !== null && void act.run("run", () => api.remoteMacroRun(session, c.macroAssigned!, [c.instanceId]), [sk.state(session)])}
           >
             {t("sessions.client.run")}
           </Button>
@@ -125,7 +120,7 @@ export function ClientCard({ session, c, account, macros, now }: {
   session: string;
   c: ControlClient;
   account: AccountSummary | undefined;
-  macros: SessionMacro[];
+  macros: Macro[];
   now: number;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -155,7 +150,7 @@ export function ClientCard({ session, c, account, macros, now }: {
           </div>
         )}
         <div className="ses-close">
-          <IconButton icon="x" size="sm" label={t("sessions.client.close", { name })} disabled={closing} onClick={(e) => void act.run("close", () => sessionsApi.remoteClose(session, c.instanceId, e.shiftKey), [sk.state(session)])} />
+          <IconButton icon="x" size="sm" label={t("sessions.client.close", { name })} disabled={closing} onClick={(e) => void act.run("close", () => api.remoteClose(session, c.instanceId, e.shiftKey), [sk.state(session)])} />
         </div>
       </div>
       <div className="home-info">
@@ -170,7 +165,7 @@ export function ClientCard({ session, c, account, macros, now }: {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-fg-3 tabular-nums">
-          <span>{t("home.cpu")} <span className="text-fg font-medium">{pct(c.cpu)}</span></span>
+          <span>{t("home.cpu")} <span className="text-fg font-medium">{pct(c.cpuPct)}</span></span>
           <span>{t("home.memory")} <span className="text-fg font-medium">{c.memoryMb === null ? "—" : mb(c.memoryMb)}</span></span>
           {c.macroRun && (
             <StatusPill tone="ok" pulse label={t("sessions.client.macroRunning", { name: c.macroRun.name })} detail={uptime(c.macroRun.startedAt, now)} className="ms-auto" />

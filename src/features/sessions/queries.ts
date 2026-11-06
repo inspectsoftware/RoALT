@@ -1,7 +1,7 @@
 // Sessions' queries: their own keys (not in data.ts's qk, which other streams share).
 import { useEffect, useState, type RefObject } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { sessionsApi, type SessionConfig, type SessionView } from "../../api";
+import { api, type SessionConfig, type SessionView } from "../../api";
 import { toastError } from "../../ui/Toast";
 
 export const sk = {
@@ -14,17 +14,17 @@ export const sk = {
 };
 
 /** Sessions' Windows and control states move on their own: asked again every 3 s while the page is open. */
-export const useSessions = () => useQuery({ queryKey: sk.list, queryFn: sessionsApi.sessionsList, refetchInterval: 3_000 });
-export const useHealth = () => useQuery({ queryKey: sk.health, queryFn: sessionsApi.sessionsHealth });
-export const useLocalMacros = (enabled: boolean) => useQuery({ queryKey: sk.localMacros, queryFn: sessionsApi.macrosList, enabled });
+export const useSessions = () => useQuery({ queryKey: sk.list, queryFn: api.sessionsList, refetchInterval: 3_000 });
+export const useHealth = () => useQuery({ queryKey: sk.health, queryFn: api.sessionsHealth });
+export const useLocalMacros = (enabled: boolean) => useQuery({ queryKey: sk.localMacros, queryFn: api.macrosList, enabled });
 
 /** The clients of a session whose control API answers, every 2 s (paused while the window is hidden). */
 export const useRemoteState = (name: string, enabled: boolean) =>
-  useQuery({ queryKey: sk.state(name), queryFn: () => sessionsApi.remoteState(name), enabled, refetchInterval: 2_000 });
+  useQuery({ queryKey: sk.state(name), queryFn: () => api.remoteState(name), enabled, refetchInterval: 2_000 });
 export const useRemoteMacros = (name: string, enabled: boolean) =>
-  useQuery({ queryKey: sk.macros(name), queryFn: () => sessionsApi.remoteMacros(name), enabled });
+  useQuery({ queryKey: sk.macros(name), queryFn: () => api.remoteMacros(name), enabled });
 
-export const controlOk = (s: SessionView) => s.control.ok && s.wts !== "none";
+export const controlOk = (s: SessionView) => s.control.kind === "ok" && s.wts !== "none";
 
 /** One action at a time per key: `busy` names the running one; a failure toasts; afterwards the
  * sessions (and what `also` names) are asked again. Settles true when it worked. */
@@ -67,6 +67,7 @@ export function useRemoteThumbnail(session: string, id: string, canvas: RefObjec
   useEffect(() => {
     let stop = false;
     let timer: number | undefined;
+    let known = 0;
     let inView = true;
     const seen = new IntersectionObserver((entries) => void (inView = entries[entries.length - 1].isIntersecting));
     if (canvas.current) seen.observe(canvas.current);
@@ -75,14 +76,15 @@ export function useRemoteThumbnail(session: string, id: string, canvas: RefObjec
       const el = canvas.current;
       if (el && inView && document.visibilityState === "visible") {
         try {
-          const buf = await sessionsApi.remoteThumbnail(session, id, Math.min(960, Math.max(320, Math.round(el.clientWidth * devicePixelRatio))));
+          const buf = await api.remoteThumbnail(session, id, Math.min(960, Math.max(320, Math.round(el.clientWidth * devicePixelRatio))), known);
           if (stop) return;
           const head = new DataView(buf);
           const [w, h, code] = [head.getUint32(0, true), head.getUint32(4, true), head.getUint32(8, true)];
-          if (buf.byteLength > 24 && w && h) {
+          if (buf.byteLength > 24) {
             if (el.width !== w) el.width = w;
             if (el.height !== h) el.height = h;
             el.getContext("2d")?.putImageData(new ImageData(new Uint8ClampedArray(buf, 24, w * h * 4), w, h), 0, 0);
+            known = head.getUint32(16, true);
             setPainted(true);
           }
           setStatus(STATUSES[code] ?? null);

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { sessionsApi, type AccountSummary, type SessionConfig, type SessionMode } from "../../api";
+import { api, type AccountSummary, type SessionConfig, type SessionMode } from "../../api";
 import { useAccounts } from "../../data";
 import { t } from "../../i18n";
 import { Button } from "../../ui/Button";
@@ -11,7 +11,8 @@ import { accountName, Avatar } from "../accounts/shared";
 import { nextSlot, sk, useAct, useLocalMacros } from "./queries";
 
 const NAME = /^[A-Za-z0-9 _-]{1,32}$/;
-const SIZE = { w: [800, 3840], h: [600, 2160] } as const;
+// As `sessions::checked` allows.
+const SIZE = { w: [640, 3840], h: [480, 2160] } as const;
 
 /** Add a session, or edit one (`editing`; its name stays, it is the key). Windows user, address and
  * port come from the next free slot and don't change afterwards. */
@@ -58,7 +59,7 @@ export function SessionDialog({ open, onClose, editing, sessions }: {
     setTried(true);
     if (nameError || sizeError || dedicatedError || busy) return;
     const config: SessionConfig = { ...slot, name: name.trim(), mode, accountIds: ids, width: Number(width), height: Number(height) };
-    void run("save", () => sessionsApi.sessionSave(config), [sk.health]).then((ok) => {
+    void run("save", () => api.sessionSave(config), [sk.health]).then((ok) => {
       if (!ok) return;
       toast(editing ? t("sessions.dialog.saved") : t("sessions.dialog.added", { name: config.name }));
       onClose();
@@ -160,7 +161,7 @@ export function RemoveDialog({ session, onClose }: { session: SessionConfig | nu
   const s = session;
   const remove = () => {
     if (!s || busy) return;
-    void run("remove", () => sessionsApi.sessionRemove(s.name, deleteUser), [sk.health]).then((ok) => {
+    void run("remove", () => api.sessionRemove(s.name, deleteUser), [sk.health]).then((ok) => {
       if (!ok) return;
       toast(t("sessions.remove.done", { name: s.name }));
       onClose();
@@ -189,13 +190,15 @@ export function PushMacrosDialog({ session, onClose }: { session: string | null;
   useEffect(() => {
     if (session) setOff(new Set());
   }, [session]);
-  const list = macros.data ?? [];
+  // Pushed macros count as trusted in the session: only reviewed ones go.
+  const list = (macros.data ?? []).filter((m) => m.trusted);
   const picked = list.filter((m) => !off.has(m.id)).map((m) => m.id);
   const push = () => {
     if (!session || !picked.length || busy) return;
-    void run("push", () => sessionsApi.sessionPushMacros(session, picked), [sk.macros(session)]).then((ok) => {
+    let pushed = 0;
+    void run("push", async () => void (pushed = await api.sessionPushMacros(session, picked)), [sk.macros(session)]).then((ok) => {
       if (!ok) return;
-      toast(t("sessions.push.macrosDone", { count: picked.length, name: session }));
+      toast(t("sessions.push.macrosDone", { count: pushed, name: session }));
       onClose();
     });
   };

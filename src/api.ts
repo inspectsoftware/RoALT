@@ -87,12 +87,16 @@ export type { PresenceKind } from "./bindings/PresenceKind";
 export type { Subscription } from "./bindings/Subscription";
 export type { Theme } from "./bindings/Theme";
 // ---- AltDock: Stream C ----
+import type { ControlClient } from "./bindings/ControlClient";
 import type { HealthCheck } from "./bindings/HealthCheck";
+import type { ImportAnswer } from "./bindings/ImportAnswer";
+import type { LaunchAnswer } from "./bindings/LaunchAnswer";
 import type { SessionConfig } from "./bindings/SessionConfig";
 import type { SessionView } from "./bindings/SessionView";
 import type { SetupResult } from "./bindings/SetupResult";
-export type { HealthCheck, SessionConfig, SessionView, SetupResult };
+export type { ControlClient, HealthCheck, ImportAnswer, LaunchAnswer, SessionConfig, SessionView, SetupResult };
 export type { ControlHealth } from "./bindings/ControlHealth";
+export type { ControlMode } from "./bindings/ControlMode";
 export type { FixKind } from "./bindings/FixKind";
 export type { SessionControl } from "./bindings/SessionControl";
 export type { SessionMode } from "./bindings/SessionMode";
@@ -382,6 +386,7 @@ export const api = {
   sessionsHealth: () => invoke<HealthCheck[]>("sessions_health"),
   /** Sets the PC up for these sessions (all when empty) after one admin prompt; each step's outcome. */
   sessionsSetup: (names: string[] = []) => invoke<SetupResult>("sessions_setup", { names }),
+  /** Each session's Windows state, window and whether its AltDock answers (asked for at most 1.5 s). */
   sessionsList: () => invoke<SessionView[]>("sessions_list"),
   /** Adds or changes a session (by name); the answer has its Windows user, address and port. */
   sessionSave: (config: SessionConfig) => invoke<SessionConfig>("session_save", { config }),
@@ -389,11 +394,37 @@ export const api = {
   sessionRemove: (name: string, deleteUser: boolean) => invoke<SetupResult | null>("session_remove", { name, deleteUser }),
   /** Opens the session in a hidden Remote Desktop window; refused while RDP Wrapper doesn't support this Windows. */
   sessionStart: (name: string) => invoke<void>("session_start", { name }),
-  /** Shows or hides the session's window; whether it is shown now. */
+  /** Shows or hides (never minimizes) the session's window; whether it is shown now. */
   sessionWindow: (name: string, show: boolean) => invoke<boolean>("session_window", { name, show }),
   /** Disconnects the session; its clients keep running. */
   sessionDisconnect: (name: string) => invoke<void>("session_disconnect", { name }),
-  // TODO(merge): the control API proxies (session_logoff, session_push_*, remote_*) with Stream B's types.
+
+  // The AltDock in a session, through its control API. Ids from remoteState/remoteMacros are the
+  // session's own; remoteLaunch and sessionPushAccounts take this app's account ids.
+  /** Ends the session: its clients close. */
+  sessionLogoff: (name: string) => invoke<void>("session_logoff", { name }),
+  /** Copies these accounts (with their cookies, as a one-time encrypted backup) into the session's vault. */
+  sessionPushAccounts: (name: string, accountIds: number[]) => invoke<ImportAnswer>("session_push_accounts", { name, accountIds }),
+  /** Copies these macros into the session, trusted there, without hotkeys; how many. */
+  sessionPushMacros: (name: string, macroIds: number[]) => invoke<number>("session_push_macros", { name, macroIds }),
+  remoteState: (name: string) => invoke<ControlClient[]>("remote_state", { name }),
+  /** The session's own macros. */
+  remoteMacros: (name: string) => invoke<Macro[]>("remote_macros", { name }),
+  /** Same bytes as `instanceThumbnail`: a 24-byte header, then RGBA unless the picture is `known`. */
+  remoteThumbnail: (name: string, id: string, maxW: number, known: number) => invoke<ArrayBuffer>("remote_thumbnail", { name, id, maxW, known }),
+  /** These accounts (pushed before) to `target` as typed in a Launch box, parsed in the session. */
+  remoteLaunch: (name: string, accountIds: number[], target: string) => invoke<LaunchAnswer>("remote_launch", { name, accountIds, target }),
+  remoteClose: (name: string, id: string, force: boolean) => invoke<void>("remote_close", { name, id, force }),
+  remoteKillAll: (name: string) => invoke<void>("remote_kill_all", { name }),
+  /** `accountId`: the session's (`ControlClient.accountId`). */
+  remoteAfk: (name: string, accountId: number, config: AfkClientConfig) => invoke<void>("remote_afk", { name, accountId, config }),
+  /** `macroId` null: no macro for the account (both ids the session's). */
+  remoteMacroAssign: (name: string, accountId: number, macroId: number | null, autorun: boolean) =>
+    invoke<void>("remote_macro_assign", { name, accountId, macroId, autorun }),
+  remoteMacroRun: (name: string, macroId: number, instanceIds: string[]) => invoke<void>("remote_macro_run", { name, macroId, instanceIds }),
+  remoteMacroStop: (name: string, instanceId: string) => invoke<void>("remote_macro_stop", { name, instanceId }),
+  /** Starts the verified Roblox install for the session's Windows user; health shows when it is there. */
+  remoteRobloxInstall: (name: string) => invoke<void>("remote_roblox_install", { name }),
   // ---- end AltDock: Stream C ----
 };
 
@@ -417,56 +448,3 @@ export const events = {
   onSessionsChanged: (f: () => void): Promise<UnlistenFn> => listen("sessions://changed", f),
   // ---- end AltDock: Stream C ----
 };
-
-// ---- AltDock: Stream D ----
-// Sessions (docs/ALTDOCK.md, Streams C and D): background Windows sessions and the AltDock running
-// in each, reached through the main app's commands.
-import type { AfkClientConfig, ControlClient, HealthCheck, Macro, SessionConfig, SessionView } from "./features/sessions/types";
-export type { AfkAction, AfkClientConfig, ControlClient, ControlHealth, ControlStatus, FixKind, HealthCheck, Macro as SessionMacro, MacroRun as SessionMacroRun, SessionConfig, SessionMode, SessionView, WtsState } from "./features/sessions/types";
-
-export const sessionsApi = {
-  /** Every check the background sessions need (RDP Wrapper, policies, alt users, program copy, …). */
-  sessionsHealth: () => invoke<HealthCheck[]>("sessions_health"),
-  /** Runs the elevated setup (one UAC prompt) for these sessions; resolves once it has finished. */
-  sessionsSetup: (names: string[]) => invoke<void>("sessions_setup", { names }),
-  sessionsList: () => invoke<SessionView[]>("sessions_list"),
-  /** Adds the session, or replaces the one with its name. */
-  sessionSave: (config: SessionConfig) => invoke<void>("session_save", { config }),
-  /** `deleteUser`: the alt Windows user (and its profile) goes too. */
-  sessionRemove: (name: string, deleteUser: boolean) => invoke<void>("session_remove", { name, deleteUser }),
-  /** Signs the alt user in through a hidden RDP window; refused while the RDP Wrapper check fails. */
-  sessionStart: (name: string) => invoke<void>("session_start", { name }),
-  /** Shows or hides (never minimizes) the session's RDP window. */
-  sessionWindow: (name: string, show: boolean) => invoke<void>("session_window", { name, show }),
-  /** Closes the RDP window; the session and its clients keep running. */
-  sessionDisconnect: (name: string) => invoke<void>("session_disconnect", { name }),
-  /** Ends the session (through its control API): its clients close. */
-  sessionLogoff: (name: string) => invoke<void>("session_logoff", { name }),
-  /** Copies these accounts into the session's vault (an encrypted one-time backup). */
-  sessionPushAccounts: (name: string, accountIds: number[]) => invoke<void>("session_push_accounts", { name, accountIds }),
-  /** Copies these macros into the session (as trusted). */
-  sessionPushMacros: (name: string, macroIds: number[]) => invoke<void>("session_push_macros", { name, macroIds }),
-
-  remoteState: (name: string) => invoke<ControlClient[]>("remote_state", { name }),
-  /** Same bytes as `instanceThumbnail`: a 24-byte header, then RGBA when there is a picture. */
-  remoteThumbnail: (name: string, id: string, maxW: number) => invoke<ArrayBuffer>("remote_thumbnail", { name, id, maxW }),
-  /** `target` as typed in a Launch box (link, place id, …), parsed in the session. */
-  remoteLaunch: (name: string, accountIds: number[], target: string) => invoke<{ started: number }>("remote_launch", { name, accountIds, target }),
-  remoteClose: (name: string, id: string, force: boolean) => invoke<void>("remote_close", { name, id, force }),
-  remoteKillAll: (name: string) => invoke<void>("remote_kill_all", { name }),
-  remoteAfk: (name: string, accountId: number, config: AfkClientConfig) => invoke<void>("remote_afk", { name, accountId, config }),
-  /** `macroId` null: no macro for the account. */
-  remoteMacroAssign: (name: string, accountId: number, macroId: number | null, autorun: boolean) =>
-    invoke<void>("remote_macro_assign", { name, accountId, macroId, autorun }),
-  remoteMacroRun: (name: string, macroId: number, instanceIds: string[]) => invoke<void>("remote_macro_run", { name, macroId, instanceIds }),
-  remoteMacroStop: (name: string, instanceId: string) => invoke<void>("remote_macro_stop", { name, instanceId }),
-  /** Starts the verified Roblox install for the session's Windows user. */
-  remoteRobloxInstall: (name: string) => invoke<void>("remote_roblox_install", { name }),
-  /** The session's own macros (their ids are the session's).
-   * TODO(merge): not in the contract's command list; Stream C to add as a proxy of `GET /v1/macros`. */
-  remoteMacros: (name: string) => invoke<Macro[]>("remote_macros", { name }),
-  /** The main app's macros, to pick which to push.
-   * TODO(merge): Stream A's `api.macrosList` once merged; then drop this one. */
-  macrosList: () => invoke<Macro[]>("macros_list"),
-};
-// ---- end AltDock: Stream D ----

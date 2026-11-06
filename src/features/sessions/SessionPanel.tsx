@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { asError, sessionsApi, type AccountSummary, type SessionConfig, type SessionView } from "../../api";
+import { asError, api, type AccountSummary, type SessionConfig, type SessionView } from "../../api";
 import { t } from "../../i18n";
 import { Chip } from "../../ui/Bits";
 import { Button, IconButton } from "../../ui/Button";
@@ -16,13 +16,13 @@ const SIGN_IN_MS = 60_000;
 function badge(s: SessionView, startedAt: number | undefined): { tone: Tone; label: string; pulse?: boolean; tip?: string } {
   if (s.wts === "none") return { tone: "neutral", label: t("sessions.state.off") };
   if (s.wts === "disconnected") return { tone: "info", label: t("sessions.state.disconnected"), tip: t("sessions.state.disconnectedHint") };
-  if (s.control.ok) return { tone: "ok", label: t("sessions.state.running") };
+  if (s.control.kind === "ok") return { tone: "ok", label: t("sessions.state.running") };
   if (startedAt && Date.now() - startedAt < SIGN_IN_MS) return { tone: "info", label: t("sessions.state.signingIn"), pulse: true };
-  return { tone: "attention", label: t("sessions.state.noAnswer"), tip: s.control.error };
+  return { tone: "attention", label: t("sessions.state.noAnswer"), tip: s.control.kind === "down" ? s.control.reason : undefined };
 }
 
-/** The launch box: a target and which of the session's accounts (those not running there yet,
- * picked by default). */
+/** The launch box: a target and which of the session's accounts (this app's ids; those not
+ * running there yet, picked by default). */
 function LaunchBox({ s, accounts, running }: { s: SessionView; accounts: Map<number, AccountSummary>; running: Set<number> }) {
   const name = s.config.name;
   const { busy, run } = useAct();
@@ -32,7 +32,10 @@ function LaunchBox({ s, accounts, running }: { s: SessionView; accounts: Map<num
   const picked = ids.filter((id) => !off.has(id));
   const launch = () => {
     if (!target.trim() || !picked.length || busy) return;
-    void run("launch", () => sessionsApi.remoteLaunch(name, picked, target.trim()), [sk.state(name)]).then((ok) => ok && toast(t("sessions.launch.started", { count: picked.length, name })));
+    let started = 0;
+    void run("launch", async () => void ({ started } = await api.remoteLaunch(name, picked, target.trim())), [sk.state(name)]).then(
+      (ok) => ok && toast(t("sessions.launch.started", { count: started, name })),
+    );
   };
   return (
     <form
@@ -80,15 +83,21 @@ function LaunchBox({ s, accounts, running }: { s: SessionView; accounts: Map<num
 /** What runs in a session whose AltDock answers: launch box, push and install, the client cards. */
 function Live({ s, accounts, now, onPushMacros }: { s: SessionView; accounts: Map<number, AccountSummary>; now: number; onPushMacros: () => void }) {
   const name = s.config.name;
-  const health = s.control.ok ? s.control.health : null;
+  const health = s.control.kind === "ok" ? s.control.health : null;
   const state = useRemoteState(name, true);
   const macros = useRemoteMacros(name, true).data ?? [];
   const { busy, run } = useAct();
   const clients = state.data ?? [];
-  const running = new Set(clients.filter((c) => c.state !== "exited").map((c) => c.accountId));
-  const pushAccounts = () =>
-    void run("accounts", () => sessionsApi.sessionPushAccounts(name, s.config.accountIds)).then((ok) => ok && toast(t("sessions.push.accountsDone", { count: s.config.accountIds.length, name })));
-  const install = () => void run("install", () => sessionsApi.remoteRobloxInstall(name)).then((ok) => ok && toast(t("sessions.install.done", { name })));
+  // The session's account ids are its own: its clients match this app's accounts by Roblox user.
+  const byUser = new Map([...accounts.values()].map((a) => [a.userId, a]));
+  const running = new Set(clients.filter((c) => c.state !== "exited").flatMap((c) => byUser.get(c.userId)?.id ?? []));
+  const pushAccounts = () => {
+    let imported = 0;
+    void run("accounts", async () => void ({ imported } = await api.sessionPushAccounts(name, s.config.accountIds))).then(
+      (ok) => ok && toast(t("sessions.push.accountsDone", { count: imported, name })),
+    );
+  };
+  const install = () => void run("install", () => api.remoteRobloxInstall(name)).then((ok) => ok && toast(t("sessions.install.done", { name })));
 
   return (
     <>
@@ -110,7 +119,7 @@ function Live({ s, accounts, now, onPushMacros }: { s: SessionView; accounts: Ma
           <Button size="md" icon="upload" data-tip={t("sessions.push.macrosHint")} onClick={onPushMacros}>
             {t("sessions.push.macros")}
           </Button>
-          <Button size="md" variant="ghost" icon="stop" busy={busy === "kill"} disabled={!clients.length} onClick={() => void run("kill", () => sessionsApi.remoteKillAll(name), [sk.state(name)])}>
+          <Button size="md" variant="ghost" icon="stop" busy={busy === "kill"} disabled={!clients.length} onClick={() => void run("kill", () => api.remoteKillAll(name), [sk.state(name)])}>
             {t("sessions.killAll")}
           </Button>
         </div>
@@ -127,7 +136,7 @@ function Live({ s, accounts, now, onPushMacros }: { s: SessionView; accounts: Ma
       ) : (
         <div className="ses-grid">
           {clients.map((c) => (
-            <ClientCard key={c.instanceId} session={name} c={c} account={accounts.get(c.accountId)} macros={macros} now={now} />
+            <ClientCard key={c.instanceId} session={name} c={c} account={byUser.get(c.userId)} macros={macros} now={now} />
           ))}
         </div>
       )}
@@ -149,12 +158,12 @@ export function SessionPanel({ s, accounts, now, onEdit, onRemove, onPushMacros 
   const [startedAt, setStartedAt] = useState<number>();
   // Answering ends the signing-in grace.
   useEffect(() => {
-    if (s.control.ok) setStartedAt(undefined);
-  }, [s.control.ok]);
+    if (s.control.kind === "ok") setStartedAt(undefined);
+  }, [s.control.kind]);
   const b = badge(s, startedAt);
   const live = controlOk(s);
   const start = () =>
-    void run("start", () => sessionsApi.sessionStart(c.name), [sk.health]).then((ok) => ok && setStartedAt(Date.now()));
+    void run("start", () => api.sessionStart(c.name), [sk.health]).then((ok) => ok && setStartedAt(Date.now()));
   const idOf = `ses-${c.name.replace(/\W/g, "_")}`;
 
   return (
@@ -179,17 +188,17 @@ export function SessionPanel({ s, accounts, now, onEdit, onRemove, onPushMacros 
             </Button>
           )}
           {s.wts === "active" && (
-            <Button size="md" icon={s.windowVisible ? "eyeOff" : "eye"} busy={busy === "window"} onClick={() => void run("window", () => sessionsApi.sessionWindow(c.name, !s.windowVisible))}>
+            <Button size="md" icon={s.windowVisible ? "eyeOff" : "eye"} busy={busy === "window"} onClick={() => void run("window", () => api.sessionWindow(c.name, !s.windowVisible))}>
               {s.windowVisible ? t("sessions.hideWindow") : t("sessions.showWindow")}
             </Button>
           )}
           {s.wts === "active" && (
-            <Button size="md" busy={busy === "disconnect"} data-tip={t("sessions.disconnectHint")} onClick={() => void run("disconnect", () => sessionsApi.sessionDisconnect(c.name))}>
+            <Button size="md" busy={busy === "disconnect"} data-tip={t("sessions.disconnectHint")} onClick={() => void run("disconnect", () => api.sessionDisconnect(c.name))}>
               {t("sessions.disconnect")}
             </Button>
           )}
           {s.wts !== "none" && (
-            <Button size="md" icon="signin" busy={busy === "logoff"} disabled={!s.control.ok} data-tip={t("sessions.logoffHint")} onClick={() => void run("logoff", () => sessionsApi.sessionLogoff(c.name), [sk.state(c.name)])}>
+            <Button size="md" icon="signin" busy={busy === "logoff"} disabled={s.control.kind !== "ok"} data-tip={t("sessions.logoffHint")} onClick={() => void run("logoff", () => api.sessionLogoff(c.name), [sk.state(c.name)])}>
               {t("sessions.logoff")}
             </Button>
           )}
@@ -202,8 +211,8 @@ export function SessionPanel({ s, accounts, now, onEdit, onRemove, onPushMacros 
         <Live s={s} accounts={accounts} now={now} onPushMacros={() => onPushMacros(c.name)} />
       ) : s.wts === "none" ? (
         <p className="text-[13px] text-fg-3">{t("sessions.offHint")}</p>
-      ) : !s.control.ok && b.tone === "attention" ? (
-        <p className="alert text-[13px]">{t("sessions.controlDown", { error: s.control.error })}</p>
+      ) : s.control.kind === "down" && b.tone === "attention" ? (
+        <p className="alert text-[13px]">{t("sessions.controlDown", { error: s.control.reason })}</p>
       ) : null}
     </section>
   );

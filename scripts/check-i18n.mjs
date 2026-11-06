@@ -39,6 +39,11 @@ if (process.argv.includes("--rust-keys")) {
 
 const problems = [];
 const warnings = [];
+// ---- AltDock: Stream D ----
+// docs/ALTDOCK.md: new UI strings come in English and German; other languages fall back to English
+// at runtime (i18n/index.ts), so a key they miss is a warning, not a failure.
+const FALLBACK_OK = new Set(LANGS.filter((l) => l !== "de"));
+// ---- end AltDock: Stream D ----
 
 for (const lang of LANGS) {
   const cats = categories(lang);
@@ -55,7 +60,7 @@ for (const lang of LANGS) {
   }
   for (const [k, v] of want) {
     const got = cat[k];
-    if (typeof got !== "string" || !got.trim()) problems.push(`${lang}.json: missing "${k}"`);
+    if (typeof got !== "string" || !got.trim()) (FALLBACK_OK.has(lang) ? warnings : problems).push(`${lang}.json: missing "${k}"`);
     else {
       if (marks(got) !== marks(v)) problems.push(`${lang}.json: "${k}" has ${marks(got) || "no marks"}, English has ${marks(v) || "none"}`);
       if (got === v && /[a-z]{4,}.*\s.*[a-z]{4,}/.test(v)) warnings.push(`${lang}.json: "${k}" is still English`);

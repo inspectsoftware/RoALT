@@ -1,0 +1,196 @@
+/* Sessions: the setup check, one panel per session, its launch tools and client cards (the cards
+   reuse Home's .home-card / .home-pic look from dashboard.css). */
+@layer views {
+  .ses-page {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    max-width: 1320px;
+    margin-inline: auto;
+  }
+  .ses-page-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 12px 24px;
+  }
+
+  /* ---- Setup check ---- */
+  .ses-health,
+  .ses-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 16px 18px 18px;
+  }
+  .ses-health-head,
+  .ses-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+  }
+  .ses-checks {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .ses-check {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 8px 10px;
+    border-radius: var(--r-md);
+  }
+  .ses-checks > .ses-check:has(.ses-fix) {
+    background: color-mix(in srgb, var(--err) 6%, transparent);
+  }
+  .ses-fix {
+    margin-top: 4px;
+    color: var(--fg);
+    font-size: var(--fs-small);
+  }
+  .ses-fix .linkbtn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  /* ---- A session ---- */
+  .ses-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    margin-inline-start: auto;
+  }
+  .ses-tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 10px 16px;
+    padding: 12px;
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+  }
+  .ses-tools-end {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-inline-start: auto;
+  }
+  .ses-launch {
+    flex: 1 1 520px;
+    min-width: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+  }
+  .ses-launch > :first-child {
+    flex: 1 1 240px;
+  }
+  .ses-launch .field {
+    min-height: var(--h-md);
+  }
+  .ses-empty {
+    padding: 28px 24px;
+  }
+
+  /* ---- Client cards ---- */
+  .ses-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(330px, 100%), 1fr));
+    gap: 14px;
+  }
+  .ses-card {
+    gap: 8px;
+  }
+  .ses-pic {
+    cursor: default;
+  }
+  .ses-close {
+    position: absolute;
+    top: 6px;
+    inset-inline-end: 6px;
+    border-radius: var(--r-pill);
+    background: var(--island);
+    box-shadow: var(--shadow-island); /* taste-skill-ignore: it floats over the live picture */
+  }
+  .ses-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+  }
+  .ses-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px 10px;
+    min-height: var(--h-md);
+  }
+  .ses-row-label {
+    font-size: var(--fs-small);
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .ses-row-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    min-width: 0;
+    margin-inline-start: auto;
+    transition: opacity var(--dur-fast) var(--ease-out);
+  }
+  .ses-row-controls[data-off] {
+    opacity: 0.55;
+  }
+  .ses-row-controls .field {
+    min-height: var(--h-sm);
+    font-size: var(--fs-small);
+  }
+  .ses-row-controls label {
+    font-size: var(--fs-small);
+  }
+  .ses-select {
+    width: 142px;
+  }
+  /* With a custom key the select gives the key's field room, so the row stays one line. */
+  .ses-row-controls[data-custom] .ses-select {
+    width: 112px;
+  }
+  .ses-key {
+    width: 52px;
+  }
+  .ses-macro {
+    width: 150px;
+  }
+
+  /* ---- Dialog: a list to pick from ---- */
+  .ses-pick {
+    display: flex;
+    flex-direction: column;
+    max-height: 220px;
+    padding: 4px;
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+  }
+  .ses-pick-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 36px;
+    padding: 0 8px;
+    border-radius: var(--r-sm);
+  }
+  .ses-pick-row:hover {
+    background: var(--hover);
+  }
+}

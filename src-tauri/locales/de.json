@@ -446,5 +446,6 @@
   "Restored.": "Wiederhergestellt.",
   "Removed.": "Entfernt.",
   "No record of the previous values: only those that still say what AltDock set are removed.": "Keine Aufzeichnung der früheren Werte: Nur Werte, die noch auf AltDocks Einstellung stehen, werden entfernt.",
-  "{path} wasn't made by AltDock's setup; it was left alone.": "{path} wurde nicht von der AltDock-Einrichtung angelegt und bleibt unverändert."
+  "{path} wasn't made by AltDock's setup; it was left alone.": "{path} wurde nicht von der AltDock-Einrichtung angelegt und bleibt unverändert.",
+  "You're connected over Remote Desktop from another computer, so Set up leaves Remote Desktop open to the network instead of cutting you off.": "Du bist per Remotedesktop von einem anderen Computer verbunden. Einrichten lässt Remotedesktop deshalb fürs Netzwerk offen, statt dich auszusperren."
 }

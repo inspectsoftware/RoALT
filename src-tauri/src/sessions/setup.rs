@@ -351,7 +351,12 @@ mod system {
         let existing: Vec<String> = plan.managed_users.iter().filter_map(|u| users::sid_of(u)).collect();
         let mut record = Recorder::open(&root, main, &existing);
         if plan.system {
-            r.push("firewall", firewall::add());
+            if firewall::connected_from_another_pc() {
+                // The rule would drop this very connection and refuse the reconnect.
+                r.push("firewall", Ok("skipped: connected over Remote Desktop from another computer".to_owned()));
+            } else {
+                r.push("firewall", firewall::add());
+            }
             policies(&mut record, r);
         }
         for u in &plan.users {

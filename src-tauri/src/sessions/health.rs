@@ -230,11 +230,13 @@ mod system {
         let deny = effective(reg::dword(HKLM, reg::TS_POLICY, "fDenyTSConnections"), reg::dword(HKLM, reg::TS_CONTROL, "fDenyTSConnections"), 1);
         out.push(check("connections", deny == 0, tr!("Remote connections allowed"), "fDenyTSConnections".into(), FixKind::Setup));
         let blocked = firewall::status();
+        let from_elsewhere = blocked.is_none() && firewall::connected_from_another_pc();
         out.push(check(
             "remoteRdpBlocked",
-            blocked.is_some(),
+            blocked.is_some() || from_elsewhere,
             tr!("Remote Desktop only from this PC"),
             match blocked {
+                None if from_elsewhere => tr!("You're connected over Remote Desktop from another computer, so Set up leaves Remote Desktop open to the network instead of cutting you off."),
                 Some(true) => tr!("Other computers can't reach Remote Desktop here (firewall rule {rule}).", rule = FIREWALL_RULE),
                 Some(false) => tr!("The firewall rule {rule} is there, but Windows Firewall is off for the current network, so it blocks nothing.", rule = FIREWALL_RULE),
                 None => tr!("Other computers on the network can reach Remote Desktop here: the firewall rule {rule} is missing.", rule = FIREWALL_RULE),

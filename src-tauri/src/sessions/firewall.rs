@@ -24,6 +24,68 @@ use windows::core::BSTR;
 
 use super::FIREWALL_RULE;
 
+/// Whether this program runs in a Remote Desktop session opened from another computer: then the
+/// block rule would cut the user off (it drops the live connection and refuses the reconnect), so
+/// the setup leaves it out and the health check doesn't ask for it. A session from this PC
+/// (127.x, ::1) doesn't count.
+pub fn connected_from_another_pc() -> bool {
+    use windows::Win32::System::RemoteDesktop::{WTS_CLIENT_ADDRESS, WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION, WTSClientAddress, WTSFreeMemory, WTSQuerySessionInformationW};
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_REMOTESESSION};
+    // SAFETY: plain query.
+    if unsafe { GetSystemMetrics(SM_REMOTESESSION) } == 0 {
+        return false;
+    }
+    let mut buf = windows::core::PWSTR::null();
+    let mut len = 0u32;
+    // SAFETY: Windows allocates `buf` (freed below); `len` is its size in bytes.
+    let ok = unsafe { WTSQuerySessionInformationW(Some(WTS_CURRENT_SERVER_HANDLE), WTS_CURRENT_SESSION, WTSClientAddress, &mut buf, &mut len) }.is_ok();
+    let remote = if ok && !buf.is_null() && len as usize >= size_of::<WTS_CLIENT_ADDRESS>() {
+        // SAFETY: WTSClientAddress answers a WTS_CLIENT_ADDRESS of `len` bytes at `buf`.
+        let a = unsafe { std::ptr::read_unaligned(buf.0 as *const WTS_CLIENT_ADDRESS) };
+        !is_loopback(a.AddressFamily, &a.Address)
+    } else {
+        // Remote, but the address is unknown: assume another computer, the safe side.
+        true
+    };
+    if !buf.is_null() {
+        // SAFETY: `buf` came from WTSQuerySessionInformationW.
+        unsafe { WTSFreeMemory(buf.0.cast()) };
+    }
+    remote
+}
+
+/// Whether a `WTS_CLIENT_ADDRESS` is this PC (pure): IPv4 127.x (bytes 2..6), IPv6 ::1.
+pub fn is_loopback(family: u32, address: &[u8; 20]) -> bool {
+    const AF_INET: u32 = 2;
+    const AF_INET6: u32 = 23;
+    match family {
+        AF_INET => address[2] == 127,
+        AF_INET6 => address[..15].iter().all(|&b| b == 0) && address[15] == 1,
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod loopback_tests {
+    use super::is_loopback;
+
+    #[test]
+    fn only_this_pc_is_loopback() {
+        let v4 = |a: [u8; 4]| {
+            let mut x = [0u8; 20];
+            x[2..6].copy_from_slice(&a);
+            x
+        };
+        assert!(is_loopback(2, &v4([127, 0, 0, 2])));
+        assert!(!is_loopback(2, &v4([192, 168, 0, 228])));
+        let mut one = [0u8; 20];
+        one[15] = 1;
+        assert!(is_loopback(23, &one));
+        assert!(!is_loopback(23, &[0u8; 20]));
+        assert!(!is_loopback(0, &[0u8; 20]));
+    }
+}
+
 /// Remote Desktop's port.
 const PORT: &str = "3389";
 /// Every address but loopback (127.0.0.0/8, ::1); `::` is never a sender.

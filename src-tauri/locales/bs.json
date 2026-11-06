@@ -457,5 +457,6 @@
   "Restored.": "Restored.",
   "Removed.": "Removed.",
   "No record of the previous values: only those that still say what AltDock set are removed.": "No record of the previous values: only those that still say what AltDock set are removed.",
-  "{path} wasn't made by AltDock's setup; it was left alone.": "{path} wasn't made by AltDock's setup; it was left alone."
+  "{path} wasn't made by AltDock's setup; it was left alone.": "{path} wasn't made by AltDock's setup; it was left alone.",
+  "You're connected over Remote Desktop from another computer, so Set up leaves Remote Desktop open to the network instead of cutting you off.": "You're connected over Remote Desktop from another computer, so Set up leaves Remote Desktop open to the network instead of cutting you off."
 }

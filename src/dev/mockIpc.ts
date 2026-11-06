@@ -1410,5 +1410,283 @@ if (preview.get("scenario") === "busy") {
   setTimeout(() => void startBatch({ accountIds: [3, 5, 8], target: { kind: "place", placeId: 1818, launchData: null }, delayMs: 6000, sameServer: "off", favouriteId: null, fpsCap: null }), 1600);
 }
 
+// ---- AltDock: Stream D ----
+// Sessions: "Farm" (shared) runs three clients, "Grinder" (dedicated) one with its macro going.
+// One health check fails (the program copy for alt users is older) until "Set up" (~2 s, as if
+// after a UAC prompt), which also creates the Windows users of sessions added since. A new session
+// is off: Start signs it in after ~2.5 s, with Roblox not installed there yet ("Install Roblox"
+// takes ~3 s). Launched clients start, join and play on timers; CPU and memory drift.
+// ?sessions=down: Farm's control API doesn't answer.
+import type { AfkClientConfig as SAfk, ControlClient as SClient, HealthCheck as SCheck, SessionConfig as SConfig, SessionMacro, SessionView as SView, WtsState as SWts } from "../api";
+
+type SMock = { config: SConfig; wts: SWts; windowVisible: boolean; clients: SClient[]; macros: SessionMacro[]; roblox: boolean; down: boolean; startingUntil: number };
+const S_MAIN_MACROS: SessionMacro[] = [{ id: 1, name: "Auto farm" }, { id: 2, name: "Fishing loop" }, { id: 3, name: "Daily rewards" }];
+const sAfk = (enabled: boolean, min: number, action: SAfk["action"]): SAfk => ({ enabled, intervalSec: min * 60, action });
+let sSeq = 0;
+function sClient(accountId: number, state: SClient["state"], placeName: string | null, agoMin: number, afk: SAfk): SClient {
+  const a = find(accountId);
+  return {
+    instanceId: `s-${++sSeq}`, accountId, username: a?.username ?? `user${accountId}`, displayName: a?.displayName ?? "", state, placeName,
+    startedAt: Date.now() - agoMin * MIN, cpu: null, memoryMb: null, afk, macroRun: null, macroAssigned: null,
+  };
+}
+const sUsers = new Set(["altdock-1", "altdock-2"]);
+let sProgramCurrent = false;
+const sessions: SMock[] = [
+  {
+    config: { name: "Farm", windowsUser: "altdock-1", address: "127.0.0.2", port: 47611, mode: "shared", accountIds: [2, 3, 5], width: 1280, height: 720 },
+    wts: "active", windowVisible: false, macros: [], roblox: true, down: preview.get("sessions") === "down", startingUntil: 0,
+    clients: [
+      sClient(2, "inGame", "Island Tycoon", 47, sAfk(true, 15, "jumpTurn")),
+      sClient(3, "inGame", "Island Tycoon", 46, sAfk(true, 12, "f13")),
+      sClient(5, "joining", null, 0.5, sAfk(false, 15, { key: "E" })),
+    ],
+  },
+  {
+    config: { name: "Grinder", windowsUser: "altdock-2", address: "127.0.0.3", port: 47612, mode: "dedicated", accountIds: [7], width: 1024, height: 768 },
+    wts: "active", windowVisible: true, macros: [{ id: 11, name: "Auto farm" }, { id: 12, name: "Fishing loop" }], roblox: true, down: false, startingUntil: 0,
+    clients: [sClient(7, "inGame", "Mega Obby", 132, sAfk(true, 18, "space"))],
+  },
+];
+{
+  const g = sessions[1].clients[0];
+  g.macroAssigned = 11;
+  g.macroAutorun = true;
+  g.macroRun = { instanceId: g.instanceId, macroId: 11, name: "Auto farm", startedAt: Date.now() - 128 * MIN };
+  sessions[0].clients[0].macroAssigned = null;
+}
+
+function sHealth(): SCheck[] {
+  const users = sessions.map((s) => s.config.windowsUser);
+  const missing = users.filter((u) => !sUsers.has(u));
+  const rdpwrap = { link: "https://github.com/stascorp/rdpwrap#readme" };
+  return [
+    { id: "rdpwrap", ok: true, title: "RDP Wrapper is installed and listening", detail: "TermService runs with RDP Wrapper; listener on port 3389.", fix: rdpwrap },
+    { id: "rdpwrapIni", ok: true, title: "RDP Wrapper knows this Windows build", detail: "rdpwrap.ini has a section for termsrv.dll 10.0.26100.2454.", fix: rdpwrap },
+    { id: "denyTs", ok: true, title: "Remote connections are allowed", detail: "fDenyTSConnections = 0", fix: "setup" },
+    { id: "singleSession", ok: true, title: "Several sessions per user are allowed", detail: "fSingleSessionPerUser = 0", fix: "setup" },
+    { id: "suppressMinimized", ok: true, title: "Hidden sessions keep drawing", detail: "RemoteDesktop_SuppressWhenMinimized = 2", fix: "setup" },
+    { id: "hwGraphics", ok: true, title: "Sessions use the graphics card", detail: "bEnumerateHWBeforeSW = 1", fix: "setup" },
+    { id: "firstLogon", ok: true, title: "First sign-in screens are off", detail: "No privacy screen or sign-in animation for new users.", fix: "setup" },
+    {
+      id: "programCopy", ok: sProgramCurrent, title: "Program copy for alt users",
+      detail: sProgramCurrent ? `%ProgramData%\\AltDock\\app is ${APP_VERSION}.` : `%ProgramData%\\AltDock\\app is 1.0.1; this AltDock is ${APP_VERSION}.`, fix: "setup",
+    },
+    { id: "autostart", ok: true, title: "AltDock starts in each session", detail: "HKLM Run value AltDockSession is set.", fix: "setup" },
+    {
+      id: "altUsers", ok: !missing.length, title: "Alt Windows users exist",
+      detail: missing.length ? `Missing: ${missing.join(", ")}.` : `${users.join(", ") || "None needed yet"}; all in Remote Desktop Users.`, fix: "setup",
+    },
+    { id: "rdpSigning", ok: true, title: "Session files are signed and trusted", detail: "Signed with a local certificate listed in TrustedCertThumbprints.", fix: "setup" },
+  ];
+}
+
+const sFind = (name: string) => sessions.find((s) => s.config.name === name);
+const sControl = (s: SMock): SView["control"] =>
+  s.wts === "none" ? { ok: false, error: "The session isn't running." }
+  : Date.now() < s.startingUntil ? { ok: false, error: "AltDock in the session is starting." }
+  : s.down ? { ok: false, error: "AltDock in the session doesn't answer (connection refused on 127.0.0.1:" + s.config.port + ")." }
+  : {
+      ok: true,
+      health: { version: APP_VERSION, windowsUser: s.config.windowsUser, sessionId: sessions.indexOf(s) + 2, mode: s.config.mode, vaultLocked: false, robloxInstalled: s.roblox, clients: s.clients.length },
+    };
+const sView = (s: SMock): SView => ({ config: s.config, wts: s.wts, windowVisible: s.windowVisible, control: sControl(s) });
+/** The session, its control API answering; else the error remote_* gives. */
+function sLive(name: string): SMock | Promise<never> {
+  const s = sFind(name);
+  if (!s) return fail("notFound", "That session no longer exists.");
+  const c = sControl(s);
+  return c.ok ? s : fail("network", c.error);
+}
+function sDrift(s: SMock) {
+  const t = Date.now() / 1000;
+  s.clients.forEach((c, n) => {
+    if (c.state === "starting") return;
+    const wave = (p: number) => (Math.sin(t / p + n * 1.9) + 1) / 2;
+    c.cpu = 3 + 10 * wave(6) + 2 * Math.random() + (c.macroRun ? 6 : 0);
+    c.memoryMb = 620 + 240 * wave(21);
+  });
+}
+function sThumb(status: number, shot?: FakeShot) {
+  const buf = new ArrayBuffer(24 + (shot?.rgba.length ?? 0));
+  const head = new DataView(buf);
+  head.setUint32(0, shot?.w ?? 0, true);
+  head.setUint32(4, shot?.h ?? 0, true);
+  head.setUint32(8, status, true);
+  head.setUint32(16, shot?.seq ?? 0, true);
+  if (shot) new Uint8ClampedArray(buf, 24).set(shot.rgba);
+  return buf;
+}
+
+async function sessionsHandle(cmd: string, args: Args): Promise<unknown> {
+  switch (cmd) {
+    case "sessions_health":
+      await sleep(250);
+      return sHealth();
+    case "sessions_setup": {
+      await sleep(2000);
+      sProgramCurrent = true;
+      for (const s of sessions) if (!args.names?.length || args.names.includes(s.config.name)) sUsers.add(s.config.windowsUser);
+      return null;
+    }
+    case "sessions_list":
+      return sessions.map(sView);
+    case "session_save": {
+      const c = args.config as SConfig;
+      if (!c.name.trim()) return fail("invalid", "A session needs a name.");
+      const s = sFind(c.name);
+      if (s) s.config = c;
+      else sessions.push({ config: c, wts: "none", windowVisible: false, clients: [], macros: [], roblox: false, down: false, startingUntil: 0 });
+      return null;
+    }
+    case "session_remove": {
+      const at = sessions.findIndex((s) => s.config.name === args.name);
+      if (at < 0) return fail("notFound", "That session no longer exists.");
+      await sleep(400);
+      const [gone] = sessions.splice(at, 1);
+      if (args.deleteUser) sUsers.delete(gone.config.windowsUser);
+      return null;
+    }
+    case "session_start": {
+      const s = sFind(args.name);
+      if (!s) return fail("notFound", "That session no longer exists.");
+      if (!sUsers.has(s.config.windowsUser)) return fail("session", `The Windows user ${s.config.windowsUser} doesn't exist yet. Run Set up first.`);
+      await sleep(600);
+      if (s.wts === "none") s.startingUntil = Date.now() + 2500;
+      s.wts = "active";
+      return null;
+    }
+    case "session_window": {
+      const s = sFind(args.name);
+      if (!s || s.wts !== "active") return fail("session", "The session's window is closed. Start the session first.");
+      s.windowVisible = !!args.show;
+      return null;
+    }
+    case "session_disconnect": {
+      const s = sFind(args.name);
+      if (s) [s.wts, s.windowVisible] = ["disconnected", false];
+      return null;
+    }
+    case "session_logoff": {
+      const s = sLive(args.name);
+      if (s instanceof Promise) return s;
+      await sleep(700);
+      [s.wts, s.windowVisible, s.clients] = ["none", false, []];
+      return null;
+    }
+    case "session_push_accounts": {
+      const s = sLive(args.name);
+      if (s instanceof Promise) return s;
+      await sleep(900);
+      return null;
+    }
+    case "session_push_macros": {
+      const s = sLive(args.name);
+      if (s instanceof Promise) return s;
+      await sleep(500);
+      for (const id of args.macroIds as number[]) {
+        const m = S_MAIN_MACROS.find((x) => x.id === id);
+        if (m && !s.macros.some((x) => x.name === m.name)) s.macros.push({ id: 10 + s.macros.length + 1, name: m.name });
+      }
+      return null;
+    }
+    case "macros_list":
+      return S_MAIN_MACROS;
+    case "remote_macros": {
+      const s = sLive(args.name);
+      return s instanceof Promise ? s : s.macros;
+    }
+    case "remote_state": {
+      const s = sLive(args.name);
+      if (s instanceof Promise) return s;
+      sDrift(s);
+      return s.clients;
+    }
+    case "remote_thumbnail": {
+      const s = sLive(args.name);
+      if (s instanceof Promise) return s;
+      const c = s.clients.find((x) => x.instanceId === args.id);
+      if (!c) return fail("notFound", "Not found.");
+      if (c.state === "starting" || c.state === "exited") return sThumb(2);
+      return sThumb(0, fakeShot({ accountId: c.accountId } as Instance, Math.min(args.maxW, 640)));
+    }
+    case "remote_launch": {
+      const s = sLive(args.name);
+      if (s instanceof Promise) return s;
+      if (!s.roblox) return fail("session", "Roblox isn't installed in this session yet.");
+      if (!String(args.target).trim()) return fail("invalid", "Paste a game link or place ID first.");
+      const ids = (args.accountIds as number[]).filter((id) => !s.clients.some((c) => c.accountId === id));
+      if (s.config.mode === "dedicated" && s.clients.length + ids.length > 1) return fail("session", "A dedicated session runs one client.");
+      await sleep(400);
+      ids.forEach((id, n) => {
+        const c = sClient(id, "starting", null, 0, sAfk(false, 15, "f13"));
+        s.clients.push(c);
+        setTimeout(() => (c.state = "joining"), 1500 + n * 1200);
+        setTimeout(() => ([c.state, c.placeName] = ["inGame", "Island Tycoon"]), 4500 + n * 1200);
+      });
+      return { started: ids.length };
+    }
+    case "remote_close": {
+      const s = sLive(args.name);
+      if (s instanceof Promise) return s;
+      const c = s.clients.find((x) => x.instanceId === args.id);
+      if (c) {
+        c.state = "exited";
+        c.macroRun = null;
+        setTimeout(() => (s.clients = s.clients.filter((x) => x !== c)), args.force ? 200 : 900);
+      }
+      return null;
+    }
+    case "remote_kill_all": {
+      const s = sLive(args.name);
+      if (s instanceof Promise) return s;
+      s.clients = [];
+      return null;
+    }
+    case "remote_afk": {
+      const s = sLive(args.name);
+      if (s instanceof Promise) return s;
+      const cfg = args.config as SAfk;
+      if (cfg.intervalSec < 60 || cfg.intervalSec > 1140) return fail("invalid", "The interval must be 1 to 19 minutes.");
+      s.clients.filter((c) => c.accountId === args.accountId).forEach((c) => (c.afk = cfg));
+      return null;
+    }
+    case "remote_macro_assign": {
+      const s = sLive(args.name);
+      if (s instanceof Promise) return s;
+      s.clients.filter((c) => c.accountId === args.accountId).forEach((c) => ([c.macroAssigned, c.macroAutorun] = [args.macroId ?? null, !!args.autorun]));
+      return null;
+    }
+    case "remote_macro_run": {
+      const s = sLive(args.name);
+      if (s instanceof Promise) return s;
+      const m = s.macros.find((x) => x.id === args.macroId);
+      if (!m) return fail("notFound", "That macro isn't in this session. Push macros first.");
+      const picked = s.clients.filter((c) => (args.instanceIds as string[]).includes(c.instanceId));
+      if (picked.some((c) => c.state !== "inGame")) return fail("session", "A macro only runs on a client in a game.");
+      picked.forEach((c) => (c.macroRun = { instanceId: c.instanceId, macroId: m.id, name: m.name, startedAt: Date.now() }));
+      return null;
+    }
+    case "remote_macro_stop": {
+      const s = sLive(args.name);
+      if (s instanceof Promise) return s;
+      s.clients.filter((c) => c.instanceId === args.instanceId).forEach((c) => (c.macroRun = null));
+      return null;
+    }
+    case "remote_roblox_install": {
+      const s = sLive(args.name);
+      if (s instanceof Promise) return s;
+      await sleep(3000);
+      s.roblox = true;
+      return null;
+    }
+  }
+  return undefined;
+}
+const SESSION_CMDS = /^(sessions?_|remote_|macros_list$)/;
+/** The sessions' commands; anything else goes to `handle`. */
+const withSessions = (cmd: string, args: Args) => (SESSION_CMDS.test(cmd) ? sessionsHandle(cmd, args) : handle(cmd, args));
+// ---- end AltDock: Stream D ----
+
 mockWindows("main");
-mockIPC((cmd, args) => handle(cmd, (args ?? {}) as Args), { shouldMockEvents: true });
+mockIPC((cmd, args) => withSessions(cmd, (args ?? {}) as Args), { shouldMockEvents: true }); // AltDock: Stream D (was `handle`)

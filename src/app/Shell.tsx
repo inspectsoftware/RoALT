@@ -23,6 +23,7 @@ import { ServersView } from "../features/servers/ServersView";
 import { AREAS, type SettingsArea } from "../features/settings/areas";
 import { jumpTo } from "../features/settings/jump";
 import { SettingsView } from "../features/settings/SettingsView";
+import { SessionsView } from "../features/sessions/SessionsView"; // AltDock: Stream D
 import { useSplashPhase } from "../features/splash/phase";
 import { overlayOpen } from "../ui/a11y";
 import { Button } from "../ui/Button";
@@ -330,6 +331,8 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
             <DebugView />
           ) : view === "performance" ? (
             <PerformanceView />
+          ) : view === "sessions" ? (
+            <SessionsView accounts={accounts.data} /> // AltDock: Stream D
           ) : (
             <SettingsView area={area} />
           )}

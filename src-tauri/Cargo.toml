@@ -34,6 +34,11 @@ zeroize = { version = "1.9", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 url = "2"
 ts-rs = "12"
+# ---- AltDock: Stream B ----
+# The control API (`control::server`): plain HTTP on 127.0.0.1 only, so no TLS crates.
+axum = { version = "0.8", default-features = false, features = ["tokio", "http1", "json", "query"] }
+# Backups sent to `POST /v1/accounts/import`.
+base64 = "0.23"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
@@ -76,6 +81,9 @@ windows = { version = "0.62", features = [
   "Graphics_DirectX",
   "Graphics_DirectX_Direct3D11",
   "Security_Authorization_AppCapabilityAccess",
+  # ---- AltDock: Stream B ----
+  "Win32_System_RemoteDesktop",
+  "Win32_System_Shutdown",
 ] }
 windows-future = "0.3"
 webview2-com = "0.39"

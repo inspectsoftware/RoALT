@@ -2681,6 +2681,14 @@ pub async fn backup_import(app: AppHandle, s: State<'_, App>, path: String, pass
         return Err(AppError::Locked);
     }
     let payload = backup::read(Path::new(&path), &password)?;
+    import_backup(&app, &s, payload, on_conflict).await
+}
+
+/// Applies an opened backup (`backup_import`, and the control API's `accounts/import`).
+pub(crate) async fn import_backup(app: &AppHandle, s: &App, payload: BackupPayload, on_conflict: ConflictPolicy) -> Result<ImportReport> {
+    if s.vault.is_locked() {
+        return Err(AppError::Locked);
+    }
     // The file comes from anyone, and its password with it: all of it is checked before anything
     // is written, so a bad entry leaves nothing half done.
     check_backup(&payload)?;
@@ -2747,8 +2755,8 @@ pub async fn backup_import(app: AppHandle, s: State<'_, App>, path: String, pass
         let blob = s.vault.encrypt(FAVOURITE_AAD, &json)?;
         s.db.save_favourite(None, &f.name, &blob, &ids, f.in_tray)?;
     }
-    crate::tray::refresh(&app);
-    accounts_changed(&app);
+    crate::tray::refresh(app);
+    accounts_changed(app);
     Ok(report)
 }
 

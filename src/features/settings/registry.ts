@@ -182,10 +182,7 @@ const SETTINGS_ENTRIES: readonly Entry[] = [
   { id: "cleanLogs", place: data, label: "settings.cleanLogs", more: "settings.cleanLogsHint", field: "cleanLogs", control: CUSTOM, aliases: ["logs", "disk", "space"] },
   { id: "browserData", place: data, label: "settings.browserData", hint: "settings.browserDataShort", more: "settings.browserDataHint", control: ACTION, aliases: ["captcha", "webview", "reset"] },
 
-  { id: "selfUpdate", place: about, label: "settings.selfUpdate", more: "settings.selfUpdateHint", field: "selfUpdate", control: CUSTOM, aliases: ["update", "github", "version"] },
-  { id: "onlineCount", place: about, label: "settings.onlineCount", more: "settings.onlineCountHint", field: "onlineCount", control: SWITCH, aliases: ["online", "users", "counter", "telemetry", "privacy"] },
-  { id: "version", place: about, label: "settings.openReleases", hint: "settings.aboutShort", more: "settings.aboutHint", control: ACTION, aliases: ["version", "about", "changelog", "privacy"] },
-  { id: "support", place: about, label: "app.joinDiscord", control: ACTION, aliases: ["donate", "robux", "community", "help"] },
+  { id: "version", place: about, label: "settings.section.about", hint: "settings.aboutShort", more: "settings.aboutHint", control: ACTION, aliases: ["version", "about", "changelog", "privacy"] },
 ];
 
 const accounts = { view: "accounts", link: true } as const;

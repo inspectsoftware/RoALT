@@ -1,4 +1,4 @@
-/* Home's News tab: the newest RoALT release beside the feed. */
+/* Home's News tab: the feed (.news-lead is unused until AltDock has its own release feed). */
 @layer views {
   .news-grid {
     display: grid;

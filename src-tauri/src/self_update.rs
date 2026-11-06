@@ -1,4 +1,9 @@
-//! RoALT's own updates (Roblox's are `launcher::update`).
+//! AltDock's own updates (Roblox's are `launcher::update`).
+//!
+//! Disabled in AltDock: there is no update source yet (`LATEST` is None), so a check asks nobody
+//! and finds nothing, and the UI hides the switch. The code below is RoALT's and is kept for when
+//! AltDock has its own release feed; that also needs AltDock's own signing key (`PUBLIC_KEY` is
+//! RoALT's) and asset names (still `RoALT-Setup-…`).
 //!
 //! - Check: `GET api.github.com/repos/inspectsoftware/RoALT/releases/latest` (published releases
 //!   only, never a draft or prerelease) at start and every 6 h while `self_update` is on,
@@ -42,14 +47,15 @@ use crate::model::AppUpdate;
 
 pub const UPDATE_EVENT: &str = "app://update";
 const CURRENT: &str = env!("CARGO_PKG_VERSION");
-const LATEST: &str = "https://api.github.com/repos/inspectsoftware/RoALT/releases/latest";
+/// The releases/latest endpoint to ask; None: no update source, nothing is ever asked.
+const LATEST: Option<&str> = None;
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 const MAX_JSON: u64 = 1_000_000;
 const MAX_INSTALLER: u64 = 200_000_000;
 const MAX_SIG: u64 = 4_096;
 /// Where release assets may come from: github.com, then GitHub's redirect to its storage.
 const ASSET_HOSTS: [&str; 3] = ["github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"];
-const TEMP_PREFIX: &str = "roalt-update-";
+const TEMP_PREFIX: &str = "altdock-update-";
 /// Inno Setup's silent install; `/RELAUNCH` is RoALT.iss's own: start RoALT when done.
 const INSTALLER_ARGS: [&str; 5] = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/RELAUNCH"];
 /// The release signing key (P-256, uncompressed X‖Y): its private half is the `ROALT_UPDATE_KEY`
@@ -160,7 +166,7 @@ pub fn pick(body: &[u8], current: &str) -> Result<Option<Release>> {
     };
     match (url(format!("RoALT-Setup-{version}.exe")), url(format!("RoALT-Setup-{version}.exe.sig"))) {
         (Some(exe), Some(sig)) => Ok(Some(Release { version, exe, sig })),
-        _ => Err(failed(tr!("RoALT {version} is out, but without a signed installer. Get it from GitHub Releases.", version = version))),
+        _ => Err(failed(tr!("AltDock {version} is out, but without a signed installer. Get it from GitHub Releases.", version = version))),
     }
 }
 
@@ -257,7 +263,7 @@ fn write_verified(path: &Path, version: &str, bytes: &[u8], sig: &[u8], key: &[u
     signed.reserve(bytes.len());
     pinned.read_to_end(&mut signed)?;
     if !verify(key, &signed, sig) {
-        return Err(AppError::Invalid(tr!("The downloaded RoALT installer was not run: its signature didn't check out.")));
+        return Err(AppError::Invalid(tr!("The downloaded AltDock installer was not run: its signature didn't check out.")));
     }
     Ok(pinned)
 }
@@ -282,7 +288,7 @@ fn network(e: reqwest::Error) -> AppError {
 
 fn http() -> Result<reqwest::Client> {
     reqwest::Client::builder()
-        .user_agent(concat!("RoALT/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("AltDock/", env!("CARGO_PKG_VERSION")))
         .https_only(true)
         .redirect(Policy::custom(|a| {
             if a.previous().len() >= 5 {
@@ -297,7 +303,7 @@ fn http() -> Result<reqwest::Client> {
         .build()
         .map_err(|e| {
             log::warn!("update: http client unavailable: {}", e.without_url());
-            failed(tr!("RoALT's HTTP client couldn't start."))
+            failed(tr!("AltDock's HTTP client couldn't start."))
         })
 }
 
@@ -325,9 +331,10 @@ async fn get(http: &reqwest::Client, url: &str, accept: &'static str, max: u64, 
     Ok(out)
 }
 
-/// The newer release on GitHub, if any.
+/// The newer release on GitHub, if any; None without an update source.
 async fn latest(http: &reqwest::Client) -> Result<Option<Release>> {
-    let body = get(http, LATEST, "application/vnd.github+json", MAX_JSON, Duration::from_secs(20)).await?;
+    let Some(source) = LATEST else { return Ok(None) };
+    let body = get(http, source, "application/vnd.github+json", MAX_JSON, Duration::from_secs(20)).await?;
     pick(&body, CURRENT)
 }
 
@@ -336,9 +343,12 @@ pub fn status(s: &App) -> AppUpdate {
     AppUpdate { current: CURRENT.into(), available: lock(&s.self_update.available).clone() }
 }
 
-/// Asks GitHub now.
+/// Asks GitHub now; without an update source, nobody (no request is made).
 pub async fn check(app: &AppHandle) -> Result<AppUpdate> {
-    let available = latest(&http()?).await?.map(|r| r.version);
+    let available = match LATEST {
+        Some(_) => latest(&http()?).await?.map(|r| r.version),
+        None => None,
+    };
     let s = app.state::<App>();
     *lock(&s.self_update.available) = available;
     Ok(status(&s))
@@ -357,7 +367,7 @@ pub fn switched(app: &AppHandle, on: bool) {
             Ok(u) => {
                 let _ = app.emit(UPDATE_EVENT, &u);
             }
-            Err(e) => log::info!("RoALT update check failed: {e}"),
+            Err(e) => log::info!("AltDock update check failed: {e}"),
         }
     });
 }
@@ -381,7 +391,7 @@ pub fn spawn(app: AppHandle) {
                         let _ = app.emit(UPDATE_EVENT, &u);
                     }
                     Ok(_) => {}
-                    Err(e) => log::info!("RoALT update check failed: {e}"),
+                    Err(e) => log::info!("AltDock update check failed: {e}"),
                 }
             }
             tokio::time::sleep(CHECK_EVERY).await;
@@ -411,12 +421,12 @@ pub async fn install(app: &AppHandle) -> Result<()> {
     s.self_update
         .installing
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .map_err(|_| AppError::Invalid(tr!("RoALT is already being updated.")))?;
+        .map_err(|_| AppError::Invalid(tr!("AltDock is already being updated.")))?;
     let result = run_install(&s).await;
     match &result {
         Ok(()) => app.exit(0),
         Err(e) => {
-            log::warn!("RoALT update failed: {e}");
+            log::warn!("AltDock update failed: {e}");
             s.self_update.installing.store(false, Ordering::SeqCst);
         }
     }
@@ -426,10 +436,10 @@ pub async fn install(app: &AppHandle) -> Result<()> {
 /// Refused while a launch, batch, auto-rejoin or Roblox install runs: RoALT quits for the installer.
 fn idle(s: &App) -> Result<()> {
     if s.bulk.any_busy() {
-        return Err(AppError::Invalid(tr!("Wait for the running launch, batch or auto-rejoin to finish, then update RoALT.")));
+        return Err(AppError::Invalid(tr!("Wait for the running launch, batch or auto-rejoin to finish, then update AltDock.")));
     }
     if s.update.installing() {
-        return Err(AppError::Invalid(tr!("Wait for Roblox's installer to finish, then update RoALT.")));
+        return Err(AppError::Invalid(tr!("Wait for Roblox's installer to finish, then update AltDock.")));
     }
     Ok(())
 }
@@ -437,9 +447,9 @@ fn idle(s: &App) -> Result<()> {
 async fn run_install(s: &App) -> Result<()> {
     idle(s)?;
     let http = http()?;
-    let release = latest(&http).await?.ok_or_else(|| AppError::Invalid(tr!("RoALT is up to date.")))?;
+    let release = latest(&http).await?.ok_or_else(|| AppError::Invalid(tr!("AltDock is up to date.")))?;
     *lock(&s.self_update.available) = Some(release.version.clone());
-    let refused = || AppError::Invalid(tr!("The downloaded RoALT installer was not run: its signature file is malformed."));
+    let refused = || AppError::Invalid(tr!("The downloaded AltDock installer was not run: its signature file is malformed."));
     let sig = get(&http, &release.sig, "application/octet-stream", MAX_SIG, Duration::from_secs(30)).await?;
     let sig = std::str::from_utf8(&sig).ok().and_then(base64).filter(|s| s.len() == 64).ok_or_else(refused)?;
     let bytes = get(&http, &release.exe, "application/octet-stream", MAX_INSTALLER, Duration::from_secs(600)).await?;
@@ -450,7 +460,7 @@ async fn run_install(s: &App) -> Result<()> {
     let pinned = blocking(move || write_verified(&checked, &version, &bytes, &sig, &public_key())).await?;
     // Again: one may have started during the download, and quitting now would cut it off.
     idle(s)?;
-    log::info!("running RoALT {}'s installer (signature checked)", release.version);
+    log::info!("running AltDock {}'s installer (signature checked)", release.version);
     Command::new(&exe)
         .args(INSTALLER_ARGS)
         .current_dir(&dir.0)
@@ -458,7 +468,7 @@ async fn run_install(s: &App) -> Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| AppError::Internal(tr!("Could not start RoALT's installer: {why}", why = e)))?;
+        .map_err(|e| AppError::Internal(tr!("Could not start AltDock's installer: {why}", why = e)))?;
     // The installer runs from the folder: kept (write-locked until RoALT exits) for the next start
     // to delete.
     std::mem::forget((pinned, dir));

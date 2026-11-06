@@ -3,4 +3,4 @@
 /**
  * Where a News item comes from (`news`). Roblox client updates are the UI's own, from `roblox_client`.
  */
-export type NewsSource = "roalt" | "devforum" | "newsroom";
+export type NewsSource = "devforum" | "newsroom";

@@ -24,7 +24,7 @@ use axum::{Json, Router};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::oneshot;
 use zeroize::Zeroizing;
 
@@ -32,7 +32,7 @@ use super::types::*;
 use super::{ControlConfig, TOKEN_HEADER};
 use crate::App;
 use crate::error::{AppError, Result};
-use crate::model::{BulkRequest, ConflictPolicy, InstanceState, LaunchTarget, ParsedInput, SameServer, Settings};
+use crate::model::{BulkRequest, ConflictPolicy, InstanceState, LaunchTarget, MacroInput, ParsedInput, SameServer, Settings};
 
 /// Largest request body: a backup of a few hundred accounts.
 const BODY_LIMIT: usize = 1 << 20;
@@ -56,12 +56,14 @@ struct Ctl {
 pub struct Running(Mutex<Option<oneshot::Sender<()>>>);
 
 /// Session mode's settings: multi-instance on (an alt session exists to run several clients),
-/// and closing the window keeps AltDock in the tray, so the control API stays up. Saved when
-/// they change; a failure to save is logged and the forced values still apply to this start.
+/// closing the window keeps AltDock in the tray, so the control API stays up, and the anti-AFK
+/// engine runs (each client's own setting, `instances::afk`, says whether it presses keys). Saved
+/// when they change; a failure to save is logged and the forced values still apply to this start.
 pub fn session_settings(db: &crate::storage::Db, mut v: Settings) -> Settings {
-    if !v.multi_instance || !v.close_to_tray {
+    if !v.multi_instance || !v.close_to_tray || !v.anti_afk.enabled {
         v.multi_instance = true;
         v.close_to_tray = true;
+        v.anti_afk.enabled = true;
         if let Err(e) = db.save_settings(&v) {
             log::warn!("session mode: could not save the settings: {e}");
         }
@@ -280,7 +282,11 @@ async fn state(State(c): State<Ctl>) -> Response {
         Ok(a) => a,
         Err(e) => return failed(e),
     };
-    let runs = macro_runs(&s);
+    let runs = crate::macros::runs(&s);
+    let assigned = s.db.macro_assignments().unwrap_or_else(|e| {
+        log::warn!("control API: could not read the macro assignments: {e}");
+        Vec::new()
+    });
     let rows: Vec<ControlClient> = s
         .tracker
         .list()
@@ -289,8 +295,10 @@ async fn state(State(c): State<Ctl>) -> Response {
         .map(|i| {
             let m = metrics.iter().find(|m| m.instance_id == i.id);
             let a = accounts.iter().find(|a| a.id == i.account_id);
+            let assignment = assigned.iter().find(|m| m.account_id == i.account_id);
             ControlClient {
                 account_id: i.account_id,
+                user_id: a.map_or(0, |a| a.user_id),
                 username: a.map(|a| a.username.clone()).unwrap_or_default(),
                 display_name: a.map(|a| a.display_name.clone()).unwrap_or_default(),
                 state: i.state,
@@ -298,9 +306,10 @@ async fn state(State(c): State<Ctl>) -> Response {
                 started_at: i.started_at,
                 cpu_pct: m.and_then(|m| m.cpu_pct),
                 memory_mb: m.map(|m| m.memory_mb),
-                afk: afk_config(&s, i.account_id),
+                afk: crate::instances::afk::client_config(&s, i.account_id),
                 macro_run: runs.iter().find(|r| r.instance_id == i.id).cloned(),
-                macro_assigned: macro_assigned(&s, i.account_id),
+                macro_assigned: assignment.map(|m| m.macro_id),
+                macro_autorun: assignment.is_some_and(|m| m.autorun),
                 instance_id: i.id,
             }
         })
@@ -312,7 +321,7 @@ async fn accounts(State(c): State<Ctl>) -> Response {
     let s = c.app.state::<App>();
     answer(s.db.accounts().map(|list| {
         list.into_iter()
-            .map(|a| ControlAccount { id: a.id, username: a.username, display_name: a.display_name, status: a.status })
+            .map(|a| ControlAccount { id: a.id, user_id: a.user_id, username: a.username, display_name: a.display_name, status: a.status })
             .collect::<Vec<_>>()
     }))
 }
@@ -404,27 +413,37 @@ async fn thumbnail(State(c): State<Ctl>, Path(id): Path<String>, Query(q): Query
 }
 
 async fn afk(State(c): State<Ctl>, Json(body): Json<AfkRequest>) -> Response {
-    done(set_afk(&c.app, &c.app.state::<App>(), body.account_id, body.config))
+    done(crate::instances::afk::set_client(&c.app, &c.app.state::<App>(), body.account_id, body.config))
 }
 
 async fn macros_list(State(c): State<Ctl>) -> Response {
-    answer(list_macros(&c.app.state::<App>()))
+    answer(crate::macros::list(&c.app.state::<App>()))
 }
 
+/// A macro pushed from the main app: saved as trusted, its hotkey registered.
 async fn macros_save(State(c): State<Ctl>, Json(body): Json<MacroInput>) -> Response {
-    answer(save_macro(&c.app.state::<App>(), body))
+    let saved = crate::macros::save(&c.app.state::<App>(), body);
+    if saved.is_ok() {
+        crate::macros::sync_hotkeys(&c.app);
+    }
+    answer(saved)
 }
 
 async fn macro_assign(State(c): State<Ctl>, Json(b): Json<MacroAssignRequest>) -> Response {
-    done(assign_macro(&c.app.state::<App>(), b.account_id, b.macro_id, b.autorun))
+    let r = crate::macros::assign(&c.app.state::<App>(), b.account_id, b.macro_id, b.autorun);
+    if r.is_ok() {
+        let _ = c.app.emit("macros://assignments", ());
+    }
+    done(r)
 }
 
 async fn macro_run(State(c): State<Ctl>, Json(b): Json<MacroRunRequest>) -> Response {
-    done(run_macro(&c.app, &c.app.state::<App>(), b.macro_id, &b.instance_ids))
+    done(crate::macros::run(&c.app, &c.app.state::<App>(), b.macro_id, &b.instance_ids))
 }
 
 async fn macro_stop(State(c): State<Ctl>, Json(b): Json<MacroStopRequest>) -> Response {
-    done(stop_macro(&c.app, &b.instance_id))
+    crate::macros::stop_instance(&c.app, &b.instance_id);
+    done(Ok(()))
 }
 
 /// Starts the verified Roblox install (`launcher::update::install`) and answers at once: it
@@ -456,59 +475,6 @@ async fn logoff() -> Response {
         }
     });
     done(Ok(()))
-}
-
-// ---------- adapters to Stream A (macros, per-client anti-AFK) ----------
-
-fn not_in_build() -> AppError {
-    AppError::Invalid("Not available in this build.".into())
-}
-
-/// TODO(merge): `crate::instances::afk::client_config(s, account_id)`. Until then: the global
-/// anti-AFK as this build has it.
-fn afk_config(s: &App, _account_id: i64) -> AfkClientConfig {
-    let v = s.db.settings().unwrap_or_default();
-    AfkClientConfig { enabled: v.anti_afk.enabled, interval_sec: v.anti_afk.interval_min * 60, action: AfkAction::F13 }
-}
-
-/// TODO(merge): `crate::instances::afk::set_client(app, s, account_id, config)`.
-fn set_afk(_app: &AppHandle, _s: &App, _account_id: i64, _config: AfkClientConfig) -> Result<()> {
-    Err(not_in_build())
-}
-
-/// TODO(merge): `crate::macros::runs(s)`.
-fn macro_runs(_s: &App) -> Vec<MacroRun> {
-    Vec::new()
-}
-
-/// TODO(merge): the account's macro from Stream A's `account_macros` table.
-fn macro_assigned(_s: &App, _account_id: i64) -> Option<i64> {
-    None
-}
-
-/// TODO(merge): `crate::macros::list(s)`.
-fn list_macros(_s: &App) -> Result<Vec<Macro>> {
-    Err(not_in_build())
-}
-
-/// TODO(merge): `crate::macros::save(s, input)` (pushed from the main app: trusted).
-fn save_macro(_s: &App, _input: MacroInput) -> Result<Macro> {
-    Err(not_in_build())
-}
-
-/// TODO(merge): `crate::macros::assign(s, account_id, macro_id, autorun)`.
-fn assign_macro(_s: &App, _account_id: i64, _macro_id: Option<i64>, _autorun: bool) -> Result<()> {
-    Err(not_in_build())
-}
-
-/// TODO(merge): `crate::macros::run(app, s, macro_id, instance_ids)`.
-fn run_macro(_app: &AppHandle, _s: &App, _macro_id: i64, _instance_ids: &[String]) -> Result<()> {
-    Err(not_in_build())
-}
-
-/// TODO(merge): `crate::macros::stop_instance(app, instance_id)`.
-fn stop_macro(_app: &AppHandle, _instance_id: &str) -> Result<()> {
-    Err(not_in_build())
 }
 
 #[cfg(test)]

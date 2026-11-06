@@ -431,5 +431,6 @@
   "Created.": "Erstellt.",
   "Repaired.": "Repariert.",
   "Remote Desktop Users wasn't found.": "Die Gruppe Remotedesktopbenutzer wurde nicht gefunden.",
-  "Deleted.": "Gelöscht."
+  "Deleted.": "Gelöscht.",
+  "Push these accounts to the session first: {names}": "Übertrage diese Konten zuerst in die Sitzung: {names}"
 }

@@ -4,4 +4,12 @@ import type { AccountStatus } from "./AccountStatus";
 /**
  * `GET /v1/accounts`: one account stored in the session.
  */
-export type ControlAccount = { id: number, username: string, displayName: string, status: AccountStatus, };
+export type ControlAccount = { 
+/**
+ * The session's own account id.
+ */
+id: number, 
+/**
+ * The Roblox user: what the main app matches its own accounts by.
+ */
+userId: number, username: string, displayName: string, status: AccountStatus, };

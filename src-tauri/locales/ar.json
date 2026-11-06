@@ -475,5 +475,6 @@
   "Created.": "Created.",
   "Repaired.": "Repaired.",
   "Remote Desktop Users wasn't found.": "Remote Desktop Users wasn't found.",
-  "Deleted.": "Deleted."
+  "Deleted.": "Deleted.",
+  "Push these accounts to the session first: {names}": "Push these accounts to the session first: {names}"
 }

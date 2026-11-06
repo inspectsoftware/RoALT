@@ -4,7 +4,7 @@ import type { AfkAction } from "./AfkAction";
 /**
  * Anti-AFK for one account's clients (`instances::afk::client_config`); kept across launches.
  */
-export type AfkClientConfig = { enabled: boolean,
+export type AfkClientConfig = { enabled: boolean, 
 /**
  * Seconds between presses, 60..=1140 (Roblox kicks after 20 idle minutes).
  */

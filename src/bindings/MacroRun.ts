@@ -3,11 +3,11 @@
 /**
  * A macro running on one client (one AutoHotkey process).
  */
-export type MacroRun = { instanceId: string, accountId: number, macroId: number, name: string,
+export type MacroRun = { instanceId: string, accountId: number, macroId: number, name: string, 
 /**
  * Unix ms of this AutoHotkey process's start.
  */
-startedAt: number,
+startedAt: number, 
 /**
  * How often it was started again after it ended by itself (`macros::RESTARTS` in 5 minutes).
  */

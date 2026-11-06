@@ -1,11 +1,12 @@
-// TODO(merge): needs Stream B. Written against the assumed `control::client::ControlClient` API
-// (`ControlClient::new(port, Zeroizing<String>)`, one async method per endpoint, each returning
-// `crate::error::Result<_>`), Stream B's `control::types` and Stream A's macro/anti-AFK types. It is
-// left out of the build (`// mod remote;` in sessions/mod.rs) until those are merged; then enable
-// the module, register the commands listed in main.rs's Stream C block and use `control_of` in
-// `commands::sessions_list`.
-//! The control API proxies: the Sessions page talks to the AltDock in a session through these,
-//! with that session's token from the vault. Nothing here is elevated.
+//! The control API proxies: the Sessions page talks to the AltDock in a session through these
+//! (`control::client`), with that session's token from the vault. Nothing here is elevated.
+//!
+//! Account ids: a session has its own database, so its account ids aren't the main app's. The
+//! commands that take ids from the session's own answers (`remote_state`: `accountId`,
+//! `instanceId`; `remote_macros`: `id`) send them back as they are; `remote_launch` and
+//! `session_push_accounts` take the main app's ids and match them by Roblox user.
+
+use std::time::Duration;
 
 use tauri::State;
 use zeroize::Zeroizing;
@@ -14,50 +15,46 @@ use super::commands::{session, stored_secret};
 use super::types::{SessionConfig, SessionControl};
 use crate::App;
 use crate::control::client::ControlClient;
-// TODO(merge): Stream B's names for the state rows and accounts; Stream A's for these two.
-use crate::control::types::ControlClient as ClientState;
+use crate::control::types::{ControlClient as ClientState, ImportAnswer, LaunchAnswer};
 use crate::error::{AppError, Result};
-use crate::instances::afk::AfkClientConfig;
+use crate::model::{AfkClientConfig, Macro, MacroInput};
 use crate::vault::backup::{self, BackupAccount, BackupGroup, BackupPayload};
-use crate::vault::cookie_aad;
+
+/// How long `sessions_list` waits for a session's AltDock: the page asks every few seconds.
+const HEALTH_WAIT: Duration = Duration::from_millis(1500);
 
 /// A client for the session's control API; `Invalid` until its setup made a token.
-fn client(s: &App, c: &SessionConfig) -> Result<ControlClient> {
+pub(super) fn client(s: &App, c: &SessionConfig) -> Result<ControlClient> {
     let token = stored_secret(s, &c.name, "token")?.ok_or_else(|| AppError::Invalid(tr!("Run the setup for this session first.")))?;
-    Ok(ControlClient::new(c.port, Zeroizing::new(token.expose().to_owned())))
+    ControlClient::new(c.port, Zeroizing::new(token.expose().to_owned()))
 }
 
 fn client_for(s: &App, name: &str) -> Result<ControlClient> {
     client(s, &session(s, name)?)
 }
 
-/// Whether the AltDock in that session answers (`sessions_list`).
-pub async fn control_of(s: &App, c: &SessionConfig) -> SessionControl {
-    let client = match client(s, c) {
-        Ok(client) => client,
-        Err(e) => return SessionControl::Down { reason: e.message() },
-    };
-    match client.health().await {
-        Ok(health) => SessionControl::Ok { health },
+/// Whether the AltDock in that session answers (`sessions_list`), within `HEALTH_WAIT`.
+pub(super) async fn control_of(client: Result<ControlClient>) -> SessionControl {
+    match client {
+        Ok(client) => match client.health(HEALTH_WAIT).await {
+            Ok(health) => SessionControl::Ok { health },
+            Err(e) => SessionControl::Down { reason: e.message() },
+        },
         Err(e) => SessionControl::Down { reason: e.message() },
     }
 }
 
-/// Standard base64 with padding (pure), for the pushed backup.
-pub fn base64(bytes: &[u8]) -> String {
-    const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let n = chunk.iter().enumerate().fold(0u32, |n, (i, b)| n | (u32::from(*b) << (16 - 8 * i)));
-        for i in 0..4 {
-            if i <= chunk.len() {
-                out.push(ABC[(n >> (18 - 6 * i) & 63) as usize] as char);
-            } else {
-                out.push('=');
-            }
+/// The session's own ids of these main-app accounts, matched by Roblox user (pure). Err: the
+/// names of those the session doesn't have.
+pub fn session_ids(wanted: &[(i64, String)], session: &[(i64, i64)]) -> std::result::Result<Vec<i64>, Vec<String>> {
+    let (mut ids, mut missing) = (Vec::new(), Vec::new());
+    for (user_id, name) in wanted {
+        match session.iter().find(|(_, u)| u == user_id) {
+            Some((id, _)) => ids.push(*id),
+            None => missing.push(name.clone()),
         }
     }
-    out
+    if missing.is_empty() { Ok(ids) } else { Err(missing) }
 }
 
 /// Signs the session out through its AltDock, which closes its clients first.
@@ -68,10 +65,10 @@ pub async fn session_logoff(s: State<'_, App>, name: String) -> Result<()> {
     Ok(())
 }
 
-/// Copies these accounts (with their cookies) into the session's vault: an encrypted backup with
-/// a one-time random password, sent over loopback with the session's token. The number imported.
+/// Copies these accounts (main-app ids, with their cookies) into the session's vault: an
+/// encrypted backup with a one-time random password, sent over loopback with the session's token.
 #[tauri::command]
-pub async fn session_push_accounts(s: State<'_, App>, name: String, account_ids: Vec<i64>) -> Result<u32> {
+pub async fn session_push_accounts(s: State<'_, App>, name: String, account_ids: Vec<i64>) -> Result<ImportAnswer> {
     if s.vault.is_locked() {
         return Err(AppError::Locked);
     }
@@ -80,8 +77,7 @@ pub async fn session_push_accounts(s: State<'_, App>, name: String, account_ids:
     let name_of = |gid: i64| groups.iter().find(|g| g.id == gid).map(|g| g.name.clone());
     let mut accounts = Vec::new();
     for a in s.db.accounts()?.into_iter().filter(|a| account_ids.contains(&a.id)) {
-        let (user_id, blob) = s.db.account_cookie(a.id)?;
-        let cookie = s.vault.decrypt_secret(&cookie_aad(user_id), &blob)?;
+        let cookie = crate::launcher::account_cookie(&s, a.id)?;
         accounts.push(BackupAccount {
             user_id: a.user_id,
             username: a.username,
@@ -98,64 +94,93 @@ pub async fn session_push_accounts(s: State<'_, App>, name: String, account_ids:
             discord_muted: a.discord_muted,
             fps_cap: a.fps_cap,
             full_quality: a.full_quality,
+            // The main account stays the main app's.
             main: false,
         });
     }
     if accounts.is_empty() {
         return Err(AppError::Invalid(tr!("Pick the accounts to send to the session.")));
     }
+    // Only the groups these accounts are in.
+    let groups = groups
+        .iter()
+        .filter(|g| accounts.iter().any(|a| a.groups.contains(&g.name)))
+        .map(|g| BackupGroup { name: g.name.clone(), color: g.color.clone(), sort_order: g.sort_order })
+        .collect();
     let payload = BackupPayload {
         version: 1,
         exported_at: crate::commands::now_ms(),
         accounts,
-        groups: groups.iter().map(|g| BackupGroup { name: g.name.clone(), color: g.color.clone(), sort_order: g.sort_order }).collect(),
+        groups,
         favourites: Vec::new(),
+        macros: Vec::new(),
     };
     let password = super::new_token();
-    // TODO(merge): use Stream B's `vault::backup` to-bytes writer when it has one.
-    let tmp = s.data_dir.join(format!("push-{}.tmp", &super::new_token()[..16]));
-    let written = backup::write(&tmp, &password, &payload).and_then(|()| Ok(std::fs::read(&tmp)?));
-    let _ = std::fs::remove_file(&tmp);
-    let bytes = Zeroizing::new(written?);
-    let imported = client.import_accounts(base64(&bytes), password.to_string()).await?;
-    log::info!("pushed {imported} account(s) to session {name}");
-    Ok(imported)
+    let pw = password.clone();
+    // Argon2id takes a moment: off the async runtime.
+    let bytes = tauri::async_runtime::spawn_blocking(move || backup::to_bytes(&pw, &payload).map(Zeroizing::new))
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))??;
+    let answer = client.import_accounts(&bytes, password).await?;
+    log::info!("pushed {} account(s) to session {name}, {} failed", answer.imported, answer.failed);
+    Ok(answer)
 }
 
-/// Copies these macros into the session (pushed macros count as trusted there).
+/// Copies these macros (main-app ids) into the session, where pushed macros count as trusted, so
+/// only ones trusted here go; one of the same name there is replaced. Without hotkeys: nobody
+/// presses keys in a session. How many were copied.
 #[tauri::command]
 pub async fn session_push_macros(s: State<'_, App>, name: String, macro_ids: Vec<i64>) -> Result<u32> {
     let client = client_for(&s, &name)?;
-    // TODO(merge): Stream A's `macros::list` and `MacroInput` fields.
-    let chosen: Vec<_> = crate::macros::list(&s)?.into_iter().filter(|m| macro_ids.contains(&m.id)).collect();
+    let chosen: Vec<Macro> = crate::macros::list(&s)?.into_iter().filter(|m| m.trusted && macro_ids.contains(&m.id)).collect();
     let mut pushed = 0;
     for m in chosen {
-        client.save_macro(crate::model::MacroInput { id: None, name: m.name, body: m.body, hotkey: String::new(), ..Default::default() }).await?;
+        client.macro_save(&MacroInput { id: None, name: m.name, body: m.body, hotkey: String::new() }).await?;
         pushed += 1;
     }
+    log::info!("pushed {pushed} macro(s) to session {name}");
     Ok(pushed)
 }
 
+/// The clients running in the session (ids are the session's own).
 #[tauri::command]
 pub async fn remote_state(s: State<'_, App>, name: String) -> Result<Vec<ClientState>> {
     client_for(&s, &name)?.state().await
 }
 
-/// A client's thumbnail, in the bytes format `instance_thumbnail` answers with.
+/// The session's own macros (their ids are the session's).
 #[tauri::command]
-pub async fn remote_thumbnail(s: State<'_, App>, name: String, id: String, max_w: u32) -> Result<tauri::ipc::Response> {
-    Ok(tauri::ipc::Response::new(client_for(&s, &name)?.thumbnail(&id, max_w.clamp(16, 1280)).await?))
+pub async fn remote_macros(s: State<'_, App>, name: String) -> Result<Vec<Macro>> {
+    client_for(&s, &name)?.macros().await
 }
 
-/// Launches these (session-side) accounts to `target` (parsed like the Launch box); how many started.
+/// A client's thumbnail, in the bytes `instance_thumbnail` answers with (`known`: the picture
+/// number the caller has; then only the header comes).
 #[tauri::command]
-pub async fn remote_launch(s: State<'_, App>, name: String, account_ids: Vec<i64>, target: String) -> Result<u32> {
-    client_for(&s, &name)?.launch(account_ids, target).await
+pub async fn remote_thumbnail(s: State<'_, App>, name: String, id: String, max_w: u32, known: u32) -> Result<tauri::ipc::Response> {
+    Ok(tauri::ipc::Response::new(client_for(&s, &name)?.thumbnail(&id, max_w.clamp(16, 1280), known).await?))
 }
 
+/// Launches these accounts (main-app ids; pushed to the session before) to `target`, parsed in
+/// the session like the Launch box does.
+#[tauri::command]
+pub async fn remote_launch(s: State<'_, App>, name: String, account_ids: Vec<i64>, target: String) -> Result<LaunchAnswer> {
+    let client = client_for(&s, &name)?;
+    let wanted: Vec<(i64, String)> =
+        s.db.accounts()?.into_iter().filter(|a| account_ids.contains(&a.id)).map(|a| (a.user_id, a.username)).collect();
+    if wanted.is_empty() {
+        return Err(AppError::Invalid(tr!("Pick at least one account.")));
+    }
+    let there: Vec<(i64, i64)> = client.accounts().await?.into_iter().map(|a| (a.id, a.user_id)).collect();
+    let ids = session_ids(&wanted, &there)
+        .map_err(|missing| AppError::Invalid(tr!("Push these accounts to the session first: {names}", names = missing.join(", "))))?;
+    client.launch(ids, target).await
+}
+
+/// Closes a client (the session's instance id), gracefully unless `force`.
 #[tauri::command]
 pub async fn remote_close(s: State<'_, App>, name: String, id: String, force: bool) -> Result<()> {
-    client_for(&s, &name)?.close(&id, force).await
+    client_for(&s, &name)?.close(id, force).await
 }
 
 #[tauri::command]
@@ -163,30 +188,33 @@ pub async fn remote_kill_all(s: State<'_, App>, name: String) -> Result<()> {
     client_for(&s, &name)?.kill_all().await
 }
 
+/// Anti-AFK of an account in the session (`account_id`: the session's, from `remote_state`).
 #[tauri::command]
 pub async fn remote_afk(s: State<'_, App>, name: String, account_id: i64, config: AfkClientConfig) -> Result<()> {
-    client_for(&s, &name)?.set_afk(account_id, config).await
+    client_for(&s, &name)?.afk(account_id, config).await
 }
 
+/// The macro of an account in the session (both ids the session's; None: none).
 #[tauri::command]
 pub async fn remote_macro_assign(s: State<'_, App>, name: String, account_id: i64, macro_id: Option<i64>, autorun: bool) -> Result<()> {
-    client_for(&s, &name)?.assign_macro(account_id, macro_id, autorun).await
+    client_for(&s, &name)?.macro_assign(account_id, macro_id, autorun).await
 }
 
 #[tauri::command]
 pub async fn remote_macro_run(s: State<'_, App>, name: String, macro_id: i64, instance_ids: Vec<String>) -> Result<()> {
-    client_for(&s, &name)?.run_macro(macro_id, instance_ids).await
+    client_for(&s, &name)?.macro_run(macro_id, instance_ids).await
 }
 
 #[tauri::command]
 pub async fn remote_macro_stop(s: State<'_, App>, name: String, instance_id: String) -> Result<()> {
-    client_for(&s, &name)?.stop_macro(&instance_id).await
+    client_for(&s, &name)?.macro_stop(instance_id).await
 }
 
-/// Starts the verified Roblox install for that session's Windows user.
+/// Starts the verified Roblox install for that session's Windows user; `sessions_list` shows
+/// when it is there (`robloxInstalled`).
 #[tauri::command]
 pub async fn remote_roblox_install(s: State<'_, App>, name: String) -> Result<()> {
-    client_for(&s, &name)?.install_roblox().await
+    client_for(&s, &name)?.roblox_install().await
 }
 
 #[cfg(test)]
@@ -194,12 +222,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn base64_like_the_standard() {
-        assert_eq!(base64(b""), "");
-        assert_eq!(base64(b"f"), "Zg==");
-        assert_eq!(base64(b"fo"), "Zm8=");
-        assert_eq!(base64(b"foo"), "Zm9v");
-        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
-        assert_eq!(base64(&[0xFF, 0xFE, 0x00]), "//4A");
+    fn matches_accounts_by_roblox_user() {
+        let wanted = [(100, "alpha".to_string()), (200, "beta".to_string())];
+        assert_eq!(session_ids(&wanted, &[(7, 200), (5, 100), (9, 300)]), Ok(vec![5, 7]));
+        assert_eq!(session_ids(&wanted, &[(5, 100)]), Err(vec!["beta".to_string()]));
+        assert_eq!(session_ids(&wanted, &[]), Err(vec!["alpha".to_string(), "beta".to_string()]));
+        assert_eq!(session_ids(&[], &[(5, 100)]), Ok(vec![]));
     }
 }

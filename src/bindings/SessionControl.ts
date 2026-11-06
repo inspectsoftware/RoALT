@@ -2,6 +2,6 @@
 import type { ControlHealth } from "./ControlHealth";
 
 /**
- * Whether the AltDock in that session answers.
+ * Whether the AltDock in that session answers (`GET /v1/health`), and if not, why.
  */
 export type SessionControl = { "kind": "ok", health: ControlHealth, } | { "kind": "down", reason: string, };

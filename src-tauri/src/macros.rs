@@ -1,9 +1,9 @@
-//! The user's AutoHotkey v2 macros, run against RoALT's clients (restored from RoALT 1.0.0 for
-//! AltDock). AutoHotkey isn't bundled: RoALT runs the one the user installed (`find_ahk`). Each
+//! The user's AutoHotkey v2 macros, run against AltDock's clients (restored from RoALT 1.0.0 for
+//! AltDock). AutoHotkey isn't bundled: AltDock runs the one the user installed (`find_ahk`). Each
 //! run is one AutoHotkey process per client, fed the script on stdin with the client's window id
 //! and pid as its only arguments (never a cookie or anything else of the account), inside a
-//! kill-on-close job: Stop, Kill all, the client exiting, RoALT exiting or dying all end it. Only
-//! trusted macros run (`may_run`): typed in RoALT, pushed from the main app, or imported and then
+//! kill-on-close job: Stop, Kill all, the client exiting, AltDock exiting or dying all end it. Only
+//! trusted macros run (`may_run`): typed in AltDock, pushed from the main app, or imported and then
 //! reviewed. One macro per client at a time.
 //!
 //! Each account may have one macro (`account_macros`); with `autorun` it starts on the account's
@@ -44,7 +44,7 @@ const RESTART_WINDOW_MS: i64 = 5 * 60_000;
 /// How often `watch` looks for clients that reached a game and restarts that are due.
 const WATCH: Duration = Duration::from_secs(1);
 
-/// A job that kills the process in it, and whatever that starts, when it is dropped or RoALT dies.
+/// A job that kills the process in it, and whatever that starts, when it is dropped or AltDock dies.
 struct KillJob(#[allow(dead_code)] Owned<HANDLE>);
 // SAFETY: a job handle may be used from any thread; it is only dropped (closed) under the runner's lock.
 unsafe impl Send for KillJob {}
@@ -80,12 +80,14 @@ struct Restart {
     due: i64,
 }
 
+/// Restarts waiting for their 5 s, and when each client's run was restarted (unix ms).
+type Restarts = (Vec<Restart>, HashMap<String, Vec<i64>>);
+
 /// The running macros, by instance id, and the macro hotkeys registered with Windows.
 pub struct Runner {
     runs: Mutex<HashMap<String, Run>>,
     hotkeys: Mutex<Vec<(Shortcut, i64)>>,
-    /// Restarts waiting for their 5 s, and when each client's run was restarted (unix ms).
-    restarts: Mutex<(Vec<Restart>, HashMap<String, Vec<i64>>)>,
+    restarts: Mutex<Restarts>,
     /// (instance id, client pid) of the clients `watch` has seen in a game: autorun once each.
     seen: Mutex<HashSet<(String, u32)>>,
 }
@@ -103,7 +105,7 @@ impl Runner {
         self.hotkeys.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn restarts(&self) -> MutexGuard<'_, (Vec<Restart>, HashMap<String, Vec<i64>>)> {
+    fn restarts(&self) -> MutexGuard<'_, Restarts> {
         self.restarts.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -140,7 +142,7 @@ impl Runner {
         before != runs.len()
     }
 
-    /// Stop all, Kill all, the panic hotkey, RoALT exiting.
+    /// Stop all, Kill all, the panic hotkey, AltDock exiting.
     pub fn stop_all(&self) {
         self.restarts().0.clear();
         let mut runs = self.runs();
@@ -200,6 +202,7 @@ impl Runner {
     }
 
     /// Starts `m` with AutoHotkey `ahk` on the client `client_pid` of instance `instance_id`.
+    #[allow(clippy::too_many_arguments)] // what one AutoHotkey process needs
     fn start(&self, app: &AppHandle, ahk: &Path, dir: &Path, m: &Macro, instance_id: &str, account_id: i64, client_pid: u32) -> Result<()> {
         let Some((hwnd, _)) = crate::instances::process::main_window(client_pid) else { return Err(not_in_game()) };
         let mut runs = self.runs();
@@ -419,7 +422,7 @@ pub fn check_hotkey(key: &str, id: Option<i64>, macros: &[Macro], panic: &str) -
     }
 }
 
-/// Windows gives RoALT `key` ("" for none), unless it is already one of RoALT's macro hotkeys.
+/// Windows gives AltDock `key` ("" for none), unless it is already one of AltDock's macro hotkeys.
 pub fn can_register(app: &AppHandle, key: &str) -> Result<()> {
     let Ok(k) = key.parse::<Shortcut>() else { return Ok(()) };
     if app.state::<App>().macros.hotkeys().iter().any(|(h, _)| *h == k) {
@@ -639,8 +642,6 @@ pub fn list(s: &App) -> Result<Vec<Macro>> {
 /// Saves `input` as trusted (pushed from the main app or typed here). Without an id, a macro of
 /// the same name is replaced, so pushing again updates it. Its hotkey must not clash; the caller
 /// registers hotkeys again (`sync_hotkeys`) where it has the app.
-// Called by the control API (`POST /v1/macros`), which lands on its own branch.
-#[allow(dead_code)]
 pub fn save(s: &App, mut input: MacroInput) -> Result<Macro> {
     if s.vault.is_locked() {
         return Err(AppError::Locked);
@@ -714,7 +715,7 @@ pub fn macro_save(app: AppHandle, s: State<'_, App>, mut input: MacroInput) -> R
     check_text(&input.body)?;
     let macros = s.db.macros()?;
     check_hotkey(&input.hotkey, input.id, &macros, &s.db.settings()?.panic_hotkey)?;
-    // An unchanged key isn't tried again: one another app took before RoALT started would block every edit.
+    // An unchanged key isn't tried again: one another app took before AltDock started would block every edit.
     let key = |k: &str| k.parse::<Shortcut>().ok();
     if !macros.iter().any(|m| Some(m.id) == input.id && key(&m.hotkey) == key(&input.hotkey)) {
         can_register(&app, &input.hotkey)?;

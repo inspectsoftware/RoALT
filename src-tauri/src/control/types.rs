@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use zeroize::Zeroizing;
 
-use crate::model::{AccountStatus, InstanceState};
+use crate::model::{AccountStatus, AfkClientConfig, InstanceState, MacroRun};
 
 /// What an alt session is for (its control config's `mode`).
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,7 +19,7 @@ pub enum ControlMode {
 }
 
 /// `GET /v1/health`: the session's AltDock is up, and what it can do.
-#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct ControlHealth {
@@ -41,7 +41,10 @@ pub struct ControlHealth {
 #[ts(export)]
 pub struct ControlClient {
     pub instance_id: String,
+    /// The session's own account id (its database's, not the main app's).
     pub account_id: i64,
+    /// The Roblox user: what the main app matches its own accounts by.
+    pub user_id: i64,
     pub username: String,
     pub display_name: String,
     pub state: InstanceState,
@@ -55,8 +58,10 @@ pub struct ControlClient {
     pub memory_mb: Option<f64>,
     pub afk: AfkClientConfig,
     pub macro_run: Option<MacroRun>,
-    /// The macro assigned to this client's account.
+    /// The macro assigned to this client's account (an id of the session's own macros).
     pub macro_assigned: Option<i64>,
+    /// The assigned macro starts on its own when the client reaches a game (false without one).
+    pub macro_autorun: bool,
 }
 
 /// `GET /v1/accounts`: one account stored in the session.
@@ -64,7 +69,10 @@ pub struct ControlClient {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct ControlAccount {
+    /// The session's own account id.
     pub id: i64,
+    /// The Roblox user: what the main app matches its own accounts by.
+    pub user_id: i64,
     pub username: String,
     pub display_name: String,
     pub status: AccountStatus,
@@ -164,69 +172,10 @@ pub struct ControlError {
     pub message: String,
 }
 
-// Placeholders for Stream A's types, with the contract's field names; the control API passes
-// them through as they are.
-
-/// TODO(merge): replace with crate::instances::afk::AfkClientConfig
-#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct AfkClientConfig {
-    pub enabled: bool,
-    /// 60..=1140.
-    pub interval_sec: u32,
-    pub action: AfkAction,
-}
-
-/// TODO(merge): replace with crate::instances::afk::AfkAction (or whatever Stream A names it)
-#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum AfkAction {
-    F13,
-    Space,
-    Jump,
-    JumpTurn,
-    Key(String),
-}
-
-/// TODO(merge): replace with crate::model::Macro (Stream A; needs Deserialize for the client)
-#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct Macro {
-    pub id: i64,
-    pub name: String,
-    pub body: String,
-    pub trusted: bool,
-    pub hotkey: String,
-    /// Unix ms.
-    pub created_at: i64,
-    pub updated_at: i64,
-}
-
-/// TODO(merge): replace with crate::model::MacroInput (Stream A; needs Serialize for the client)
-#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct MacroInput {
-    #[ts(optional)]
-    pub id: Option<i64>,
-    pub name: String,
-    pub body: String,
-    pub hotkey: String,
-}
-
-/// TODO(merge): replace with crate::model::MacroRun (Stream A; needs Deserialize for the client)
-#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct MacroRun {
-    pub instance_id: String,
-    pub macro_id: i64,
-    pub name: String,
-    /// Unix ms.
-    pub started_at: i64,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::AfkAction;
 
     #[test]
     fn bodies_are_camel_case_json() {
@@ -269,6 +218,7 @@ mod tests {
         let c = ControlClient {
             instance_id: "i".into(),
             account_id: 1,
+            user_id: 77,
             username: "u".into(),
             display_name: "U".into(),
             state: InstanceState::InGame,
@@ -277,11 +227,13 @@ mod tests {
             cpu_pct: None,
             memory_mb: Some(512.5),
             afk: AfkClientConfig { enabled: true, interval_sec: 600, action: AfkAction::Key("e".into()) },
-            macro_run: Some(MacroRun { instance_id: "i".into(), macro_id: 2, name: "Farm".into(), started_at: 6 }),
+            macro_run: Some(MacroRun { instance_id: "i".into(), account_id: 1, macro_id: 2, name: "Farm".into(), started_at: 6, restarts: 0 }),
             macro_assigned: Some(2),
+            macro_autorun: true,
         };
         let json = serde_json::to_string(&c).unwrap();
         assert!(json.contains(r#""state":"inGame""#) && json.contains(r#""macroRun":{"instanceId":"i""#), "{json}");
+        assert!(json.contains(r#""afk":{"enabled":true,"intervalSec":600,"action":{"key":"e"}}"#) && json.contains(r#""macroAutorun":true"#), "{json}");
         assert_eq!(serde_json::from_str::<ControlClient>(&json).unwrap(), c);
 
         let e: ControlError = serde_json::from_str(r#"{"kind":"locked","message":"The vault is locked."}"#).unwrap();

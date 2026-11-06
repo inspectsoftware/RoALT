@@ -1,7 +1,7 @@
 //! Background sessions (AltDock): Roblox clients run in other Windows users' sessions, opened
 //! over loopback RDP (RDP Wrapper on this PC) in a hidden mstsc window, so anti-AFK and macros
 //! there never take the user's focus. The AltDock in each session serves the control API
-//! (Stream B); this side checks the PC (`health`), sets it up once elevated (`setup`), and opens,
+//! (`control`; `remote` talks to it); this side checks the PC (`health`), sets it up once elevated (`setup`), and opens,
 //! shows, hides and disconnects the sessions.
 
 pub mod health;
@@ -21,7 +21,8 @@ pub mod users;
 pub mod window;
 #[cfg(windows)]
 pub mod wts;
-// mod remote; // TODO(merge): needs Stream B (`control::client::ControlClient`)
+#[cfg(windows)]
+pub mod remote;
 
 use std::path::PathBuf;
 

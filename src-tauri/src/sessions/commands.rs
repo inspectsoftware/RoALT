@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 
 use super::types::{HealthCheck, PlanUser, SessionConfig, SessionControl, SessionView, SetupPlan, SetupResult, WtsState};
-use super::{checked, creds, health, rdp, reg, secret_key, setup, users, window, wts};
+use super::{checked, creds, health, rdp, reg, remote, secret_key, setup, users, window, wts};
 use crate::App;
 use crate::error::{AppError, Result};
 use crate::vault::Secret;
@@ -132,28 +132,30 @@ pub async fn sessions_setup(app: AppHandle, s: State<'_, App>, names: Vec<String
     Ok(local)
 }
 
-/// The sessions with their sign-in state and window.
+/// The sessions with their sign-in state, window and whether their AltDock answers. Every
+/// session's AltDock is asked at once, each for at most `remote::HEALTH_WAIT`, while Windows is
+/// asked for the rest.
 #[tauri::command]
 pub async fn sessions_list(s: State<'_, App>) -> Result<Vec<SessionView>> {
     let list = sessions(&s)?;
-    let views = blocking(move || {
+    let asked: Vec<_> = list.iter().map(|c| tauri::async_runtime::spawn(remote::control_of(remote::client(&s, c)))).collect();
+    let local = blocking(move || {
         let seen = wts::sessions();
         Ok(list
             .into_iter()
             .map(|config| {
                 let win = window::find(&config.address);
-                SessionView {
-                    wts: wts::state_of(&seen, &config.windows_user),
-                    window_visible: win.is_some_and(window::is_visible),
-                    window_open: win.is_some(),
-                    // TODO(merge): `remote::control_of(&config).await` once Stream B's client is in.
-                    control: SessionControl::Down { reason: "no control client in this build".into() },
-                    config,
-                }
+                let state = wts::state_of(&seen, &config.windows_user);
+                (config, state, win.is_some_and(window::is_visible), win.is_some())
             })
             .collect::<Vec<_>>())
     })
     .await?;
+    let mut views = Vec::with_capacity(local.len());
+    for ((config, wts, window_visible, window_open), control) in local.into_iter().zip(asked) {
+        let control = control.await.unwrap_or_else(|e| SessionControl::Down { reason: e.to_string() });
+        views.push(SessionView { config, wts, window_visible, window_open, control });
+    }
     Ok(views)
 }
 

@@ -99,6 +99,11 @@ const MAX_P: u32 = 16;
 
 /// Writes atomically (temp file in the same folder, then rename).
 pub fn write(path: &Path, password: &str, payload: &BackupPayload) -> Result<()> {
+    write_atomic(path, &to_bytes(password, payload)?)
+}
+
+/// The bytes `write` puts in the file (and a session push sends: `read_bytes` opens them).
+pub fn to_bytes(password: &str, payload: &BackupPayload) -> Result<Vec<u8>> {
     let kdf = master::new_kdf();
     let mut out = MAGIC.to_vec();
     for v in [kdf.m_kib, kdf.t, kdf.p] {
@@ -114,7 +119,7 @@ pub fn write(path: &Path, password: &str, payload: &BackupPayload) -> Result<()>
     let key = master::derive_key(password, &kdf)?;
     let sealed = master::seal(&key, &out, &json)?;
     out.extend_from_slice(&sealed);
-    write_atomic(path, &out)
+    Ok(out)
 }
 
 /// `WrongPassword` when the password (or file) does not authenticate,

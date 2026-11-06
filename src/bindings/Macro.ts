@@ -4,11 +4,11 @@
  * A stored AutoHotkey v2 macro (`macros`). Only `trusted` ones run: typed in the app, pushed from
  * the main app, or imported and then reviewed.
  */
-export type Macro = { id: number, name: string, body: string, trusted: boolean,
+export type Macro = { id: number, name: string, body: string, trusted: boolean, 
 /**
  * System-wide key combination that starts or stops it, like "Ctrl+Shift+F1"; "" for none.
  */
-hotkey: string,
+hotkey: string, 
 /**
  * Unix ms.
  */

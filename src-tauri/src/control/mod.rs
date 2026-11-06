@@ -7,8 +7,6 @@
 //! `--session` is how Windows starts it at every sign-in (HKLM Run, so for every user): then it
 //! quits at once unless the user is one AltDock manages (`users.json`).
 
-// TODO(merge): drop the allow once Stream C's sessions manager uses the client.
-#[allow(dead_code)]
 pub mod client;
 pub mod server;
 pub mod types;

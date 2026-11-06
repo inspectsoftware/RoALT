@@ -2,6 +2,7 @@
 //! `http://127.0.0.1:<port>` with the session's token. Never through a proxy, never follows a
 //! redirect; 5 s per request, longer only for the few that wait on work (`SLOW`).
 
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use base64::Engine;
@@ -13,6 +14,7 @@ use zeroize::Zeroizing;
 use super::TOKEN_HEADER;
 use super::types::{self, *};
 use crate::error::{AppError, Result};
+use crate::model::{AfkClientConfig, Macro, MacroInput};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 /// Closing waits for the client's grace period (`settings.close_grace_s`), kill all for every
@@ -33,15 +35,25 @@ impl std::fmt::Debug for ControlClient {
     }
 }
 
+/// One HTTP client for every session (the Sessions page asks several times a second).
+static HTTP: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn http() -> Result<reqwest::Client> {
+    if let Some(h) = HTTP.get() {
+        return Ok(h.clone());
+    }
+    let h = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(TIMEOUT)
+        .build()
+        .map_err(|e| AppError::Internal(format!("control client unavailable: {}", e.without_url())))?;
+    Ok(HTTP.get_or_init(|| h).clone())
+}
+
 impl ControlClient {
     pub fn new(port: u16, token: Zeroizing<String>) -> Result<ControlClient> {
-        let http = reqwest::Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(TIMEOUT)
-            .build()
-            .map_err(|e| AppError::Internal(format!("control client unavailable: {}", e.without_url())))?;
-        Ok(ControlClient { http, base: format!("http://127.0.0.1:{port}"), token })
+        Ok(ControlClient { http: http()?, base: format!("http://127.0.0.1:{port}"), token })
     }
 
     fn request(&self, method: Method, path: &str) -> RequestBuilder {
@@ -78,8 +90,9 @@ impl ControlClient {
         self.send(self.request(Method::POST, path).json(body).timeout(timeout)).await.map(drop)
     }
 
-    pub async fn health(&self) -> Result<ControlHealth> {
-        self.get("/v1/health").await
+    /// Gives up after `wait` (the session list must not wait on a stuck session).
+    pub async fn health(&self, wait: Duration) -> Result<ControlHealth> {
+        self.json(self.request(Method::GET, "/v1/health").timeout(wait)).await
     }
 
     pub async fn state(&self) -> Result<Vec<types::ControlClient>> {

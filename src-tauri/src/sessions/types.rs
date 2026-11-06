@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use zeroize::Zeroizing;
 
+use crate::control::types::ControlHealth;
+
 /// Shared: several clients without macros in one alt user's session. Dedicated: one client, for a
 /// continuous AutoHotkey macro.
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -53,23 +55,7 @@ pub enum WtsState {
     None,
 }
 
-// TODO(merge): Stream B's `crate::control::types::ControlHealth` replaces this stand-in (same
-// fields as the contract's `GET /v1/health`); delete it and import theirs.
-/// What a session's control API says about itself (`GET /v1/health`).
-#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-#[ts(export)]
-pub struct ControlHealth {
-    pub version: String,
-    pub windows_user: String,
-    pub session_id: u32,
-    pub mode: SessionMode,
-    pub vault_locked: bool,
-    pub roblox_installed: bool,
-    pub clients: u32,
-}
-
-/// Whether the AltDock in that session answers.
+/// Whether the AltDock in that session answers (`GET /v1/health`), and if not, why.
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 #[ts(export)]

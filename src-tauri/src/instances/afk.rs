@@ -519,7 +519,7 @@ mod tests {
         let turn = steps(&AfkAction::JumpTurn).unwrap();
         assert_eq!(turn[..4], space);
         assert_eq!(turn[4..], [Step::Down(LEFT), Step::Wait(600), Step::Up(LEFT), Step::Wait(HOLD_MS)]);
-        assert!(LEFT.extended && !SPACE.extended);
+        const { assert!(LEFT.extended && !SPACE.extended) };
         let w = key(0x11);
         assert_eq!(steps(&AfkAction::Key("w".into())).unwrap(), [Step::Down(w), Step::Wait(HOLD_MS), Step::Up(w), Step::Wait(HOLD_MS)]);
         assert_eq!(steps(&AfkAction::Key("Escape".into())), None);

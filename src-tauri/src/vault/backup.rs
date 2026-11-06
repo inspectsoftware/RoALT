@@ -101,14 +101,18 @@ pub fn write(path: &Path, password: &str, payload: &BackupPayload) -> Result<()>
 }
 
 /// `WrongPassword` when the password (or file) does not authenticate,
-/// `Invalid("This isn't a RoALT backup.")` on a bad magic / truncated file.
+/// `Invalid("This isn't an AltDock backup.")` on a bad magic / truncated file.
 pub fn read(path: &Path, password: &str) -> Result<BackupPayload> {
-    let not_backup = || AppError::Invalid(tr!("This isn't an AltDock backup."));
     // About 2 KB per account: far above anyone's vault, and it isn't all read into memory first.
     if fs::metadata(path)?.len() > 64 << 20 {
-        return Err(not_backup());
+        return Err(AppError::Invalid(tr!("This isn't an AltDock backup.")));
     }
-    let bytes = fs::read(path)?;
+    read_bytes(&fs::read(path)?, password)
+}
+
+/// `read` for a backup already in memory (one the control API received).
+pub fn read_bytes(bytes: &[u8], password: &str) -> Result<BackupPayload> {
+    let not_backup = || AppError::Invalid(tr!("This isn't an AltDock backup."));
     if bytes.len() < HEADER_LEN + SEAL_OVERHEAD || !bytes.starts_with(MAGIC) {
         log::debug!("not a backup: bad magic or truncated ({} bytes)", bytes.len());
         return Err(not_backup());

@@ -22,6 +22,8 @@ mod storage;
 mod tray;
 mod vault;
 mod webview;
+// ---- AltDock: Stream B ----
+mod control;
 
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -228,6 +230,8 @@ fn main_window(app: &TauriApp, data_dir: &Path, skip_splash: bool) -> tauri::Res
     // The dark theme's --ground (src/styles/tokens.css) in either theme: the splash is dark, and
     // this is what shows before the UI paints and while the window grows.
     let bg = Color(10, 10, 10, 255);
+    // ---- AltDock: Stream B ---- session mode: no splash (the window starts hidden, below).
+    let skip_splash = skip_splash || control::session().is_some();
 
     let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
         .title("AltDock")
@@ -248,6 +252,10 @@ fn main_window(app: &TauriApp, data_dir: &Path, skip_splash: bool) -> tauri::Res
     }
     let w = builder.build()?;
     webview::log_process_failures(&w);
+    // ---- AltDock: Stream B ---- session mode: hidden in the tray.
+    if control::session().is_some() {
+        return control::server::hidden_window(&w);
+    }
     splash::start(app.handle(), &w, skip_splash)
 }
 
@@ -405,6 +413,9 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
     let handle = app.handle().clone();
     let api = roblox_api::Client::new(Arc::new(move |id, cookie| handle.state::<App>().store_rotated(id, cookie)));
     let settings = db.settings().map_err(|e| e.message())?;
+    // ---- AltDock: Stream B ---- session mode: multi-instance on, close to the tray. The vault
+    // above is a DPAPI one, made silently on the first start, as for any new user.
+    let settings = if control::session().is_some() { control::server::session_settings(&db, settings) } else { settings };
     i18n::set(&settings.language);
     let shutdown = commands::pending_shutdown(&db);
     let multi = instances::multi::Multi::new();
@@ -470,6 +481,12 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
     rpc::spawn(app.handle().clone());
     launcher::update::spawn(app.handle().clone());
     remind_bandwidth(app.handle().clone());
+    // ---- AltDock: Stream B ---- session mode: the control API, for the main app.
+    if let Some(c) = control::session()
+        && let Err(e) = control::server::start(app.handle(), c)
+    {
+        log::error!("session mode without its control API: {e}");
+    }
     Ok(())
 }
 
@@ -513,6 +530,22 @@ fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
 }
 
 fn main() {
+    // ---- AltDock: Stream B ---- session mode (`control`), decided before anything is made: the
+    // autostart runs `--session` for every user, and quits here for those AltDock doesn't manage.
+    let session_arg = std::env::args().skip(1).any(|a| a == control::SESSION_ARG);
+    let start = control::start_mode(session_arg, control::program_dir().as_deref(), &control::windows_user(), |p| {
+        std::fs::read_to_string(p).ok()
+    });
+    let broken = match start {
+        control::Start::Quit => std::process::exit(0),
+        control::Start::Normal => None,
+        control::Start::Session(c) => {
+            control::set_session(c);
+            None
+        }
+        control::Start::Broken(why) => Some(why),
+    };
+    // ---- end AltDock: Stream B ----
     webview::clear_webview2_env();
     // Windows' language until the settings are read.
     i18n::set("");
@@ -523,6 +556,10 @@ fn main() {
     let log_dir = data_dir.join("logs");
     let _ = std::fs::create_dir_all(&log_dir);
     let _ = LOG_DIR.set(log_dir.clone());
+    // ---- AltDock: Stream B ----
+    if let Some(why) = broken {
+        fatal(&format!("AltDock can't start in session mode: {why}."));
+    }
 
     tauri::Builder::default()
         // Must be first: a second launch shows the running window instead.
@@ -690,6 +727,8 @@ fn main() {
             }
             if let tauri::RunEvent::Exit = event {
                 log::info!("shutting down");
+                // ---- AltDock: Stream B ----
+                control::server::stop(app);
                 // The next start follows the running clients again (`Tracker::readopt`).
                 if let Some(s) = app.try_state::<App>() {
                     s.tracker.persist(&s.db, true);

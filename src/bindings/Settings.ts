@@ -5,6 +5,7 @@ import type { Density } from "./Density";
 import type { DiscordEvents } from "./DiscordEvents";
 import type { MemThrottle } from "./MemThrottle";
 import type { RenderFlags } from "./RenderFlags";
+import type { SessionConfig } from "./SessionConfig";
 import type { TabLayout } from "./TabLayout";
 import type { Theme } from "./Theme";
 import type { WindowLayout } from "./WindowLayout";
@@ -183,4 +184,8 @@ allowPublicNetworks: boolean,
 /**
  * UI and message language (`i18n::LANGS`), or "" to follow Windows' display language.
  */
-language: string, };
+language: string, 
+/**
+ * Background sessions (`sessions`); their secrets are in the vault.
+ */
+sessions: Array<SessionConfig>, };

@@ -306,6 +306,10 @@ pub struct Settings {
     pub allow_public_networks: bool,
     /// UI and message language (`i18n::LANGS`), or "" to follow Windows' display language.
     pub language: String,
+    // ---- AltDock: Stream C ----
+    /// Background sessions (`sessions`); their secrets are in the vault.
+    pub sessions: Vec<crate::sessions::types::SessionConfig>,
+    // ---- end AltDock: Stream C ----
 }
 
 /// The network RoALT runs on (`network`). Never its name: streamers show RoALT on screen.
@@ -515,6 +519,9 @@ panic_hotkey: String::new(),
             tiny_on_launch: false,
             allow_public_networks: true,
             language: String::new(),
+            // ---- AltDock: Stream C ----
+            sessions: Vec::new(),
+            // ---- end AltDock: Stream C ----
         }
     }
 }
@@ -613,6 +620,11 @@ pub struct SettingsPatch {
     pub allow_public_networks: Option<bool>,
     #[ts(optional)]
     pub language: Option<String>,
+    // ---- AltDock: Stream C ----
+    /// The whole session list, each checked like `session_save` does.
+    #[ts(optional)]
+    pub sessions: Option<Vec<crate::sessions::types::SessionConfig>>,
+    // ---- end AltDock: Stream C ----
 }
 
 /// What a Roblox log clean-up deleted (`logs_clean`).

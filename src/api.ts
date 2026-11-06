@@ -86,6 +86,19 @@ export type { Presence } from "./bindings/Presence";
 export type { PresenceKind } from "./bindings/PresenceKind";
 export type { Subscription } from "./bindings/Subscription";
 export type { Theme } from "./bindings/Theme";
+// ---- AltDock: Stream C ----
+import type { HealthCheck } from "./bindings/HealthCheck";
+import type { SessionConfig } from "./bindings/SessionConfig";
+import type { SessionView } from "./bindings/SessionView";
+import type { SetupResult } from "./bindings/SetupResult";
+export type { HealthCheck, SessionConfig, SessionView, SetupResult };
+export type { ControlHealth } from "./bindings/ControlHealth";
+export type { FixKind } from "./bindings/FixKind";
+export type { SessionControl } from "./bindings/SessionControl";
+export type { SessionMode } from "./bindings/SessionMode";
+export type { SetupStep } from "./bindings/SetupStep";
+export type { WtsState } from "./bindings/WtsState";
+// ---- end AltDock: Stream C ----
 
 /** What instance_show does with a client's window (window::Show). */
 export type WindowShow = "focus" | "minimize" | "restore";
@@ -313,6 +326,25 @@ export const api = {
 
   settingsGet: () => invoke<Settings>("settings_get"),
   settingsSet: (patch: SettingsPatch) => invoke<Settings>("settings_set", { patch }),
+
+  // ---- AltDock: Stream C ----
+  /** Whether this PC can run background sessions; each failed check names its fix. */
+  sessionsHealth: () => invoke<HealthCheck[]>("sessions_health"),
+  /** Sets the PC up for these sessions (all when empty) after one admin prompt; each step's outcome. */
+  sessionsSetup: (names: string[] = []) => invoke<SetupResult>("sessions_setup", { names }),
+  sessionsList: () => invoke<SessionView[]>("sessions_list"),
+  /** Adds or changes a session (by name); the answer has its Windows user, address and port. */
+  sessionSave: (config: SessionConfig) => invoke<SessionConfig>("session_save", { config }),
+  /** With `deleteUser`, its Windows user goes too (admin prompt); then the answer is that setup's result. */
+  sessionRemove: (name: string, deleteUser: boolean) => invoke<SetupResult | null>("session_remove", { name, deleteUser }),
+  /** Opens the session in a hidden Remote Desktop window; refused while RDP Wrapper doesn't support this Windows. */
+  sessionStart: (name: string) => invoke<void>("session_start", { name }),
+  /** Shows or hides the session's window; whether it is shown now. */
+  sessionWindow: (name: string, show: boolean) => invoke<boolean>("session_window", { name, show }),
+  /** Disconnects the session; its clients keep running. */
+  sessionDisconnect: (name: string) => invoke<void>("session_disconnect", { name }),
+  // TODO(merge): the control API proxies (session_logoff, session_push_*, remote_*) with Stream B's types.
+  // ---- end AltDock: Stream C ----
 };
 
 export const events = {
@@ -329,4 +361,8 @@ export const events = {
   onRobloxInstall: (f: (p: InstallProgress) => void): Promise<UnlistenFn> => listen<InstallProgress>("roblox://install", (e) => f(e.payload)),
   /** Joined or left a Public network (checked every 10 s). */
   onNetwork: (f: (n: NetworkStatus) => void): Promise<UnlistenFn> => listen<NetworkStatus>("app://network", (e) => f(e.payload)),
+  // ---- AltDock: Stream C ----
+  /** A session was saved, removed, set up, started, shown, hidden or disconnected. */
+  onSessionsChanged: (f: () => void): Promise<UnlistenFn> => listen("sessions://changed", f),
+  // ---- end AltDock: Stream C ----
 };

@@ -53,6 +53,8 @@ User's session                               Background session(s) (alt Windows 
 | Shared program copy for alt users | `%ProgramData%\AltDock\app\altdock.exe` (+ resources); owner Administrators; ACL: Administrators and SYSTEM full, main user and alt users read/execute (the HKLM Run value runs it for every user, so only administrators may change it; updates go through the elevated setup) |
 | Managed alt user list | `%ProgramData%\AltDock\users.json` `{ "users": ["altdock-1", …] }` |
 | Control config per alt user | `%ProgramData%\AltDock\control\<windows-user>.json` `{ "port": 47611, "token": "<64 hex>", "mode": "shared"|"dedicated" }`; ACL: that alt user read, Administrators and SYSTEM full (the folder: Administrators and SYSTEM only) |
+| Restore state | `%ProgramData%\AltDock\restore.json` (Administrators and SYSTEM only): each registry value's state before the setup first changed it, and the thumbprints it trusted; "Remove from this PC" restores from it |
+| Firewall rule | `AltDock: block remote RDP` (group `AltDock`): inbound TCP 3389 blocked from every address but loopback (127.0.0.0/8, ::1), all profiles |
 | Autostart | `HKLM\Software\Microsoft\Windows\CurrentVersion\Run` value `AltDockSession` = `"%ProgramData%\AltDock\app\altdock.exe" --session` — exits at once unless the user is in `users.json` |
 | Alt Windows users | `altdock-1`, `altdock-2`, … hidden from the sign-in screen |
 | Loopback addresses | `127.0.0.2` for session 1, `127.0.0.3` for session 2, … (one Credential Manager entry `TERMSRV/<addr>` each) |
@@ -247,6 +249,7 @@ proxy, no redirects, 5 s; import/close/kill-all 120 s), `health(wait)`, `state`,
 |---|---|
 | `sessions_health` | → `HealthCheck[]` |
 | `sessions_setup` | `names` (empty: all) → `SetupResult` |
+| `sessions_uninstall` | `deleteUsers` → `SetupResult`; "Remove from this PC" (below) |
 | `sessions_list` | → `SessionView[]`; every session's `/v1/health` asked in parallel, ≤ 1.5 s each |
 | `session_save` | `config` → `SessionConfig` (slot assigned or kept) |
 | `session_remove` | `name, deleteUser` → `SetupResult \| null` |
@@ -264,13 +267,36 @@ proxy, no redirects, 5 s; import/close/kill-all 120 s), `health(wait)`, `state`,
 | `remote_macro_assign` | `name, accountId, macroId \| null, autorun` |
 | `remote_macro_run` / `remote_macro_stop` | `name, macroId, instanceIds` / `name, instanceId` |
 
+**Remove from this PC** (`sessions_uninstall`, a `SetupPlan` with `action: uninstall`, which may
+name only `managedUsers` and `deleteUsers`): refused while an alt user is signed in; one UAC
+prompt, then the elevated side deletes the HKLM Run value, our certificates in LocalMachine\My and
+\Root (self-signed with our subject only, with their `AltDock-RDP-*` key containers) and their
+thumbprints from `TrustedCertThumbprints` (others stay; an emptied list goes if there was none),
+puts every value of `restore::POLICIES` and each alt user's `UserList` entry back as `restore.json`
+recorded it (a value changed since is left alone; without the file only values still equal to
+AltDock's go, `fDenyTSConnections` back to 1), with `deleteUsers` deletes `altdock-<n>` users (plan,
+`users.json`, `restore.json`; standard users only) and their profiles, then removes the firewall
+rule and `%ProgramData%\AltDock` (admin-owned only; links are removed, never followed). The main
+app then deletes `TERMSRV/127.0.0.<n>` credentials that name an `altdock-<n>` user, the
+`sessions\*.rdp` files, the sessions' secrets and thumbprint, and clears the session list. The
+HKCU `RemoteDesktop_SuppressWhenMinimized` stays (per user, harmless).
+
+**Remote Desktop only from this PC**: the setup adds the firewall rule above through
+`INetFwPolicy2` (COM, no `netsh`); the health check `remoteRdpBlocked` passes while it exists, is
+enabled and blocks inbound TCP 3389 (its detail says when Windows Firewall is off for the current
+network). Microsoft's firewall pages don't say loopback skips the firewall, so the rule's remote
+addresses leave loopback out explicitly instead of relying on that.
+
 **Still needs a real Windows run** (only compiled for `x86_64-pc-windows-gnu` and tested against
 mocks here): the elevated setup end to end (users, ACLs, policies, certificate, `rdpsign`), RDP
 Wrapper version check and hidden mstsc window, session-mode start from the HKLM Run value, the
 control API over loopback between two sessions (token, `Host` check, push of accounts and macros,
 thumbnails from a session without a console), anti-AFK and AutoHotkey macros inside a disconnected
 or hidden session (focus, `SendInput`, rendering while hidden), `ExitWindowsEx` logoff, and the
-`opener` permission for the RDP Wrapper link.
+`opener` permission for the RDP Wrapper link; the firewall rule (COM, the address ranges as
+Windows stores them, loopback sessions still connecting, other PCs refused), `restore.json`
+recording and "Remove from this PC" end to end (certificate and key container deletion, values put
+back, `%ProgramData%\AltDock` removal, credentials).
 
 ## Checking
 

@@ -24,7 +24,24 @@ pub struct BackupPayload {
     pub groups: Vec<BackupGroup>,
     #[serde(default)]
     pub favourites: Vec<BackupFavourite>,
+    // ---- AltDock: Stream A ----
+    /// Absent in backups from before macros (and from RoALT 1.0.1+); restored ones start untrusted.
+    #[serde(default)]
+    pub macros: Vec<BackupMacro>,
+    // ---- end AltDock: Stream A ----
 }
+
+// ---- AltDock: Stream A ----
+/// A macro in a backup; RoALT 1.0.0's `runOnLaunch` is ignored (each account picks its own now).
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupMacro {
+    pub name: String,
+    pub body: String,
+    #[serde(default)]
+    pub hotkey: String,
+}
+// ---- end AltDock: Stream A ----
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -165,6 +182,7 @@ mod tests {
     fn sample() -> BackupPayload {
         BackupPayload {
             favourites: Vec::new(),
+            macros: vec![BackupMacro { name: "Farm".into(), body: "Send 'w'\n".into(), hotkey: "Ctrl+F1".into() }],
             version: 1,
             exported_at: 1_700_000_000,
             accounts: vec![BackupAccount {
@@ -204,13 +222,18 @@ mod tests {
         assert_eq!(back.accounts[0].cookie.as_str(), "fake-cookie");
         assert_eq!(back.accounts[0].groups, ["Mains"]);
         assert_eq!(back.groups[0].name, "Mains");
+        let m = &back.macros[0];
+        assert_eq!((m.name.as_str(), m.body.as_str(), m.hotkey.as_str()), ("Farm", "Send 'w'\n", "Ctrl+F1"));
         assert!(matches!(wrong, Err(AppError::WrongPassword)));
     }
 
     #[test]
-    fn a_backup_with_the_removed_macros_still_reads() {
-        let old: BackupPayload = serde_json::from_str(r#"{"version":1,"exportedAt":5,"accounts":[],"groups":[],"favourites":[],"macros":[{"name":"x","body":"Send 'w'"}]}"#).unwrap();
-        assert_eq!(old.exported_at, 5);
+    fn backups_with_and_without_macros_read() {
+        let old: BackupPayload = serde_json::from_str(r#"{"version":1,"exportedAt":5,"accounts":[],"groups":[],"favourites":[]}"#).unwrap();
+        assert!(old.macros.is_empty());
+        // RoALT 1.0.0's, with runOnLaunch.
+        let v1: BackupPayload = serde_json::from_str(r#"{"version":1,"exportedAt":5,"accounts":[],"groups":[],"favourites":[],"macros":[{"name":"x","body":"Send 'w'","runOnLaunch":true}]}"#).unwrap();
+        assert_eq!((v1.macros[0].name.as_str(), v1.macros[0].hotkey.as_str()), ("x", ""));
     }
 
     #[test]

@@ -306,6 +306,10 @@ pub struct Settings {
     pub allow_public_networks: bool,
     /// UI and message language (`i18n::LANGS`), or "" to follow Windows' display language.
     pub language: String,
+    // ---- AltDock: Stream A ----
+    /// AutoHotkey64.exe the user picked; "" to look for it (`macros::find_ahk`).
+    pub ahk_path: String,
+    // ---- end AltDock: Stream A ----
 }
 
 /// The network RoALT runs on (`network`). Never its name: streamers show RoALT on screen.
@@ -515,6 +519,9 @@ panic_hotkey: String::new(),
             tiny_on_launch: false,
             allow_public_networks: true,
             language: String::new(),
+            // ---- AltDock: Stream A ----
+            ahk_path: String::new(),
+            // ---- end AltDock: Stream A ----
         }
     }
 }
@@ -613,6 +620,10 @@ pub struct SettingsPatch {
     pub allow_public_networks: Option<bool>,
     #[ts(optional)]
     pub language: Option<String>,
+    // ---- AltDock: Stream A ----
+    #[ts(optional)]
+    pub ahk_path: Option<String>,
+    // ---- end AltDock: Stream A ----
 }
 
 /// What a Roblox log clean-up deleted (`logs_clean`).
@@ -1463,3 +1474,99 @@ pub struct Notice {
     pub error: bool,
     pub message: String,
 }
+
+// ---- AltDock: Stream A ----
+
+/// A stored AutoHotkey v2 macro (`macros`). Only `trusted` ones run: typed in the app, pushed from
+/// the main app, or imported and then reviewed.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Macro {
+    pub id: i64,
+    pub name: String,
+    pub body: String,
+    pub trusted: bool,
+    /// System-wide key combination that starts or stops it, like "Ctrl+Shift+F1"; "" for none.
+    pub hotkey: String,
+    /// Unix ms.
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// Create (`id: None`) or edit a macro in the editor; what is saved there counts as trusted.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MacroInput {
+    #[ts(optional)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<i64>,
+    pub name: String,
+    pub body: String,
+    #[serde(default)]
+    pub hotkey: String,
+}
+
+/// A macro running on one client (one AutoHotkey process).
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MacroRun {
+    pub instance_id: String,
+    pub account_id: i64,
+    pub macro_id: i64,
+    pub name: String,
+    /// Unix ms of this AutoHotkey process's start.
+    pub started_at: i64,
+    /// How often it was started again after it ended by itself (`macros::RESTARTS` in 5 minutes).
+    pub restarts: u32,
+}
+
+/// Where AutoHotkey v2 was found (`macros::find_ahk`); None: not installed.
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AhkStatus {
+    pub path: Option<String>,
+}
+
+/// The macro an account's clients run (`account_macros`); `autorun`: it starts on its own when the
+/// client reaches a game.
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MacroAssignment {
+    pub account_id: i64,
+    pub macro_id: i64,
+    pub autorun: bool,
+}
+
+/// What anti-AFK presses in a client (`instances::afk::steps`).
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum AfkAction {
+    /// No game binds it, so the character doesn't move.
+    F13,
+    Space,
+    /// Space: the character jumps.
+    Jump,
+    /// Space, then the Left arrow held for 0.6 s.
+    JumpTurn,
+    /// One key by name (`instances::afk::KEYS`), like "W" or "F5".
+    Key(String),
+}
+
+/// Anti-AFK for one account's clients (`instances::afk::client_config`); kept across launches.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AfkClientConfig {
+    pub enabled: bool,
+    /// Seconds between presses, 60..=1140 (Roblox kicks after 20 idle minutes).
+    pub interval_sec: u32,
+    pub action: AfkAction,
+}
+
+// ---- end AltDock: Stream A ----

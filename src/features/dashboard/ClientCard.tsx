@@ -12,6 +12,7 @@ import { StatusPill, type Tone } from "../../ui/Status";
 import { toastError } from "../../ui/Toast";
 import { accountName, Avatar } from "../accounts/shared";
 import { launchOne, useLaunchStep } from "../launch/launchQueue";
+import { useClientMacroRun } from "../macros/ClientMacro"; // AltDock: Stream A
 import { STATES, uptime } from "../launch/Running";
 import { mb, pct } from "../monitor/MonitorView";
 import type { MenuAt } from "./ClientMenu";
@@ -201,8 +202,12 @@ export function ClientCard({ inst: i, account: a, detailed, width, menuOpen, onS
     : painted && pictureNote ? { tone: "neutral", label: pictureNote, tip: hidden ? t("dashboard.lastPictureHint") : undefined }
     : ageS !== null ? { tone: "neutral", label: t("dashboard.pictureAge", { s: ageS }), tip: t("dashboard.pictureAgeHint") }
     : null;
-  const tags = detailed ? tagsOf(i, a, afkOn, defaultFps) : [];
-  const show = () => api.instanceShow(i.id, "focus").catch(toastError);
+  const tags: Tag[] = detailed ? tagsOf(i, a, afkOn, defaultFps) : [];
+  // ---- AltDock: Stream A ----
+  const macroRun = useClientMacroRun(i.id);
+  if (detailed && macroRun) tags.push({ label: t("dashboard.macro"), tip: t("macros.busy", { name: macroRun.name }) });
+  // ---- end AltDock: Stream A ----
+  const show =() => api.instanceShow(i.id, "focus").catch(toastError);
   const minimize = () => api.instanceShow(i.id, hidden ? "restore" : "minimize").catch(toastError);
   const menuFrom = (e: MouseEvent<HTMLElement>) => {
     const r = e.currentTarget.getBoundingClientRect();

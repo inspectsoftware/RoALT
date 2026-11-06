@@ -24,6 +24,9 @@ mod vault;
 mod webview;
 // ---- AltDock: Stream B ----
 mod control;
+// ---- AltDock: Stream A ----
+mod macros;
+// ---- end AltDock: Stream A ----
 
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -62,6 +65,10 @@ pub struct App {
     pub shutdown: Mutex<Option<i64>>,
     /// Rotated cookies that arrived while the vault was locked, stored at the next unlock.
     pub rotated_later: Mutex<Vec<(i64, vault::Secret)>>,
+    // ---- AltDock: Stream A ----
+    /// The running AutoHotkey macros and the macro hotkeys.
+    pub macros: macros::Runner,
+    // ---- end AltDock: Stream A ----
 }
 
 impl App {
@@ -447,6 +454,9 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
         self_update: self_update::SelfUpdater::new(),
         network: network::Network::new(),
         shutdown: Mutex::new(shutdown),
+        // ---- AltDock: Stream A ----
+        macros: macros::Runner::new(),
+        // ---- end AltDock: Stream A ----
     });
     if let Err(e) = commands::set_panic_hotkey(app.handle(), "", &settings.panic_hotkey) {
         let handle = app.handle().clone();
@@ -456,8 +466,10 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
             commands::notice(&handle, true, tr!("{why} The panic hotkey is off; change it in Settings, Automation.", why = e.message()));
         });
     }
-    // AutoHotkey's work folder from the removed Macros feature; a crash could leave scripts in it.
-    let _ = std::fs::remove_dir_all(data_dir.join("macros"));
+    // ---- AltDock: Stream A ----
+    macros::sync_hotkeys(app.handle());
+    macros::spawn(app.handle().clone());
+    // ---- end AltDock: Stream A ----
     if let Err(e) = tray::setup(app.handle()) {
         log::warn!("no tray icon: {e}");
     }
@@ -577,13 +589,13 @@ fn main() {
                 .rotation_strategy(RotationStrategy::KeepSome(5))
                 .build(),
         )
-        // The panic hotkey (`settings.panic_hotkey`, registered by `commands::set_panic_hotkey`),
-        // the only global shortcut RoALT registers, kills all.
+        // AltDock (Stream A): macro hotkeys (`macros::sync_hotkeys`) toggle their macro; the panic
+        // hotkey (`settings.panic_hotkey`, registered by `commands::set_panic_hotkey`) kills all.
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _key, e| {
+                .with_handler(|app, key, e| {
                     if e.state == ShortcutState::Pressed {
-                        tray::kill_all(app);
+                        macros::hotkey(app, key);
                     }
                 })
                 .build(),
@@ -717,6 +729,23 @@ fn main() {
             commands::settings_get,
             commands::settings_set,
             commands::network_status,
+            // ---- AltDock: Stream A ----
+            macros::ahk_status,
+            macros::macros_list,
+            macros::macro_save,
+            macros::macro_remove,
+            macros::macro_trust,
+            macros::macros_import,
+            macros::macro_export,
+            macros::macro_run,
+            macros::macro_stop,
+            macros::macros_stop_all,
+            macros::macro_runs,
+            macros::macro_assignments,
+            macros::macro_assign,
+            instances::afk::anti_afk_client_get,
+            instances::afk::anti_afk_client_set,
+            // ---- end AltDock: Stream A ----
         ]))
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| fatal(&tr!("AltDock failed to start: {why}", why = e)))
@@ -732,6 +761,7 @@ fn main() {
                 // The next start follows the running clients again (`Tracker::readopt`).
                 if let Some(s) = app.try_state::<App>() {
                     s.tracker.persist(&s.db, true);
+                    s.macros.stop_all(); // AltDock: Stream A
                     s.limiter.release_all();
                     launcher::client_settings::restore(&s.db);
                     launcher::flags::restore();

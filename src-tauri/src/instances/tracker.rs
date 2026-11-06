@@ -623,7 +623,8 @@ impl Tracker {
             .filter(|e| e.inst.state == InstanceState::InGame && e.inst.anti_afk && !e.closing)
             .filter_map(|e| {
                 let (pid, _) = client_of(e)?;
-                Some(super::afk::AfkClient { id: e.inst.id.clone(), pid, since: e.inst.afk_at.or(e.in_game_at)? })
+                // AltDock (Stream A): `account_id` picks the account's own anti-AFK.
+                Some(super::afk::AfkClient { id: e.inst.id.clone(), pid, account_id: e.inst.account_id, since: e.inst.afk_at.or(e.in_game_at)? })
             })
             .collect()
     }

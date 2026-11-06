@@ -185,3 +185,22 @@ export function useSaveGroup() {
 }
 
 export const groupColor = (g: Group) => g.color ?? "var(--grey)";
+
+// ---- AltDock: Stream A ----
+/** Keys for macros and anti-AFK per account. */
+export const qkA = {
+  ahk: ["ahk"],
+  macros: ["macros"],
+  macroRuns: ["macroRuns"],
+  macroAssignments: ["macroAssignments"],
+  afkClient: (accountId: number) => ["afkClient", accountId] as const,
+} as const;
+
+export const useMacros = () => useQuery({ queryKey: qkA.macros, queryFn: api.macrosList });
+/** What runs now; macros://runs replaces it. */
+export const useMacroRuns = () => useQuery({ queryKey: qkA.macroRuns, queryFn: api.macroRuns });
+/** Every account's macro; macros://assignments makes it stale. */
+export const useMacroAssignments = () => useQuery({ queryKey: qkA.macroAssignments, queryFn: api.macroAssignments });
+/** The account's anti-AFK (its own, else the default from Settings). */
+export const useAfkClient = (accountId: number) => useQuery({ queryKey: qkA.afkClient(accountId), queryFn: () => api.antiAfkClientGet(accountId) });
+// ---- end AltDock: Stream A ----

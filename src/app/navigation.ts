@@ -3,7 +3,7 @@ import type { Key } from "../i18n";
 import type { IconName } from "../ui/Icon";
 import type { SettingsArea } from "../features/settings/areas";
 
-export type View = "dashboard" | "accounts" | "launch" | "performance" | "servers" | "monitor" | "discord" | "debug" | "settings" | "sessions"; // AltDock: Stream D (sessions)
+export type View = "dashboard" | "accounts" | "launch" | "performance" | "servers" | "monitor" | "discord" | "debug" | "settings" | "sessions" | "macros"; // AltDock: Stream D (sessions), Stream A (macros)
 
 export const VIEW_NAME: Record<View, Key> = {
   dashboard: "app.nav.dashboard",
@@ -16,11 +16,12 @@ export const VIEW_NAME: Record<View, Key> = {
   debug: "app.nav.debug",
   settings: "app.nav.settings",
   sessions: "app.nav.sessions", // AltDock: Stream D
+  macros: "app.nav.macros", // AltDock: Stream A
 };
 
 /** The island's places, by the ids `roalt.sectionOrder` keeps (Debug moved into Tools). */
 export const MAIN_SECTIONS = ["home", "play", "sessions", "accounts", "performance"] as const; // AltDock: Stream D adds "sessions"
-export const TOOL_SECTIONS = ["servers", "monitor", "discord", "debug"] as const;
+export const TOOL_SECTIONS = ["servers", "monitor", "discord", "debug", "macros"] as const; // AltDock: Stream A, macros
 export type Section = (typeof MAIN_SECTIONS)[number] | (typeof TOOL_SECTIONS)[number];
 
 export const SECTION_VIEW: Record<Section, View> = {
@@ -33,6 +34,7 @@ export const SECTION_VIEW: Record<Section, View> = {
   discord: "discord",
   debug: "debug",
   sessions: "sessions", // AltDock: Stream D
+  macros: "macros", // AltDock: Stream A
 };
 export const SECTION_ICON: Record<Section, IconName> = {
   home: "home",
@@ -44,6 +46,7 @@ export const SECTION_ICON: Record<Section, IconName> = {
   discord: "bell",
   debug: "terminal",
   sessions: "layoutTop", // AltDock: Stream D (a window)
+  macros: "key", // AltDock: Stream A
 };
 
 /** Ctrl and a digit, by key position (so Ctrl+1 works where the digits need Shift). */

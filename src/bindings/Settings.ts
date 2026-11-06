@@ -183,4 +183,8 @@ allowPublicNetworks: boolean,
 /**
  * UI and message language (`i18n::LANGS`), or "" to follow Windows' display language.
  */
-language: string, };
+language: string,
+/**
+ * AutoHotkey64.exe the user picked; "" to look for it (`macros::find_ahk`).
+ */
+ahkPath: string, };

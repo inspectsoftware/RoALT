@@ -1849,11 +1849,8 @@ pub async fn instance_set_limits(app: AppHandle, s: State<'_, App>, id: String, 
 /// Opts one running client in or out of anti-AFK.
 #[tauri::command]
 pub fn instance_set_anti_afk(app: AppHandle, s: State<'_, App>, id: String, enabled: bool) -> Result<()> {
-    if !s.tracker.set_anti_afk(&id, enabled) {
-        return Err(AppError::NotFound);
-    }
-    instances_changed(&app);
-    Ok(())
+    // AltDock (Stream A): kept as its account's anti-AFK, so it lasts beyond this client.
+    crate::instances::afk::set_instance(&app, &s, &id, enabled)
 }
 
 /// Pages one client's working set out now ("Trim now").
@@ -2293,6 +2290,7 @@ pub(crate) fn parse_hotkey(k: &str) -> Result<tauri_plugin_global_shortcut::Shor
 
 pub(crate) async fn kill_all(s: &App) -> Result<MultiInstanceStatus> {
     log::info!("kill all Roblox");
+    s.macros.stop_all(); // AltDock: Stream A
     s.bulk.kill();
     s.tracker.mark_all_closing();
     // First, so that the list of clients taken next has anything they just started.
@@ -2649,6 +2647,9 @@ pub async fn backup_export(
         accounts,
         groups: groups.iter().map(|g| BackupGroup { name: g.name.clone(), color: g.color.clone(), sort_order: g.sort_order }).collect(),
         favourites,
+        // ---- AltDock: Stream A ----
+        macros: s.db.macros()?.into_iter().map(|m| backup::BackupMacro { name: m.name, body: m.body, hotkey: m.hotkey }).collect(),
+        // ---- end AltDock: Stream A ----
     };
     backup::write(Path::new(&path), &password, &payload)?;
     Ok(count)
@@ -2660,7 +2661,10 @@ fn check_backup(p: &backup::BackupPayload) -> Result<()> {
     let wrong = p.version != 1
         || p.accounts.iter().any(|a| a.user_id <= 0 || bad(&a.username) || bad(&a.display_name))
         || p.groups.iter().any(|g| bad(&g.name))
-        || p.favourites.iter().any(|f| f.name.is_empty() || bad(&f.name));
+        || p.favourites.iter().any(|f| f.name.is_empty() || bad(&f.name))
+        // ---- AltDock: Stream A ----
+        || p.macros.iter().any(|m| m.name.trim().is_empty() || m.name.trim().chars().count() > crate::storage::MAX_MACRO_NAME || crate::storage::check_macro_body(&m.body).is_err());
+    // ---- end AltDock: Stream A ----
     if wrong {
         return Err(AppError::Invalid(tr!("This isn't a RoALT backup.")));
     }
@@ -2747,6 +2751,26 @@ pub async fn backup_import(app: AppHandle, s: State<'_, App>, path: String, pass
         let blob = s.vault.encrypt(FAVOURITE_AAD, &json)?;
         s.db.save_favourite(None, &f.name, &blob, &ids, f.in_tray)?;
     }
+    // ---- AltDock: Stream A ----
+    // Macros this PC doesn't have yet, by name: untrusted until reviewed, and their hotkey only
+    // when it is free here.
+    let panic = s.db.settings()?.panic_hotkey;
+    for m in &payload.macros {
+        let have = s.db.macros()?;
+        if have.iter().any(|h| h.name.to_lowercase() == m.name.trim().to_lowercase()) {
+            continue;
+        }
+        if let Err(e) = crate::macros::check_text(&m.body) {
+            log::warn!("restore: macro {:?} left out: {e}", m.name);
+            continue;
+        }
+        let hotkey = if crate::macros::check_hotkey(m.hotkey.trim(), None, &have, &panic).is_ok() { m.hotkey.trim().to_owned() } else { String::new() };
+        s.db.save_macro(&crate::model::MacroInput { id: None, name: m.name.clone(), body: m.body.clone(), hotkey }, false)?;
+    }
+    if !payload.macros.is_empty() {
+        crate::macros::sync_hotkeys(&app);
+    }
+    // ---- end AltDock: Stream A ----
     crate::tray::refresh(&app);
     accounts_changed(&app);
     Ok(report)
@@ -3027,6 +3051,14 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
     // Last: it takes effect at once, so only once everything else is valid; put back if the
     // save then fails, so Windows and the settings agree.
     let had = v.panic_hotkey.clone();
+    // ---- AltDock: Stream A ----
+    if let Some(p) = patch.ahk_path {
+        v.ahk_path = crate::macros::check_ahk_path(&p)?;
+    }
+    if let Some(k) = &patch.panic_hotkey {
+        crate::macros::check_hotkey(k.trim(), None, &s.db.macros()?, "")?;
+    }
+    // ---- end AltDock: Stream A ----
     if let Some(k) = patch.panic_hotkey {
         let k = k.trim();
         set_panic_hotkey(&app, &had, k)?;

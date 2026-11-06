@@ -16,6 +16,7 @@
     {
       "identifier": "opener:allow-open-url",
       "allow": [
+        { "url": "https://www.autohotkey.com/*" },
         { "url": "https://www.roblox.com/*" },
         { "url": "https://devforum.roblox.com/t/*" },
         { "url": "https://about.roblox.com/newsroom/*" },

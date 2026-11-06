@@ -9,6 +9,7 @@ import { Dialog } from "../../ui/Dialog";
 import { toast, toastError } from "../../ui/Toast";
 import { isRunning, uptime } from "../launch/Running";
 import { mb } from "../monitor/MonitorView";
+import { AfkClientControls } from "./AfkClient"; // AltDock: Stream A
 
 const CAPS = [0, 50, 25, 10, 5];
 /** -1: the default from Settings; 0: never. */
@@ -120,6 +121,7 @@ function LimitsBody({ inst }: { inst: Instance }) {
         </span>
         <Switch label={t("launch.limits.antiAfkClient")} checked={inst.antiAfk} onChange={(on) => api.instanceSetAntiAfk(inst.id, on).catch(toastError)} />
       </div>
+      <AfkClientControls accountId={inst.accountId} /> {/* AltDock: Stream A */}
       <Disclosure summary={t("settings.moreAbout", { label: t("monitor.limits") })} className="home-limits-help">
         {t("launch.limits.help")}
       </Disclosure>

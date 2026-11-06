@@ -22,6 +22,7 @@ import type {
   JoinCandidate, LaunchTarget, MultiInstanceStatus, ParsedInput, Presence, PrivateServer, PrivateServerBuy, PrivateServerPage, PrivateServerPatch, PrivateServerSettings, ServerOrder, ServerPage,
   RobloxClient, Settings, VaultMode,
 } from "../api";
+import type { AfkClientConfig, Macro, MacroAssignment, MacroInput, MacroRun } from "../api"; // AltDock: Stream A
 
 const MIN = 60_000;
 const DAY = 86_400_000;
@@ -79,6 +80,7 @@ let settings: Settings = {
   discord: { crash: true, hang: true, memRestart: true, disconnect: true, restart: true, breaker: true, batchDone: true, launch: false, statusEveryMin: 0, ping: "" },
   autoUpdate: false, selfUpdate: true, tabLayout: "top", discordPresence: true, onlineCount: true, minimizeOnLaunch: false, microWidth: 320, microHeight: 240, tinyOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0, lowGraphics: true, skipSplash: false, protectMain: true, muteOnLaunch: false, windowLayout: "off", lighterRendering: true, renderFlags: { msaa: "x1", texture: "lowest", mode: "default", graySky: false, noGrass: true, lowestFrm: true, pauseVoxelizer: false },
   allowPublicNetworks: true, language: "",
+  ahkPath: "", // AltDock: Stream A
 };
 
 // Outdated, so Settings offers the update and the Launch view warns before a batch.
@@ -701,7 +703,159 @@ function reauth(password?: string) {
   return Promise.resolve();
 }
 
+// ---- AltDock: Stream A ----
+// Macros: AutoHotkey is "installed" (?ahk=0: not); "Shared farm loop" is imported (untrusted) and
+// refuses to run until trusted. "Main"'s account runs "Anti-idle jump" on its own once in a game.
+// Anti-AFK per account: any account can have its own interval and action.
+let macros: Macro[] = [
+  { id: 1, name: "Anti-idle jump", body: "; A_Args[1]: the client's window id, A_Args[2]: its pid\nwin := \"ahk_id \" A_Args[1]\nLoop {\n  WinActivate win\n  if WinWaitActive(win, , 2)\n    Send \"{Space}\"\n  Sleep 60000\n}\n", trusted: true, hotkey: "Ctrl+Shift+F1", createdAt: now - DAY, updatedAt: now - DAY },
+  { id: 2, name: "Shared farm loop", body: "Loop {\n  Send \"{w down}\"\n  Sleep 2000\n  Send \"{w up}\"\n}\n", trusted: false, hotkey: "", createdAt: now - MIN, updatedAt: now - MIN },
+];
+let macroRuns: MacroRun[] = [];
+let assignments: MacroAssignment[] = [{ accountId: 1, macroId: 1, autorun: true }];
+const afkClients = new Map<number, AfkClientConfig>();
+const AFK_KEY_NAMES = [..."ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", ...Array.from({ length: 24 }, (_, n) => `F${n + 1}`), "Space", "Tab", "Up", "Down", "Left", "Right"];
+const runsChanged = () => void emit("macros://runs", structuredClone(macroRuns));
+function stopMacroRuns(which: (r: MacroRun) => boolean) {
+  const before = macroRuns.length;
+  macroRuns = macroRuns.filter((r) => !which(r));
+  if (macroRuns.length !== before) runsChanged();
+}
+const afkOf = (accountId: number): AfkClientConfig =>
+  structuredClone(afkClients.get(accountId) ?? { enabled: true, intervalSec: Math.min(1140, Math.max(60, settings.antiAfk.intervalMin * 60)), action: "f13" });
+// Runs of gone clients stop; a client that reached a game starts its account's autorun macro once.
+const autorunSeen = new Set<string>();
+setInterval(() => {
+  stopMacroRuns((r) => !instances.some((i) => i.id === r.instanceId && i.state !== "exited"));
+  for (const i of instances.filter((x) => x.state === "inGame" && !autorunSeen.has(x.id))) {
+    autorunSeen.add(i.id);
+    const a = assignments.find((x) => x.accountId === i.accountId && x.autorun);
+    const m = a && macros.find((x) => x.id === a.macroId && x.trusted);
+    if (m && !macroRuns.some((r) => r.instanceId === i.id)) {
+      macroRuns.push({ instanceId: i.id, accountId: i.accountId, macroId: m.id, name: m.name, startedAt: Date.now(), restarts: 0 });
+      runsChanged();
+    }
+  }
+}, 1000);
+
+/** The Stream A commands; undefined: not one of them. */
+function streamA(cmd: string, args: Args): Promise<unknown> | undefined {
+  const ok = (v: unknown) => Promise.resolve(v);
+  switch (cmd) {
+    case "ahk_status":
+      return ok({ path: settings.ahkPath || (preview.get("ahk") === "0" ? null : "C:\\Program Files\\AutoHotkey\\v2\\AutoHotkey64.exe") });
+    case "macros_list":
+      return ok(structuredClone(macros));
+    case "macro_save": {
+      const { id, name, body, hotkey } = args.input as MacroInput;
+      const n = name.trim();
+      if (!n || n.length > 60) return fail("invalid", "Macro names need 1 to 60 characters.");
+      if (macros.some((m) => m.id !== id && m.name.toLowerCase() === n.toLowerCase())) return fail("invalid", `A macro called "${n}" already exists.`);
+      const key = hotkey.trim();
+      const clash = macros.find((m) => m.id !== id && key && m.hotkey.toLowerCase() === key.toLowerCase());
+      if (clash) return fail("invalid", `${key} is already the hotkey of ${clash.name}.`);
+      const old = macros.find((m) => m.id === id);
+      const m: Macro = old
+        ? Object.assign(old, { name: n, body, hotkey: key, updatedAt: Date.now() })
+        : { id: Math.max(0, ...macros.map((x) => x.id)) + 1, name: n, body, hotkey: key, trusted: true, createdAt: Date.now(), updatedAt: Date.now() };
+      if (!old) macros.push(m);
+      return ok(structuredClone(m));
+    }
+    case "macro_remove":
+      stopMacroRuns((r) => r.macroId === args.id);
+      macros = macros.filter((m) => m.id !== args.id);
+      assignments = assignments.filter((a) => a.macroId !== args.id);
+      return ok(null);
+    case "macro_trust": {
+      const m = macros.find((x) => x.id === args.id);
+      if (!m) return fail("notFound", "Not found.");
+      m.trusted = true;
+      return ok(structuredClone(m));
+    }
+    case "macros_import": {
+      const out = (args.paths as string[]).map((p): Macro => {
+        const base = (p.split(/[\\/]/).pop() ?? "Macro").replace(/\.[^.]*$/, "") || "Macro";
+        let name = base;
+        for (let n = 2; macros.some((m) => m.name.toLowerCase() === name.toLowerCase()); n++) name = `${base} (${n})`;
+        const m: Macro = { id: Math.max(0, ...macros.map((x) => x.id)) + 1, name, body: "; imported\nLoop {\n  Send \"{Space}\"\n  Sleep 30000\n}\n", trusted: false, hotkey: "", createdAt: Date.now(), updatedAt: Date.now() };
+        macros.push(m);
+        return m;
+      });
+      return ok(structuredClone(out));
+    }
+    case "macro_export":
+      return ok(null);
+    case "macro_run": {
+      const m = macros.find((x) => x.id === args.id);
+      if (!m) return fail("notFound", "Not found.");
+      if (!m.trusted) return fail("invalid", `Review ${m.name} on the Macros page before it runs.`);
+      for (const id of args.instanceIds as string[]) {
+        if (!instances.some((i) => i.id === id && i.state === "inGame")) return fail("invalid", "That client isn't in a game.");
+        if (macroRuns.some((r) => r.instanceId === id)) return fail("invalid", "That client is already running a macro. Stop it first.");
+      }
+      for (const id of args.instanceIds as string[]) {
+        const accountId = instances.find((i) => i.id === id)?.accountId ?? 0;
+        macroRuns.push({ instanceId: id, accountId, macroId: m.id, name: m.name, startedAt: Date.now(), restarts: 0 });
+      }
+      runsChanged();
+      return ok(structuredClone(macroRuns));
+    }
+    case "macro_stop":
+      stopMacroRuns((r) => r.instanceId === args.instanceId);
+      return ok(null);
+    case "macros_stop_all":
+    case "kill_all":
+      stopMacroRuns(() => true);
+      // Kill all goes on to the main handler.
+      return cmd === "kill_all" ? undefined : ok(null);
+    case "macro_runs":
+      return ok(structuredClone(macroRuns));
+    case "macro_assignments":
+      return ok(structuredClone(assignments));
+    case "macro_assign": {
+      if (!find(args.accountId)) return fail("notFound", "Not found.");
+      if (args.macroId !== null && !macros.some((m) => m.id === args.macroId)) return fail("notFound", "Not found.");
+      assignments = assignments.filter((a) => a.accountId !== args.accountId);
+      if (args.macroId !== null) assignments.push({ accountId: args.accountId, macroId: args.macroId, autorun: args.autorun });
+      void emit("macros://assignments");
+      return ok(structuredClone(assignments));
+    }
+    case "anti_afk_client_get":
+      return ok(afkOf(args.accountId));
+    case "anti_afk_client_set": {
+      const c = args.config as AfkClientConfig;
+      if (!find(args.accountId)) return fail("notFound", "Not found.");
+      if (!Number.isInteger(c.intervalSec) || c.intervalSec < 60 || c.intervalSec > 1140) return fail("invalid", "Anti-AFK must press a key every 1 to 19 minutes.");
+      let action = c.action;
+      if (typeof action !== "string") {
+        const asked = action.key.trim().toLowerCase();
+        const key = AFK_KEY_NAMES.find((k) => k.toLowerCase() === asked);
+        if (!key) return fail("invalid", `Anti-AFK can't press "${action.key}". Pick a letter, a digit, F1 to F24, Space, Tab or an arrow key.`);
+        action = { key };
+      }
+      afkClients.set(args.accountId, { ...c, action });
+      for (const i of instances.filter((x) => x.accountId === args.accountId && x.state !== "exited")) i.antiAfk = c.enabled;
+      instancesChanged();
+      return ok(afkOf(args.accountId));
+    }
+    // A client's switch is its account's.
+    case "instance_set_anti_afk": {
+      const i = instances.find((x) => x.id === args.id && x.state !== "exited");
+      if (!i) return fail("notFound", "Not found.");
+      afkClients.set(i.accountId, { ...afkOf(i.accountId), enabled: args.enabled });
+      for (const x of instances.filter((y) => y.accountId === i.accountId && y.state !== "exited")) x.antiAfk = args.enabled;
+      instancesChanged();
+      return ok(null);
+    }
+    default:
+      return undefined;
+  }
+}
+// ---- end AltDock: Stream A ----
+
 async function handle(cmd: string, args: Args): Promise<unknown> {
+  const a = streamA(cmd, args); // AltDock: Stream A
+  if (a !== undefined) return a;
   switch (cmd) {
     case "vault_status":
       return { mode: vault.mode, locked: vault.locked, accounts: accounts.length, autoLockMinutes: settings.autoLockMinutes, hasRecovery: !!vault.recovery };

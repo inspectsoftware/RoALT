@@ -11,6 +11,7 @@ import type { AreaDef, SettingsArea } from "./areas";
 import { SHORTCUTS } from "./shortcuts";
 import { PERFORMANCE_ENTRIES } from "../performance/entries";
 import { DISCORD_ENTRIES } from "../discord/entries";
+import { MACROS_ENTRIES } from "../macros/entries"; // AltDock: Stream A
 
 export type { AreaDef, SettingsArea };
 
@@ -19,6 +20,7 @@ export type Place =
   | { view: "settings"; area: SettingsArea; group?: Key }
   | { view: "performance"; group: Key }
   | { view: "discord"; group?: Key }
+  | { view: "macros"; group?: Key } // AltDock: Stream A
   | { view: Extract<View, "accounts" | "launch" | "dashboard">; link: true };
 
 /** What conditions and changing lines read. `background`: a background image is set. */
@@ -211,7 +213,7 @@ const KEY_ENTRIES: readonly Entry[] = SHORTCUTS.map((s) => ({
   aliases: ["shortcut", "hotkey", s.combo.toLowerCase()],
 }));
 
-export const ENTRIES: readonly Entry[] = [...SETTINGS_ENTRIES, ...PERFORMANCE_ENTRIES, ...DISCORD_ENTRIES, ...LINK_ENTRIES, ...KEY_ENTRIES];
+export const ENTRIES: readonly Entry[] = [...SETTINGS_ENTRIES, ...PERFORMANCE_ENTRIES, ...DISCORD_ENTRIES, ...MACROS_ENTRIES, ...LINK_ENTRIES, ...KEY_ENTRIES]; // AltDock: Stream A, macros
 
 const BY_ID = new Map(ENTRIES.map((e) => [e.id, e]));
 const KIDS = new Map<string, Entry[]>();

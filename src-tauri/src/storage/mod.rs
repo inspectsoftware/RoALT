@@ -3,6 +3,10 @@
 // ponytail: queries run on the calling (tokio) thread; move to spawn_blocking if any grows slow.
 
 mod cipher;
+// ---- AltDock: Stream A ----
+mod macros;
+pub use macros::{MAX_MACRO, MAX_MACRO_NAME, check_macro_body};
+// ---- end AltDock: Stream A ----
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -736,6 +740,10 @@ fn migrations() -> Migrations<'static> {
         M::up(include_str!("migrations/010_main_account.sql")),
         M::up(include_str!("migrations/011_macros.sql")),
         M::up(include_str!("migrations/012_drop_macros.sql")),
+        // ---- AltDock: Stream A ----
+        M::up(include_str!("migrations/013_macros_v2.sql")),
+        M::up(include_str!("migrations/014_afk_per_client.sql")),
+        // ---- end AltDock: Stream A ----
     ])
 }
 

@@ -23,7 +23,7 @@ const screenOf = (p: Place) => (p.view === "settings" ? `settings:${p.area}` : p
 export const keyOf = (p: Place) => `${screenOf(p)}|${"group" in p ? (p.group ?? "") : ""}`;
 
 // Island order: Settings' areas, then Performance, Discord, then the views links go to.
-const SCREENS = [...AREAS.map((a) => `settings:${a.id}`), "performance", "discord", "accounts", "launch", "dashboard"];
+const SCREENS = [...AREAS.map((a) => `settings:${a.id}`), "performance", "discord", "macros", "accounts", "launch", "dashboard"]; // AltDock: Stream A, macros
 const ORDER = new Map(ENTRIES.map((e, i) => [e.id, i]));
 const GROUP_ORDER = new Map<string, number>();
 ENTRIES.forEach((e, i) => {

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { api, asError, events, type VaultStatus } from "./api";
 import { qk, queryClient, useSetSettings, useSettings, useVault } from "./data";
+import { qkA } from "./data"; // AltDock: Stream A
 import { AppMenu } from "./app/AppMenu";
 import { Shell } from "./app/Shell";
 import { TitleTools } from "./app/TitleTools";
@@ -91,6 +92,23 @@ function Root() {
     ];
     return () => subs.forEach((p) => p.then((un) => un()));
   }, [qc]);
+
+  // ---- AltDock: Stream A ----
+  useEffect(() => {
+    const subs = [
+      // A restore brings macros; a removed account takes its macro and anti-AFK with it.
+      events.onAccountsChanged(() => {
+        for (const queryKey of [qkA.macros, qkA.macroAssignments, ["afkClient"]]) qc.invalidateQueries({ queryKey });
+      }),
+      // A client's anti-AFK switch is its account's.
+      events.onInstancesChanged(() => void qc.invalidateQueries({ queryKey: ["afkClient"] })),
+      events.onMacroRuns((runs) => qc.setQueryData(qkA.macroRuns, runs)),
+      events.onMacroAssignments(() => void qc.invalidateQueries({ queryKey: qkA.macroAssignments })),
+      events.onVaultLocked(() => qc.removeQueries({ queryKey: qkA.macros })),
+    ];
+    return () => subs.forEach((p) => p.then((un) => un()));
+  }, [qc]);
+  // ---- end AltDock: Stream A ----
 
   useActivity(unlocked);
 

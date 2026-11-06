@@ -7,6 +7,7 @@ import { MenuCheckItem, MenuItem, MenuLabel, MenuSeparator } from "../../ui/Popo
 import { toast, toastError } from "../../ui/Toast";
 import { launchOne, useLaunchStep } from "../launch/launchQueue";
 import { mb } from "../monitor/MonitorView";
+import { MacroMenuItems, MacroPickList } from "../macros/ClientMacro"; // AltDock: Stream A
 
 const CAPS = [0, 50, 25, 10, 5];
 
@@ -37,6 +38,24 @@ export function ClientMenu({ at, account, onClose, afkOn, closing, onLimits, onC
   const step = useLaunchStep();
   // The checks stay open while they change: they read the client as it is now.
   const i = useInstances().data?.find((x) => x.id === at?.inst.id && x.state !== "exited");
+  // ---- AltDock: Stream A ----
+  // Showing the account's macro to pick instead of the client's actions.
+  const [macroList, setMacroList] = useState(false);
+  useLayoutEffect(() => {
+    // Switched lists while open: the new one gets the focus, and room below as on opening.
+    const el = ref.current;
+    if (!el?.matches(":popover-open")) return;
+    const h = el.getBoundingClientRect().height;
+    setPos((p) => ({ ...p, top: Math.max(4, Math.min(p.top, innerHeight - h - 4)) }));
+    el.querySelector<HTMLElement>("[role^=menuitem]:not(:disabled)")?.focus();
+  }, [macroList]);
+  useEffect(() => {
+    const el = ref.current;
+    const closed = (e: Event) => (e as ToggleEvent).newState === "closed" && setMacroList(false);
+    el?.addEventListener("toggle", closed);
+    return () => el?.removeEventListener("toggle", closed);
+  }, []);
+  // ---- end AltDock: Stream A ----
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -89,7 +108,11 @@ export function ClientMenu({ at, account, onClose, afkOn, closing, onLimits, onC
       onKeyDown={menuKeys}
       style={{ position: "fixed", positionArea: "none", inset: "auto", left: pos.left, top: pos.top, margin: 0, maxHeight: "calc(100vh - 8px)" }}
     >
-      {i && at && (
+      {i && at && macroList ? (
+        <div key="macros" className="home-menu-swap">
+          <MacroPickList accountId={i.accountId} onBack={() => setMacroList(false)} /> {/* AltDock: Stream A */}
+        </div>
+      ) : i && at && (
         <>
           <MenuLabel>{t("launch.running.pid", { pid: i.pid })}</MenuLabel>
           {i.state === "disconnected" && !i.relaunching && account && (
@@ -125,6 +148,7 @@ export function ClientMenu({ at, account, onClose, afkOn, closing, onLimits, onC
             {afkOn ? t("dashboard.antiAfk") : t("dashboard.antiAfkOff")}
           </MenuCheckItem>
           <MenuItem icon="sliders" onSelect={() => onLimits(i.id)}>{t("home.limits")}</MenuItem>
+          <MacroMenuItems inst={i} onList={() => setMacroList(true)} /> {/* AltDock: Stream A */}
           <MenuSeparator />
           <MenuItem icon="x" disabled={closing.has(closeKey(i))} onSelect={() => onCloseClient(i, false)}>{t("common.close")}</MenuItem>
           <MenuItem icon="x" danger onSelect={() => onCloseClient(i, true)}>{t("dashboard.forceClose")}</MenuItem>

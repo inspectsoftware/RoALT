@@ -17,6 +17,10 @@ import { lastLaunchAccount } from "../features/launch/launchQueue";
 import { LaunchView } from "../features/launch/LaunchView";
 import { isLive } from "../features/launch/Running";
 import { draftFor, EMPTY_DRAFT, type Draft } from "../features/launch/target";
+// ---- AltDock: Stream A ----
+import { useMacroRuns } from "../data";
+import { MacrosView } from "../features/macros/MacrosView";
+// ---- end AltDock: Stream A ----
 import { MonitorView } from "../features/monitor/MonitorView";
 import { PerformanceView } from "../features/performance/PerformanceView";
 import { ServersView } from "../features/servers/ServersView";
@@ -55,6 +59,7 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
   const accounts = useAccounts();
   const groups = useGroups();
   const instances = useInstances().data ?? [];
+  const macroRuns = useMacroRuns().data?.length ?? 0; // AltDock: Stream A
   const [view, setView] = useState<View>("dashboard");
   const [area, setArea] = useState<SettingsArea>("launching");
   const [group, setGroup] = useState<number | null>(null);
@@ -223,6 +228,7 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
       shortcut: shortcutFor(v),
       current: view === v,
       count: s === "accounts" && accounts.data!.length > 0 ? accounts.data!.length : undefined,
+      badge: s === "macros" && macroRuns > 0 ? macroRuns : undefined, // AltDock: Stream A
       onSelect: () => (s === "servers" ? openServers() : s === "accounts" ? showAll() : go(v)),
     };
   };
@@ -328,6 +334,8 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
             <DiscordView />
           ) : view === "debug" ? (
             <DebugView />
+          ) : view === "macros" ? (
+            <MacrosView accounts={accounts.data} /> // AltDock: Stream A
           ) : view === "performance" ? (
             <PerformanceView />
           ) : (

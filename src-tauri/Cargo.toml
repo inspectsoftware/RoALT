@@ -1,6 +1,6 @@
 [package]
 name = "altdock"
-version = "1.0.2"
+version = "0.1.0"
 description = "Local-only Roblox account manager with background sessions (a fork of RoALT)"
 authors = ["AltDock contributors", "inspectsoftware (RoALT)"]
 license = "MIT"

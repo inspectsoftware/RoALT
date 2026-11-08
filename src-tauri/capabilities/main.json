@@ -17,6 +17,8 @@
       "identifier": "opener:allow-open-url",
       "allow": [
         { "url": "https://www.roblox.com/*" },
+        { "url": "https://devforum.roblox.com/t/*" },
+        { "url": "https://about.roblox.com/newsroom/*" },
         { "url": "https://github.com/inspectsoftware/*" },
         { "url": "https://discord.gg/*" }
       ]

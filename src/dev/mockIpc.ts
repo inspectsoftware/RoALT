@@ -18,8 +18,8 @@
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type {
-  AccountInfo, AccountStatus, AccountSummary, BulkProgress, BulkRequest, BulkStage, Crash, Favourite, GameInfo, GameServer, Group, Instance,
-  JoinCandidate, LaunchTarget, MultiInstanceStatus, ParsedInput, Presence, PrivateServer, PrivateServerPage, ServerOrder, ServerPage,
+  AccountInfo, AccountStatus, AccountSummary, AccountValue, BulkProgress, BulkRequest, BulkStage, Crash, Favourite, GameInfo, GameServer, GameStats, Group, Instance, LimitedItem, PlayerStats, RolimonsItem,
+  JoinCandidate, LaunchTarget, MultiInstanceStatus, ParsedInput, Presence, PrivateServer, PrivateServerBuy, PrivateServerPage, PrivateServerPatch, PrivateServerSettings, ServerOrder, ServerPage,
   RobloxClient, Settings, VaultMode,
 } from "../api";
 
@@ -66,6 +66,8 @@ let accounts: AccountSummary[] = seed.map(([alias, displayName, username, userId
   discordMuted: false,
   fpsCap: i === 1 ? 15 : null,
   fullQuality: false,
+  main: i === 0,
+  customFlags: {},
 }));
 
 let settings: Settings = {
@@ -75,8 +77,9 @@ let settings: Settings = {
   memRestartMb: 0, memThrottle: { mb: 0, cpuCap: 10 }, trimEveryMin: 0, autoSpread: false, fairCap: false,
   adaptive: { enabled: false, background: { cpuCap: 25, eco: true, trimEveryMin: null, affinity: null } }, bandwidthKbps: 0,
   antiAfk: { enabled: false, intervalMin: 15 },
-  discord: { crash: true, hang: true, memRestart: true, disconnect: true, restart: true, breaker: true, batchDone: true, launch: false, statusEveryMin: 0 },
-  autoUpdate: false, selfUpdate: true, tabLayout: "top", discordPresence: true, minimizeOnLaunch: false, liveHiddenPreviews: true, microWidth: 320, microHeight: 240, tinyOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0, lowGraphics: true, skipSplash: false, lighterRendering: true, renderFlags: { msaa: "x1", texture: "lowest", mode: "default", graySky: false, noGrass: true, lowestFrm: true, pauseVoxelizer: false },
+  discord: { crash: true, hang: true, memRestart: true, disconnect: true, restart: true, breaker: true, batchDone: true, launch: false, statusEveryMin: 0, ping: "" },
+  autoUpdate: false, selfUpdate: true, tabLayout: "top", discordPresence: true, onlineCount: true, minimizeOnLaunch: false, microWidth: 320, microHeight: 240, tinyOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0, lowGraphics: true, skipSplash: false, protectMain: true, muteOnLaunch: false, windowLayout: "off", lighterRendering: true, renderFlags: { msaa: "x1", texture: "lowest", mode: "default", graySky: false, noGrass: true, lowestFrm: true, pauseVoxelizer: false },
+  customFlags: {}, customFlagsScope: "global", lockPurchases: true, rolimonsValues: false,
   allowPublicNetworks: true, language: "",
 };
 
@@ -91,15 +94,19 @@ let robloxClient: RobloxClient = {
 /** RoALT's self-update: the background check "finds" the next minor version 10 s after start. */
 const APP_VERSION: string = import.meta.env.APP_VERSION;
 const NEXT_VERSION = APP_VERSION.replace(/^(\d+)\.(\d+)\..*$/, (_, a, b) => `${a}.${Number(b) + 1}.0`);
+/** The website's demo (`npm run build:demo`) never invents a RoALT release or usage numbers visitors could believe. */
+const DEMO = import.meta.env.MODE === "demo";
 let appUpdate: string | null = null;
 setTimeout(() => {
-  if (!settings.selfUpdate) return;
+  if (DEMO || !settings.selfUpdate) return;
   appUpdate = NEXT_VERSION;
   void emit("app://update", { current: APP_VERSION, available: appUpdate });
 }, 10_000);
 /** The fake vault's Discord webhook (the real one is encrypted; the UI only ever sees its id's end). */
 /** `roblox_install` runs: launches and a second install are refused, as in Rust. */
 let installing = false;
+/** Closes the mock sign-in window under way. */
+let cancelLogin: (() => void) | null = null;
 let shutdownAt: number | null = null;
 let background = new ArrayBuffer(0);
 const INSTALLING = "Roblox is being installed. Launch again once it is done.";
@@ -201,7 +208,7 @@ function endInstance(id: string, note: string) {
 }
 /** The last performance profile "saved" in the preview (performance_export). */
 let lastProfile: string | null = null;
-const PERF_KEYS = ["fpsCap", "lowGraphics", "lighterRendering", "renderFlags", "minimizeOnLaunch", "liveHiddenPreviews", "microWidth", "microHeight", "tinyOnLaunch", "memRestartMb", "memThrottle", "trimEveryMin", "autoSpread", "fairCap", "adaptive"] as const;
+const PERF_KEYS = ["fpsCap", "lowGraphics", "lighterRendering", "renderFlags", "minimizeOnLaunch", "muteOnLaunch", "microWidth", "microHeight", "tinyOnLaunch", "memRestartMb", "memThrottle", "trimEveryMin", "autoSpread", "fairCap", "adaptive"] as const;
 
 function perfProfile(previewFps: number) {
   const s: Record<string, unknown> = {};
@@ -316,7 +323,7 @@ function addFake(username: string): AccountSummary {
   const a: AccountSummary = {
     id, userId: 6000000000 + id, username, displayName: username.replace(/_/g, " "), alias: "", notes: "", color: null,
     favourite: false, sortOrder: accounts.length, groupIds: [], status: "valid", statusCheckedAt: Date.now(), createdAt: Date.now(),
-    allowDisconnect: false, launchArgs: null, discordMuted: false, fpsCap: null, fullQuality: false,
+    allowDisconnect: false, launchArgs: null, discordMuted: false, fpsCap: null, fullQuality: false, main: false, customFlags: {},
   };
   accounts.push(a);
   changed();
@@ -394,7 +401,7 @@ const target = (t: LaunchTarget): ParsedInput => ({ kind: "target", target: t })
 const bad = (reason: string): ParsedInput => ({ kind: "invalid", reason });
 const follow = (v?: string) => (idOf(v) ? target({ kind: "followUser", userId: Number(v) }) : bad("That user ID isn't valid."));
 
-/** A small stand-in for launcher::target::parse (the real rules: docs/research/ref_parse.py). */
+/** A small stand-in for launcher::target::parse (the real rules: src-tauri/src/launcher/target.rs). */
 function parseTarget(raw: string): ParsedInput {
   const s = raw.trim().replace(/^<|>$/g, "");
   if (!s) return bad("Paste a game link, an ID or @username.");
@@ -541,6 +548,79 @@ function fakeGame(placeId: number): GameInfo {
     iconUrl: placeId === SKY.placeId ? ISLAND : null, privateServers: placeId !== OBBY.placeId,
   };
 }
+/** A game's details: six passes (one off sale), twelve badges (the last never won); Mega Obby's
+ * badge list is "cut short". */
+function fakeStats(universeId: number): GameStats {
+  const n = universeId % 97;
+  const passNames = ["VIP", "Double Coins", "Radio", "Pet Slot", "Speed Coil", "Old Bundle"];
+  const prices = [480, 299, 99, 150, 75, null];
+  const badgeNames = ["Welcome", "First Island", "Sky High", "Collector", "Speedrunner", "Night Owl", "Builder", "Trader", "Champion", "Legend", "Mythic", "Impossible"];
+  return {
+    universeId, playing: 12_000 + n * 140, visits: 4_535_560_984 - n * 1_000_003, favourites: 2_985_238 - n * 1_001, maxPlayers: 12,
+    created: "2019-07-14T19:26:21.347Z", updated: new Date(Date.now() - 2 * 86_400_000).toISOString(), genre: "RPG", subgenre: n % 2 ? "Action RPG" : null,
+    upVotes: 96_236 - n * 10, downVotes: 15_161 + n * 7,
+    passes: passNames.map((name, i) => ({ id: universeId * 10 + i, name, price: prices[i], iconUrl: i === 0 ? ISLAND : null })),
+    badges: badgeNames.map((name, i) => ({ id: universeId * 100 + i, name, awarded: Math.round(5_000_000 / (i + 1) ** 2), awardedYesterday: Math.round(9_000 / (i + 1)), winRate: i === 11 ? 0 : 0.8 / (i + 1) ** 2.4, iconUrl: i === 0 ? ISLAND : null })),
+    morePasses: false, moreBadges: universeId === GAMES[7719004215][2],
+    ageRating: { label: n % 2 ? "Mild" : "Minimal", minimumAge: n % 2 ? 9 : null, descriptors: n % 2 ? ["Violence (Repeated/Mild)", "Fear (Occasional/Mild)"] : [] },
+    avatarType: n % 3 ? "MorphToR15" : "PlayerChoice", copying: false, places: 1 + (n % 15),
+    servers: Math.ceil((12_000 + n * 140) / 12), groupMembers: n % 2 ? 19_677_072 - n * 1_000 : null, archived: universeId === GAMES[7719004215][2],
+  };
+}
+
+/** A player's profile: user 2 hides their inventory; any other id is a made-up player. */
+function fakePlayer(userId: number): PlayerStats {
+  const n = userId % 97;
+  return {
+    userId, name: userId === 156 ? "builderman" : `Player${userId}`, displayName: userId === 156 ? "builderman" : `Player ${userId}`,
+    verified: userId === 156, banned: false, created: "2006-03-08T17:17:52.900Z", headshotUrl: ISLAND,
+    friends: 120 + n, followers: 69_896_436 - n, following: 3 + n,
+    presence: { kind: n % 3 === 0 ? 2 : n % 3, place: n % 3 === 0 ? "Sky Islands" : null },
+    groups: [
+      { id: 8, name: "Builders Club", role: "Owner", members: 1_377_559 },
+      { id: 3829, name: "Staff", role: "ROBLOX Staff", members: 302_968 },
+    ],
+    badges: [
+      { id: 1, name: "Administrator", imageUrl: null },
+      { id: 12, name: "Veteran", imageUrl: null },
+    ],
+    games: n % 2 ? [] : [{ universeId: 1559201384, placeId: 4410028153, name: "Sky Islands", visits: 24_854 }],
+    moreGames: false,
+  };
+}
+
+// ---------- Limiteds ----------
+
+const LIMITEDS: [assetId: number, name: string, rap: number][] = [
+  [1029025, "The Classic ROBLOX Fedora", 431_023], [1365767, "Valkyrie Helm", 263_297], [1031429, "Domino Crown", 6_120_000],
+  [20573078, "Shaggy", 1_438], [1125510, "The Void Star", 980_000], [19027209, "Perfectly Legitimate Business Hat", 42_100],
+  [48474313, "Red Sparkle Time Fedora", 395_000], [1158416, "Sparkle Time Fedora", 22_500], [16630147, "Bluesteel Bathysphere", 7_800],
+  [1081300, "Subspace Tripmine", 1_250], [4390891467, "Korblox Deathspeaker", 15_400], [11748356, "Clockwork's Headphones", 52_300],
+];
+const ROLI: Record<number, RolimonsItem> = {
+  1029025: { value: 450_000, demand: 4, trend: 2, projected: false, hyped: false, rare: true, acronym: "CF" },
+  1365767: { value: null, demand: 2, trend: 1, projected: true, hyped: false, rare: false, acronym: "Valk" },
+  1031429: { value: 6_500_000, demand: 3, trend: 3, projected: false, hyped: true, rare: true, acronym: "DC" },
+  1125510: { value: 1_100_000, demand: 1, trend: 0, projected: false, hyped: false, rare: false, acronym: null },
+};
+/** What each account holds as of its last count (`account_value`). */
+const holdings = new Map<number, { fetchedAt: number; items: { assetId: number; name: string; copies: number; rap: number }[] }>();
+function holdingsOf(a: AccountSummary) {
+  // Main holds a lot (some twice), Trader nothing, the others a few.
+  const picked = a.id === 1 ? LIMITEDS : a.alias === "Trader" ? [] : LIMITEDS.filter((_, i) => (i + a.id) % 4 === 0);
+  return picked.map(([assetId, name, rap], i) => ({ assetId, name, rap, copies: a.id === 1 && i < 2 ? 2 : 1 }));
+}
+function valueOf(h: { fetchedAt: number; items: { assetId: number; name: string; copies: number; rap: number }[] }): AccountValue {
+  const roli = settings.rolimonsValues;
+  const items: LimitedItem[] = h.items.map((i) => ({ ...i, rolimons: roli ? (ROLI[i.assetId] ?? null) : null }));
+  const worth = (i: LimitedItem) => i.rolimons?.value ?? i.rap;
+  const top = [...items].sort((x, y) => worth(y) - worth(x)).slice(0, 10);
+  return {
+    count: items.reduce((n, i) => n + i.copies, 0), rap: items.reduce((n, i) => n + i.rap * i.copies, 0),
+    value: roli ? items.reduce((n, i) => n + worth(i) * i.copies, 0) : null, top, partial: false, fetchedAt: h.fetchedAt,
+  };
+}
+
 let guest = { minute: 0, calls: 0 };
 /** Roblox's guest limit on the server list: 3 a minute, on a window aligned to the clock minute. */
 function guestLimited() {
@@ -548,16 +628,51 @@ function guestLimited() {
   guest = guest.minute === minute ? { minute, calls: guest.calls + 1 } : { minute, calls: 1 };
   return guest.calls > 3 ? Math.ceil(((minute + 1) * MIN - Date.now()) / 1000) : 0;
 }
+// Owner-side state of each private server; servers owned by a vault account get its userId.
+const vips = new Map<number, { ownerId: number | null; ownerName: string | null; settings: PrivateServerSettings }>();
+const bought: { vipServerId: number; ownerName: string }[] = [];
+const boughtKeys = new Set<string>();
+const NOT_OWNER = "Only the owner's account can change this.";
+const NO_NAME = "A private server needs a name.";
+
+function vipFor(vipServerId: number, name: string, ownerName: string | null) {
+  if (!vips.has(vipServerId)) {
+    const owner = accounts.find((x) => x.username === ownerName);
+    vips.set(vipServerId, {
+      ownerId: owner?.userId ?? (ownerName ? 1_000_000 + vipServerId : null),
+      ownerName,
+      settings: {
+        vipServerId, name, active: true, friendsAllowed: true, allowedUsers: [],
+        renews: false, expired: false, expires: new Date(now + 12 * DAY).toISOString(), price: 100,
+      },
+    });
+  }
+  return vips.get(vipServerId)!;
+}
+
+/** The server's settings when `accountId` is its (valid) owner, else the mock's refusal. */
+function ownedVip(accountId: number, vipServerId: number) {
+  const a = find(accountId);
+  if (!a) return fail("notFound", "Not found.");
+  if (a.status !== "valid") return fail("cookieInvalid", EXPIRED);
+  const v = vips.get(vipServerId);
+  return v && v.ownerId === a.userId ? v.settings : fail("invalid", NOT_OWNER);
+}
+
 function privatePage(placeId: number, a: AccountSummary): PrivateServerPage {
-  const s = (vipServerId: number, name: string, ownerName: string | null, playing: number, maxPlayers: number, joinable: boolean): PrivateServer => ({
-    vipServerId, name, ownerId: ownerName ? 1_000_000 + vipServerId : null, ownerName, playing, maxPlayers,
-    jobId: playing ? crypto.randomUUID() : null, accessCode: joinable ? crypto.randomUUID() : null,
-  });
+  const s = (vipServerId: number, name: string, ownerName: string | null, playing: number, maxPlayers: number, joinable: boolean): PrivateServer => {
+    const v = vipFor(vipServerId, name, ownerName);
+    return {
+      vipServerId, name: v.settings.name, ownerId: v.ownerId, ownerName, playing, maxPlayers,
+      jobId: playing ? crypto.randomUUID() : null, accessCode: joinable ? crypto.randomUUID() : null,
+    };
+  };
   const servers = placeId === OBBY.placeId ? [] : [
     s(70011, "Nova's VIP", "nova_builds", 3, 12, true),
     s(70012, "Trade hub", "lunatrades", 0, 12, true),
     s(70013, "Kai's friends only", "skyrunner_k", 11, 12, false),
     s(70014, "", null, 2, 8, false),
+    ...bought.map((b) => s(b.vipServerId, "", b.ownerName, 0, 12, true)),
   ];
   return { servers, nextCursor: null, joinRestricted: a.username === "studio_nova" };
 }
@@ -579,6 +694,10 @@ async function runBatch(b: BulkProgress, favouriteId: number | null, fpsCap: num
       b.note = "No server had room for everyone, so the rest follow the first account.";
     }
   }
+  // Spreading: each account to a different server with a spare seat.
+  const spread = !["off", "pickFirst", "followFirst"].includes(b.sameServer) && target.kind === "place"
+    ? fakeServers(target.placeId).filter((s) => s.playing + 2 <= s.maxPlayers).map((s) => s.id)
+    : null;
   let prev: Instance | null = null;
   for (const item of b.items) {
     if (prev) {
@@ -601,7 +720,9 @@ async function runBatch(b: BulkProgress, favouriteId: number | null, fpsCap: num
       continue;
     }
     retakeLock();
-    const i = track(a.id, 14000 + Math.floor(Math.random() * 9000), target, placeOfTarget(target), a.username === "studio_nova", 0, fpsCap);
+    const job = spread?.shift();
+    const own: LaunchTarget = job && target.kind === "place" ? { kind: "server", placeId: target.placeId, jobId: job } : target;
+    const i = track(a.id, 14000 + Math.floor(Math.random() * 9000), own, placeOfTarget(own), a.username === "studio_nova", 0, fpsCap);
     item.instanceId = i.id;
     item.stage = { kind: "starting" };
     bulkChanged();
@@ -721,15 +842,29 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       await sleep(1200);
       ["ram_alt_1", "ram_alt_2", "ram_alt_3"].forEach(addFake);
       return { added: 3, updated: 1, skipped: 0, failed: 1 };
-    case "account_add_login":
-      await sleep(3500);
-      return addFake(`fresh_login_${accounts.length + 1}`);
+    case "account_add_login": {
+      // As the sign-in window: the user signs in, or closes it (account_login_cancel does too).
+      const closed = await new Promise<boolean>((done) => {
+        cancelLogin = () => done(true);
+        setTimeout(() => done(false), args.username ? 2500 : 3500);
+      });
+      cancelLogin = null;
+      if (closed) return fail("cancelled", "Cancelled.");
+      if (/^bad/i.test(args.username ?? "")) return fail("invalid", "Roblox refused this sign-in.");
+      return addFake(args.username ?? `fresh_login_${accounts.length + 1}`);
+    }
+    case "account_login_cancel":
+      cancelLogin?.();
+      return null;
     case "account_update": {
       const a = find(args.id);
       if (!a) return fail("notFound", "Not found.");
       const p = args.patch;
       if (/["'&|<>^]/.test(p.launchArgs ?? "")) return fail("invalid", "Launch arguments can't contain that character.");
       if (p.fpsCap && p.fpsCap < 5) return fail("invalid", "The FPS cap must be 0 (off) or 5 to 360.");
+      const badFlag = Object.keys(p.customFlags ?? {}).find((k) => !/^\w{1,128}$/.test(k));
+      if (badFlag !== undefined) return fail("invalid", `"${badFlag}" isn't an FFlag name: use 1 to 128 letters, digits or _.`);
+      if (p.main) for (const o of accounts) o.main = false;
       Object.assign(a, p, p.color === undefined ? {} : { color: p.color || null }, p.launchArgs === undefined ? {} : { launchArgs: p.launchArgs.trim() || null }, p.fpsCap === undefined ? {} : { fpsCap: p.fpsCap || null });
       changed();
       return structuredClone(a);
@@ -756,11 +891,26 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       changed();
       return structuredClone(accounts);
     }
+    case "accounts_befriend": {
+      const n = accounts.filter((a) => args.ids.includes(a.id) && a.status === "valid").length;
+      await sleep(400);
+      return { added: (n * (n - 1)) / 2, already: 0, failed: 0, challenged: [] };
+    }
     case "account_reveal_cookie":
       await reauth(args.password);
       return FAKE_COOKIE;
     case "account_copy_cookie":
       await reauth(args.password);
+      return null;
+    case "accounts_export_cookies": {
+      await reauth(args.password);
+      const n = accounts.filter((a) => !args.accountIds || args.accountIds.includes(a.id)).length;
+      await sleep(300);
+      return { path: "C:\\Users\\you\\AppData\\Roaming\\RoALT\\exports\\RoALT-cookies-20261104-211500.txt", count: n, skipped: 0, deletesAt: Date.now() + 600_000 };
+    }
+    case "cookie_export_delete":
+      return 1;
+    case "cookie_export_reveal":
       return null;
 
     case "account_info": {
@@ -778,9 +928,17 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       return accounts
         .filter((a) => (args.ids as number[]).includes(a.id) && a.status === "valid")
         .map((a) => ({ accountId: a.id, presence: presenceOf(a) }));
-    case "account_open_session":
-      await sleep(500);
-      return find(args.id) ? null : fail("notFound", "Not found.");
+    // No native page in a browser preview: Browse's pane stays empty.
+    case "browse_open":
+      await sleep(300);
+      if (!find(args.accountId)) return fail("notFound", "Not found.");
+      // As the page reports itself once loaded (Browse's toolbar shows Details on a game's page).
+      void emit("browse://page", { accountId: args.accountId, path: args.path });
+      return null;
+    case "browse_bounds":
+    case "browse_nav":
+    case "browse_close":
+      return null;
 
     case "target_parse":
       return parseTarget(String(args.input ?? ""));
@@ -874,6 +1032,48 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "game_info":
       await sleep(400);
       return args.placeId === 1 ? fail("notFound", "Not found.") : fakeGame(args.placeId);
+    case "game_stats":
+      await sleep(700);
+      return fakeStats(args.universeId);
+    case "account_value": {
+      const a = find(args.id);
+      if (!a) return fail("notFound", "Not found.");
+      if (args.refresh) {
+        await sleep(700 + (a.id % 5) * 250);
+        if (a.status !== "valid") return fail("cookieInvalid", "The cookie is no longer valid.");
+        holdings.set(a.id, { fetchedAt: Date.now(), items: holdingsOf(a) });
+      }
+      const h = holdings.get(a.id);
+      return h ? valueOf(h) : null;
+    }
+    case "browse_card":
+      return null;
+    case "player_stats":
+      await sleep(600);
+      return args.userId === 1 ? fail("notFound", "Not found.") : fakePlayer(args.userId);
+    case "player_value": {
+      await sleep(args.refresh ? 1500 : 900);
+      if (args.userId === 2) return { private: true, busy: false, value: null };
+      const items = LIMITEDS.filter((_, i) => (i + args.userId) % 3 === 0).map(([assetId, name, rap]) => ({ assetId, name, rap, copies: 1 }));
+      return { private: false, busy: false, value: valueOf({ fetchedAt: Date.now(), items }) };
+    }
+    case "games_popular": {
+      await sleep(500);
+      const games = (names: string[], seed: number) =>
+        names.map((name, i) => ({ universeId: seed + i, rootPlaceId: 4410028153 + seed + i, name, playing: 120_000 - i * 9_000 - seed, upVotes: 9_000 - i * 400, downVotes: 600 + i * 90, iconUrl: null }));
+      return [
+        { id: "top-trending", name: "Top Trending", games: games(["Sky Islands", "Mega Obby", "Pet Valley", "Tower Run", "Fruit Seas", "Mine Rush"], 0) },
+        { id: "up-and-coming", name: "Up-and-Coming", games: games(["Tiny Kingdoms", "Neon Drift", "Garden Grow"], 100) },
+        { id: "top-playing-now", name: "Top Playing Now", games: games(["Steal An Egg", "Brick Battle", "Doors Below", "Speed Simulator"], 200) },
+      ];
+    }
+    case "playtime_list":
+      await sleep(300);
+      return [
+        { accountId: accounts[0].id, placeId: 4410028153, ms: 3 * 3_600_000 + 12 * 60_000, lastPlayed: Date.now() - 20 * 60_000 },
+        { accountId: accounts[1].id, placeId: 4410028153, ms: 95 * 60_000, lastPlayed: Date.now() - 3 * 3_600_000 },
+        { accountId: accounts[2].id, placeId: 7719004215, ms: 42 * 60_000, lastPlayed: Date.now() - 26 * 3_600_000 },
+      ];
     case "target_place": {
       await sleep(300);
       const t: LaunchTarget = args.target;
@@ -890,6 +1090,51 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       if (a.status !== "valid") return fail("cookieInvalid", EXPIRED);
       if (args.placeId === 1) return fail("notFound", "Not found.");
       return privatePage(args.placeId, a);
+    }
+    case "private_server_get": {
+      await sleep(400);
+      const s = ownedVip(args.accountId, args.vipServerId);
+      return s instanceof Promise ? s : structuredClone(s);
+    }
+    case "private_server_update": {
+      await sleep(500);
+      const s = ownedVip(args.accountId, args.vipServerId);
+      if (s instanceof Promise) return s;
+      const p: PrivateServerPatch = args.patch;
+      if (p.name != null && !p.name.trim()) return fail("invalid", NO_NAME);
+      if (p.name != null) s.name = p.name.trim();
+      if (p.active != null) s.active = p.active;
+      if (p.friendsAllowed != null) s.friendsAllowed = p.friendsAllowed;
+      const allowed = new Set(s.allowedUsers.map((u) => u.userId));
+      for (const userId of p.usersToAdd ?? []) {
+        const known = accounts.find((x) => x.userId === userId);
+        if (known && !allowed.has(userId)) s.allowedUsers.push({ userId, username: known.username, displayName: known.displayName });
+      }
+      s.allowedUsers = s.allowedUsers.filter((u) => !p.usersToRemove?.includes(u.userId));
+      return structuredClone(s);
+    }
+    case "private_server_renew": {
+      await sleep(500);
+      const s = ownedVip(args.accountId, args.vipServerId);
+      if (s instanceof Promise) return s;
+      s.renews = args.on;
+      return structuredClone(s);
+    }
+    case "private_server_buy": {
+      await sleep(800);
+      const b: PrivateServerBuy = args.buy;
+      const a = find(b.accountId);
+      if (!a) return fail("notFound", "Not found.");
+      if (a.status !== "valid") return fail("cookieInvalid", EXPIRED);
+      if (!b.name.trim()) return fail("invalid", NO_NAME);
+      // The real API refuses a wrong price and charges nothing; the mock's servers cost 100.
+      if (b.expectedPrice !== 100) return fail("invalid", "Roblox refused the purchase and charged nothing: check the price on the game's page.");
+      if (boughtKeys.has(b.idempotencyKey)) return null;
+      boughtKeys.add(b.idempotencyKey);
+      const vipServerId = 80000 + bought.length;
+      vipFor(vipServerId, b.name.trim(), a.username).settings.renews = true;
+      bought.push({ vipServerId, ownerName: a.username });
+      return null;
     }
 
     case "groups_list":
@@ -918,11 +1163,22 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       return { added: 2, updated: args.onConflict === "replace" ? 7 : 0, skipped: args.onConflict === "skip" ? 7 : 0, failed: 0 };
 
     case "instances_list":
+      // ?instances=slow (Home's loading state) or =fail (its error state).
+      if (preview.get("instances") === "slow") await sleep(2500);
+      if (preview.get("instances") === "fail") return fail("internal", "Couldn't read the running clients.");
       return structuredClone(instances);
     case "instance_close":
       await sleep(600);
       endInstance(args.id, "Closed");
       return null;
+    case "instance_move": {
+      // As commands::instance_move: close the playing client, then launch again.
+      const i = instances.find((x) => x.id === args.id);
+      if (!i) return fail("notFound", "Not found.");
+      await sleep(600);
+      endInstance(i.id, "Closed");
+      return handle("launch", { accountId: i.accountId, target: args.target, favouriteId: args.favouriteId, fpsCap: args.fpsCap });
+    }
     case "instances_close_all":
       await sleep(900);
       instances.forEach((i) => endInstance(i.id, "Closed"));
@@ -973,6 +1229,12 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       instancesChanged();
       return args.on ? (args.size ?? [settings.microWidth, settings.microHeight]) : [800, 600];
     }
+    case "layout_preview_stop":
+      return null;
+    case "layout_preview":
+      // A browser has no screen to draw on; the real preview opens a window over the monitor.
+      if (settings.windowLayout === "off") return fail("invalid", "Pick Fit or Tiny to see where the windows go.");
+      return null;
     case "instances_tile": {
       const shown = instances.filter((i) => i.state !== "exited" && i.state !== "starting" && !ghosts.has(i.id));
       if (args.micro) shown.forEach((i) => { i.micro = true; });
@@ -1017,6 +1279,7 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       return null;
     }
     case "bandwidth_status":
+      if (preview.get("bandwidth") === "error") return fail("internal", "Windows didn't say which QoS policies are set.");
       return { kbps: settings.bandwidthKbps, active: settings.bandwidthKbps > 0 && bandwidthActive };
     case "bandwidth_apply":
       await sleep(1500);
@@ -1092,11 +1355,31 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       if (!webhook) return fail("invalid", "Set a webhook first.");
       if (webhook.token.includes("deleted")) return fail("invalid", "Discord refused the webhook; it may have been deleted. Paste a new one.");
       return null;
+    case "news": {
+      await sleep(700);
+      const at = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
+      const release = (v: string, hours: number, notes: string) => ({ id: `roalt:${v}`, source: "roalt", title: `RoALT ${v}`, summary: notes, url: `https://github.com/inspectsoftware/RoALT/releases/tag/v${v}`, published: at(hours), version: v });
+      const forum = (id: number, title: string, hours: number, summary: string) => ({ id: `devforum:${id}`, source: "devforum", title, summary, url: `https://devforum.roblox.com/t/topic/${id}`, published: at(hours), version: null });
+      const month = new Date().toISOString().slice(0, 7);
+      return {
+        items: [
+          ...(DEMO ? [] : [release(NEXT_VERSION, 3, "## New\n- **A redesigned app**: the island, client cards, Home tabs and a searchable Settings.\n- Export cookies from Accounts.\n- Private servers: change their settings, or buy one.\n\n## Fixed\n- Tooltips no longer jump to the corner of the window.\n- Switching to the side layout no longer flashes the tab strip.\n- The Performance icon sits centred.\n\nNo Authenticode signature yet.")]),
+          forum(9001, "Studio MCP Server Updates: Open Cloud Access in Your MCP Client", 5, "Key Takeaways MCP now has full access to Open Cloud; connected agents can help you manage your game beyond building…"),
+          forum(9002, "PlayerCharacterDestroyBehavior Will Be Default on November 11", 9, "Hi Creators, What’s Changing We introduced PlayerCharacterDestroyBehavior as an opt-in property almost three years ago…"),
+          forum(9003, "Release Notes for 745", 200, ""),
+          release(APP_VERSION, 72, "## Fixes\n- **Anti-AFK now really keeps clients online.**"),
+          { id: `newsroom:${month}/the-hollow`, source: "newsroom", title: "The Hollow: New Platform-Wide Survival Event for Halloween", summary: "", url: "https://about.roblox.com/newsroom", published: month, version: null },
+        ],
+        failed: [],
+      };
+    }
+    case "online_ping":
+      return !DEMO && settings.onlineCount ? { online: 1284, playing: 5120 } : null;
     case "self_update_status":
       return { current: APP_VERSION, available: appUpdate };
     case "self_update_check":
       await sleep(800);
-      appUpdate = NEXT_VERSION;
+      appUpdate = DEMO ? null : NEXT_VERSION;
       return { current: APP_VERSION, available: appUpdate };
     case "self_update_install":
       if (!appUpdate) return fail("invalid", "RoALT is up to date.");
@@ -1161,6 +1444,9 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       return null;
     case "background_get":
       return background;
+    case "browser_data_reset":
+      await sleep(300);
+      return true;
     case "logs_clean":
       await sleep(400);
       return { files: 7, bytes: 183_500_800 };
@@ -1176,7 +1462,7 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "shutdown_status":
       return shutdownAt;
     case "network_status":
-      return { public: false };
+      return { public: publicNetwork };
     case "data_dir_move":
       await sleep(1200);
       if (batch && !batch.done) return fail("invalid", MOVE_BUSY);
@@ -1214,6 +1500,26 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       const r = perfParse(cmd === "performance_parse" ? args.text : lastProfile ?? perfProfile(15));
       return typeof r === "string" ? fail("invalid", r) : r;
     }
+    case "performance_benchmark": {
+      // A canned Tight result (the real one takes ~22 s); planning for 13 clients fails.
+      await sleep(2000);
+      if (args.target === 13) return fail("internal", "Windows stopped answering about the clients' memory. Try again.");
+      const n = args.target ?? 5;
+      return {
+        bench: { cores: 8, ramMb: 16_384, clients: 5, background: 4, perMb: 1400, peakPrivateMb: 1900, perCores: 0.6, freeCores: 1.2, underLimits: false, otherMb: 3000, otherCores: 0.6, gpuPeak: 42, caps: "unknown", memRestarts: 0, longCrashes: 0 },
+        advice: {
+          n, tier: "tight", ramRatio: 0.61, cpuRatio: 0.45, room: 7,
+          suggestions: [
+            { id: "fpsCap", params: { fps: 20 }, profile: { fpsCap: 20 } },
+            { id: "minimizeOnLaunch", params: { n }, profile: { minimizeOnLaunch: true } },
+            { id: "muteOnLaunch", params: { n }, profile: { muteOnLaunch: true } },
+            { id: "adaptive", params: { cap: 25 }, profile: { adaptive: { enabled: true, background: { cpuCap: 25, eco: true, trimEveryMin: null, affinity: null } } } },
+            { id: "trimEveryMin", params: { min: 30 }, profile: { trimEveryMin: 30 } },
+            { id: "previewFps", params: { fps: 15 }, profile: { previewFps: 15 } },
+          ],
+        },
+      };
+    }
 
     case "plugin:dialog|save":
       return `C:\\Users\\you\\Documents\\${args.options?.defaultPath ?? "backup.roalt"}`;
@@ -1226,6 +1532,42 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       if (!/^plugin:(window|opener|clipboard-manager)\|/.test(cmd)) console.warn("[mock ipc] unhandled", cmd);
       return null;
   }
+}
+
+// Preview switches, for states that are slow or awkward to reach by hand:
+//   ?locked=1  vault locked at start      ?public=1   on a Public network with the guard on
+//   ?norecovery=1  no recovery code set
+//   ?theme=light|dark|system  ?lang=ar  ?accent=c6f432  ?layout=side
+//   ?accounts=200  that many more accounts (long-list checks)
+//   ?scenario=busy  three clients start, then a batch of three ("AFK 1" fails in it)
+//   ?bandwidth=lapsed  a limit Windows has dropped (it restarted)   ?bandwidth=error  its status can't be read
+//   ?instances=slow  Home's client list comes late   ?instances=fail  it can't be read
+//   (?splash=1 replays the splash: Splash.tsx; ?rm=1 reduces motion: ui/motion/reduced.ts)
+const preview = new URLSearchParams(location.search);
+let publicNetwork = false;
+if (preview.has("locked")) vault.locked = true;
+if (preview.has("norecovery")) vault.recovery = "";
+if (preview.has("public")) {
+  publicNetwork = true;
+  settings.allowPublicNetworks = false;
+}
+const themeArg = preview.get("theme");
+if (themeArg === "light" || themeArg === "dark" || themeArg === "system") settings.theme = themeArg;
+if (preview.get("lang")) settings.language = preview.get("lang")!;
+const accentArg = preview.get("accent")?.replace(/^#/, "");
+if (accentArg && /^[0-9a-f]{6}$/i.test(accentArg)) settings.accent = `#${accentArg.toLowerCase()}`;
+if (preview.get("layout") === "side") settings.tabLayout = "side";
+if (preview.get("bandwidth") === "lapsed") settings.bandwidthKbps = 2500;
+const extra = Math.min(5000, Number(preview.get("accounts")) || 0);
+for (let n = 0; n < extra; n++) {
+  const id = accounts.length + 1;
+  accounts.push({ ...accounts[1], id, userId: 7_000_000_000 + n, username: `bulk_alt_${n + 1}`, displayName: `Bulk ${n + 1}`, alias: "", sortOrder: id, main: false, favourite: false, fpsCap: null, groupIds: n % 3 ? [3] : [] });
+}
+if (preview.get("scenario") === "busy") {
+  strangerRunning = false;
+  lockHeld = true;
+  [1, 2, 7].forEach((id, n) => setTimeout(() => track(id, 9000 + n, { kind: "place", placeId: 1818, launchData: null }, 1818, id === 7), 200 + n * 180));
+  setTimeout(() => void startBatch({ accountIds: [3, 5, 8], target: { kind: "place", placeId: 1818, launchData: null }, delayMs: 6000, sameServer: "off", favouriteId: null, fpsCap: null }), 1600);
 }
 
 mockWindows("main");

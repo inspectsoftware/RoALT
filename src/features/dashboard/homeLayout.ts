@@ -1,6 +1,10 @@
 import { useEffect, useState, type SetStateAction } from "react";
-import { api, type AccountSummary } from "../../api";
-import { EMPTY_DRAFT, targetText, type Draft } from "../launch/target";
+import { api, type AccountSummary, type Instance } from "../../api";
+import { json, readStored, useStored, writeStored } from "../../ui/stored";
+import type { LaunchActivity } from "../launch/launchQueue";
+import { isLive } from "../launch/Running";
+import { EMPTY_DRAFT, readDraft, targetText, type Draft } from "../launch/target";
+import { useNewsFeed } from "../news/news";
 
 /** How Home lays out its clients; remembered on this PC, apart from the accounts' launch order. */
 const DETAILED = "roalt.homeDetailed";
@@ -8,129 +12,52 @@ const ORDER = "roalt.homeOrder";
 const SIZES = "roalt.homeSizes";
 const TABS = "roalt.homeTabs";
 const SECTIONS = "roalt.sectionOrder";
-/** When this PC keeps no storage, the choices last until RoALT closes. */
-let unsavedSections: string[] | null = null;
-let unsavedDetailed: boolean | null = null;
-let unsavedOrder: number[] | null = null;
-let unsavedSizes: Record<number, number> | null = null;
-let unsavedTabs: StoredTab[] | null = null;
 
 /** A tab of Home: one account, its own game. `status` is its launch, while one is under way or failed. */
 export type HomeTab = { accountId: number; draft: Draft; status?: "queued" | "launching" | "failed" };
 type StoredTab = { accountId: number; text: string };
 
-// The unsaved value first: storage that still reads but no longer writes holds an older one.
-function storedDetailed(): boolean {
-  if (unsavedDetailed !== null) return unsavedDetailed;
-  try {
-    return localStorage.getItem(DETAILED) !== "0";
-  } catch {
-    return true;
-  }
-}
-
-function storedOrder(): number[] {
-  if (unsavedOrder) return unsavedOrder;
-  try {
-    const v: unknown = JSON.parse(localStorage.getItem(ORDER) ?? "null");
-    return Array.isArray(v) ? v.filter((n): n is number => typeof n === "number") : [];
-  } catch {
-    return [];
-  }
-}
-
-function storedSections(): string[] {
-  if (unsavedSections) return unsavedSections;
-  try {
-    const v: unknown = JSON.parse(localStorage.getItem(SECTIONS) ?? "null");
-    return Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
-function storedSizes(): Record<number, number> {
-  if (unsavedSizes) return unsavedSizes;
-  try {
-    const v: unknown = JSON.parse(localStorage.getItem(SIZES) ?? "null");
-    return v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).filter(([, w]) => typeof w === "number")) : {};
-  } catch {
-    return {};
-  }
-}
-
 /** Card widths the user chose, by account id as with the order; the others share a row's space. */
 export function useHomeSizes(): [Record<number, number>, (id: number, width: number | null) => void] {
-  const [sizes, setSizes] = useState(storedSizes);
+  const [sizes, setSizes] = useStored(SIZES, (s): Record<number, number> => {
+    const v = json(s);
+    return v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).filter(([, w]) => typeof w === "number")) : {};
+  }, JSON.stringify);
   return [sizes, (id, width) => {
     const next = { ...sizes };
     if (width === null) delete next[id];
     else next[id] = width;
-    unsavedSizes = next;
     setSizes(next);
-    try {
-      localStorage.setItem(SIZES, JSON.stringify(next));
-    } catch {
-      // No storage: kept in `unsavedSizes`.
-    }
   }];
 }
 
-/** Detailed cards, or only the picture and the username. */
-export function useHomeDetailed(): [boolean, (on: boolean) => void] {
-  const [on, setOn] = useState(storedDetailed);
-  return [on, (next) => {
-    unsavedDetailed = next;
-    setOn(next);
-    try {
-      localStorage.setItem(DETAILED, next ? "1" : "0");
-    } catch {
-      // No storage: kept in `unsavedDetailed`.
-    }
-  }];
-}
+/** Detailed cards, or only the picture and the username. Stored as "1" or "0". */
+export const useHomeDetailed = () => useStored(DETAILED, (s) => s !== "0", (on) => (on ? "1" : "0"));
 
 /** Account ids in the order Home shows them. By account because an instance's id changes on rejoin. */
-export function useHomeOrder(): [number[], (ids: number[]) => void] {
-  const [order, setOrder] = useState(storedOrder);
-  return [order, (next) => {
-    unsavedOrder = next;
-    setOrder(next);
-    try {
-      localStorage.setItem(ORDER, JSON.stringify(next));
-    } catch {
-      // No storage: kept in `unsavedOrder`.
-    }
-  }];
-}
+export const useHomeOrder = () =>
+  useStored(ORDER, (s) => {
+    const v = json(s);
+    return Array.isArray(v) ? v.filter((n): n is number => typeof n === "number") : [];
+  }, JSON.stringify);
 
-/** `list` in the remembered order; accounts it doesn't know yet follow, as they came. */
-export function homeSorted<T extends { accountId: number }>(list: T[], order: number[]): T[] {
+/** `list` in the remembered order, by `key` (the item itself by default); ones it doesn't know yet
+ * follow, as they came. */
+export function byOrder<T>(list: readonly T[], order: readonly unknown[], key: (x: T) => unknown = (x) => x): T[] {
   const at = new Map(order.map((id, n) => [id, n]));
-  const rank = (i: T) => at.get(i.accountId) ?? order.length;
+  const rank = (x: T) => at.get(key(x)) ?? order.length;
   return [...list].sort((a, b) => rank(a) - rank(b));
 }
 
-/** `ids` in the remembered order; ones it doesn't know yet follow, as they came. */
-export function byOrder<T>(ids: readonly T[], order: T[]): T[] {
-  const at = new Map(order.map((id, n) => [id, n]));
-  const rank = (id: T) => at.get(id) ?? order.length;
-  return [...ids].sort((a, b) => rank(a) - rank(b));
-}
+/** `list` in the remembered order of its accounts. */
+export const homeSorted = <T extends { accountId: number }>(list: T[], order: number[]) => byOrder(list, order, (i) => i.accountId);
 
 /** RoALT's sections in the order the user dragged them to, by name. */
-export function useSectionOrder(): [string[], (ids: string[]) => void] {
-  const [order, setOrder] = useState(storedSections);
-  return [order, (next) => {
-    unsavedSections = next;
-    setOrder(next);
-    try {
-      localStorage.setItem(SECTIONS, JSON.stringify(next));
-    } catch {
-      // No storage: kept in `unsavedSections`.
-    }
-  }];
-}
+export const useSectionOrder = () =>
+  useStored(SECTIONS, (s) => {
+    const v = json(s);
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  }, JSON.stringify);
 
 /** The order after moving shown[from] before shown[over] (or after the last shown, at the end).
  * `shown` holds one id per tile (an account's, for clients, tabs and rows); ids not shown now keep
@@ -164,14 +91,7 @@ export function storedText(d: Draft): string {
 }
 
 function storedTabs(): HomeTab[] {
-  let v: unknown = unsavedTabs;
-  if (!v) {
-    try {
-      v = JSON.parse(localStorage.getItem(TABS) ?? "null");
-    } catch {
-      // No storage, nothing saved.
-    }
-  }
+  const v = json(readStored(TABS));
   if (!Array.isArray(v)) return [];
   return (v as Partial<StoredTab>[])
     .filter((s) => typeof s?.accountId === "number" && typeof s.text === "string")
@@ -180,11 +100,23 @@ function storedTabs(): HomeTab[] {
 
 const unparsed = (d: Draft) => !!d.text.trim() && d.parsed?.text !== d.text;
 
+/** Home's open tab: an account's id, "news", or null for Overview. */
+export type HomeActive = number | "news" | null;
+/** Home opens on News once per start, the first time it knows of something unread. */
+let landed = false;
+
 /** Home's tabs. Shell owns them, so they and a launch in flight survive leaving Home, and a link
- * code in one goes with everything else when the vault locks. `active`: an account id, null for Overview. */
+ * code in one goes with everything else when the vault locks. */
 export function useHomeTabs(accounts: AccountSummary[] | undefined) {
   const [tabs, setTabs] = useState(storedTabs);
-  const [active, setActive] = useState<number | null>(null);
+  const [active, setActive] = useState<HomeActive>(null);
+  const { unread, query } = useNewsFeed();
+  // Only while Home is still on Overview: a tab picked meanwhile stays.
+  useEffect(() => {
+    if (landed || !query.isFetched) return;
+    landed = true;
+    if (unread) setActive((a) => (a === null ? "news" : a));
+  }, [query.isFetched, unread]);
   // One order for an account's client, tab and row, so sorting one sorts them all.
   const [order, setOrder] = useHomeOrder();
   const setDraft =(id: number, f: SetStateAction<Draft>) =>
@@ -208,12 +140,7 @@ export function useHomeTabs(accounts: AccountSummary[] | undefined) {
     if (!stale.length) {
       // Only now: until it is parsed, text may hold a link code. What was saved stays till then.
       const saved = tabs.map((tab): StoredTab => ({ accountId: tab.accountId, text: storedText(tab.draft) }));
-      unsavedTabs = saved;
-      try {
-        localStorage.setItem(TABS, JSON.stringify(saved));
-      } catch {
-        // No storage: kept in `unsavedTabs`.
-      }
+      writeStored(TABS, JSON.stringify(saved));
       return;
     }
     const timer = setTimeout(() => {
@@ -230,7 +157,7 @@ export function useHomeTabs(accounts: AccountSummary[] | undefined) {
     tabs,
     order,
     setOrder,
-    active: tabs.some((tab) => tab.accountId === active) ? active : null,
+    active: active === "news" || tabs.some((tab) => tab.accountId === active) ? active : null,
     setActive,
     setDraft,
     add: (id: number) => {
@@ -246,3 +173,21 @@ export function useHomeTabs(accounts: AccountSummary[] | undefined) {
   };
 }
 export type HomeTabs = ReturnType<typeof useHomeTabs>;
+
+/** The tabs "Play with N" starts: a signed-in account, a target that reads (or is still being read)
+ * and no client of its own on its way or in a game. */
+export function readyTabs(tabs: HomeTab[], byId: Map<number, AccountSummary>, instances: Instance[]) {
+  return tabs.filter((tab) => {
+    const { usable, pending } = readDraft(tab.draft);
+    return byId.get(tab.accountId)?.status === "valid" && (usable || pending) && !instances.some((i) => i.accountId === tab.accountId && isLive(i));
+  });
+}
+
+/** Where an account is in the launch on show: waiting for its turn, launching, or it didn't start
+ * (and has no client on its way or in a game). */
+export function tabLaunch(activity: LaunchActivity | null, accountId: number, live: boolean): HomeTab["status"] {
+  const kind = activity?.rows.find((r) => r.accountId === accountId && r.account)?.stage.kind;
+  if (kind === "queued") return activity!.done ? undefined : "queued";
+  if (kind === "ticket") return "launching";
+  return kind === "failed" && !live ? "failed" : undefined;
+}

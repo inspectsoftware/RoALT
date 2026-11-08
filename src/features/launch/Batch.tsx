@@ -80,7 +80,7 @@ export function BatchSection({ accounts, onPick }: { accounts: AccountSummary[];
     .filter((i) => own(i)?.status === "valid")
     .map((i) => i.accountId);
   const target = describeTarget(p.target);
-  const summary = [target.kind, p.sameServer === "pickFirst" ? t("launch.batch.sameServer") : p.sameServer === "followFirst" ? t("launch.batch.followingFirst") : null, t("launch.batch.seconds", { s: fmtNum(p.delayMs / 1000) })]
+  const summary = [target.kind, p.sameServer === "pickFirst" ? t("launch.batch.sameServer") : p.sameServer === "followFirst" ? t("launch.batch.followingFirst") : null, `${fmtNum(p.delayMs / 1000)} ${t("launch.seconds")}`]
     .filter(Boolean)
     .join(" · ");
   const cancel = () => {

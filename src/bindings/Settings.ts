@@ -3,10 +3,12 @@ import type { Adaptive } from "./Adaptive";
 import type { AntiAfk } from "./AntiAfk";
 import type { Density } from "./Density";
 import type { DiscordEvents } from "./DiscordEvents";
+import type { FlagScope } from "./FlagScope";
 import type { MemThrottle } from "./MemThrottle";
 import type { RenderFlags } from "./RenderFlags";
 import type { TabLayout } from "./TabLayout";
 import type { Theme } from "./Theme";
+import type { WindowLayout } from "./WindowLayout";
 
 /**
  * App settings, stored as one JSON value. New fields need `#[serde(default)]` semantics,
@@ -77,6 +79,18 @@ closeToTray: boolean,
  */
 skipSplash: boolean, 
 /**
+ * Select-all (accounts list, launch picker) leaves the MAIN account out.
+ */
+protectMain: boolean, 
+/**
+ * Each client's own Windows audio session is muted once it reaches a game (`instances::audio`).
+ */
+muteOnLaunch: boolean, 
+/**
+ * Launched clients go into this layout on RoALT's monitor; not Off: it replaces `tiny_on_launch`.
+ */
+windowLayout: WindowLayout, 
+/**
  * Restart a client whose private memory stays over this many MB (3 samples, 10 s apart),
  * within the breaker; 0: off, else 512..=65 536.
  */
@@ -123,15 +137,22 @@ selfUpdate: boolean,
  */
 discordPresence: boolean, 
 /**
+ * Ping RoALT's online counter every 2 minutes with a random id made once per launch, and
+ * show how many people use RoALT beside the Discord button (`online`). Off: nothing is sent.
+ */
+onlineCount: boolean, 
+/**
+ * While counting an account's limiteds, download Rolimons' public item list (`rolimons`;
+ * api.rolimons.com, at most every 30 minutes) and add its value, demand and trend. No user id,
+ * name or cookie is sent. Off by default: Rolimons isn't Roblox.
+ */
+rolimonsValues: boolean, 
+/**
  * Hide each client (without taking the focus) once, when it first reaches a game, unless its
  * account is full quality. A hidden client (`instances::window`) stays live while Home shows
  * it and sleeps otherwise, and comes back from the taskbar or Alt-Tab.
  */
 minimizeOnLaunch: boolean, 
-/**
- * Home's previews keep hidden clients awake and drawing. Off: they sleep and show their last picture.
- */
-liveHiddenPreviews: boolean, 
 /**
  * System-wide key combination for Kill all, like "Ctrl+Shift+F12"; "" for none.
  */
@@ -154,6 +175,20 @@ lowGraphics: boolean,
  * geometry detail and what `render_flags` picks.
  */
 lighterRendering: boolean, renderFlags: RenderFlags, 
+/**
+ * The user's own FFlags (`launcher::flags`), written over `lighter_rendering`'s at each
+ * launch while `custom_flags_scope` is Global; Roblox ignores those off its allowlist.
+ */
+customFlags: { [key in string]: string }, 
+/**
+ * Whose FFlags a launch writes: `custom_flags`, or the account's own.
+ */
+customFlagsScope: FlagScope, 
+/**
+ * Browse refuses anything that spends Robux (free items still work) and the Robux, Premium and
+ * billing pages (`browse`); RoALT's own private server purchase is refused too. On by default.
+ */
+lockPurchases: boolean, 
 /**
  * Width and height "Make it tiny" and "Tile tiny windows" use.
  */

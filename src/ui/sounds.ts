@@ -1,9 +1,11 @@
 import { useSyncExternalStore } from "react";
+// No relative imports (signal.ts, stored.ts): scripts/test-sounds.mjs loads this file in plain Node.
 
 export type Sound = "click" | "on" | "off" | "notification" | "success" | "error";
 type Preferences = { enabled: boolean; volume: number };
 const KEY = "roalt.sounds";
-const DEFAULT: Preferences = { enabled: true, volume: 0.35 };
+// Off until the user opts in, so upgrades don't suddenly start clicking.
+const DEFAULT: Preferences = { enabled: false, volume: 0.35 };
 function read(): Preferences {
   try {
     const saved = JSON.parse(localStorage.getItem(KEY) ?? "null");
@@ -28,12 +30,22 @@ const active = new Set<OscillatorNode>();
 let installed = false;
 let lastControl = -Infinity;
 let lastNotice = -Infinity;
+let idle: ReturnType<typeof setTimeout> | undefined;
+// A running context renders silence all session: suspend it 30 s after the last input or sound.
+// Not sooner: suspending closes the output stream, and reopening it delays or clips the next sound.
+function rest() {
+  clearTimeout(idle);
+  idle = setTimeout(() => {
+    if (!active.size) void context?.suspend().catch(() => {});
+  }, 30_000);
+}
 function unlock() {
   if (!preferences.enabled || !preferences.volume) return;
   try {
     context ??= new AudioContext();
     if (context.state === "suspended") void context.resume().catch(() => {});
   } catch { /* Audio must never interrupt an action. */ }
+  rest();
 }
 /** Short locally synthesized sounds; no network or audio assets. */
 export function playSound(sound: Sound) {
@@ -75,12 +87,16 @@ export function playSound(sound: Sound) {
     else if (sound === "success") { note(660, 660, 0.07); note(880, 880, 0.10, 0.08); }
     else { note(240, 210, 0.09); note(190, 170, 0.12, 0.10); }
   } catch { /* An unavailable audio device doesn't affect the UI. */ }
+  rest();
 }
 export function previewSound() {
   unlock();
   if (context?.state === "suspended") void context.resume().then(() => playSound("success")).catch(() => {});
   else playSound("success");
 }
+/** Controls that pick one of several: a click, or nothing when it is already the one. */
+const CHOICE = '[data-choice], .seg, .swatch, .preset, .island-item, .island-child, .rail-item, [role="tab"], [role="option"], [role="radio"], [role="menuitemradio"]';
+
 /** Read ARIA state before React starts a possibly asynchronous settings update. */
 export function interactionSound(target: HTMLElement): Sound | null {
   if (target instanceof HTMLInputElement && ["checkbox", "radio"].includes(target.type)) {
@@ -89,9 +105,10 @@ export function interactionSound(target: HTMLElement): Sound | null {
   const checked = target.getAttribute("aria-checked");
   const pressed = target.getAttribute("aria-pressed");
   const selected = target.getAttribute("aria-selected");
-  // Picking a preset, tab, or option is selection, not switching a feature off.
-  if (target.matches('.seg, .swatch, .preset-select, .preset, .nav-item, .rounded-full[aria-pressed], [role="tab"], [role="option"]')) {
-    return [checked, pressed, selected].includes("true") ? null : "click";
+  const current = target.getAttribute("aria-current") === "page" ? "true" : null;
+  // Picking a preset, tab, place or option is selection, not switching a feature off.
+  if (target.matches(CHOICE)) {
+    return [checked, pressed, selected, current].includes("true") ? null : "click";
   }
   const state = checked ?? pressed;
   return state === "true" ? "off" : state === "false" || state === "mixed" ? "on" : "click";

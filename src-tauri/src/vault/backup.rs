@@ -60,6 +60,11 @@ pub struct BackupAccount {
     pub fps_cap: Option<u32>,
     #[serde(default)]
     pub full_quality: bool,
+    #[serde(default)]
+    pub main: bool,
+    // Absent in backups from before custom FFlags: the account's own flags stay then.
+    #[serde(default)]
+    pub custom_flags: Option<std::collections::BTreeMap<String, String>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -177,9 +182,19 @@ mod tests {
                 discord_muted: true,
                 fps_cap: Some(30),
                 full_quality: true,
+                main: true,
+                custom_flags: Some([("FFlagDebugSkyGray".into(), "True".into())].into()),
             }],
             groups: vec![BackupGroup { name: "Mains".into(), color: None, sort_order: 0 }],
         }
+    }
+
+    #[test]
+    fn older_backups_have_no_custom_flags() {
+        let mut v = serde_json::to_value(&sample().accounts[0]).unwrap();
+        v.as_object_mut().unwrap().remove("customFlags");
+        let a: BackupAccount = serde_json::from_value(v).unwrap();
+        assert!(a.custom_flags.is_none(), "None keeps the account's own flags on import");
     }
 
     #[test]
@@ -196,8 +211,15 @@ mod tests {
         assert_eq!((back.version, back.exported_at), (1, 1_700_000_000));
         assert_eq!(back.accounts[0].cookie.as_str(), "fake-cookie");
         assert_eq!(back.accounts[0].groups, ["Mains"]);
+        assert_eq!(back.accounts[0].custom_flags.as_ref().unwrap()["FFlagDebugSkyGray"], "True");
         assert_eq!(back.groups[0].name, "Mains");
         assert!(matches!(wrong, Err(AppError::WrongPassword)));
+    }
+
+    #[test]
+    fn a_backup_with_the_removed_macros_still_reads() {
+        let old: BackupPayload = serde_json::from_str(r#"{"version":1,"exportedAt":5,"accounts":[],"groups":[],"favourites":[],"macros":[{"name":"x","body":"Send 'w'"}]}"#).unwrap();
+        assert_eq!(old.exported_at, 5);
     }
 
     #[test]

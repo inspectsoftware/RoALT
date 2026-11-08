@@ -33,4 +33,13 @@ fpsCap: number | null,
 /**
  * Its clients keep the user's own graphics: no lowest graphics or lighter rendering.
  */
-fullQuality: boolean, };
+fullQuality: boolean, 
+/**
+ * The user's own account (at most one): listed first, left out of select-all while
+ * `Settings.protect_main`, and confirmed before removal or showing its cookie.
+ */
+main: boolean, 
+/**
+ * Its own FFlags (`launcher::flags`), used while `Settings.custom_flags_scope` is Account.
+ */
+customFlags: { [key in string]: string }, };

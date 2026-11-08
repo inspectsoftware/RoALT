@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::App;
 use crate::error::{AppError, Result};
-use crate::model::{LaunchInfo, LaunchTarget};
+use crate::model::{FlagScope, LaunchInfo, LaunchTarget};
 use crate::roblox_api::Client;
 use crate::roblox_api::types::{ShareLinkResolution, ShareLinkV2, ShareTarget};
 use crate::vault::{Secret, cookie_aad};
@@ -168,13 +168,19 @@ pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget, fps_cap: Op
     let account = s.db.account(account_id)?;
     let fps = fps_cap.or(account.fps_cap).unwrap_or(settings.fps_cap);
     let undo = client_settings::apply(&s.db, fps, settings.low_graphics && !account.full_quality);
-    let flags = match (settings.lighter_rendering && !account.full_quality, exe.bootstrapper) {
-        (false, _) => None,
-        (true, true) => {
-            log::info!("lighter rendering skipped for account {account_id}: a bootstrapper manages Roblox's flags");
+    let lighter = (settings.lighter_rendering && !account.full_quality).then_some(&settings.render_flags);
+    let custom = match settings.custom_flags_scope {
+        FlagScope::Global => &settings.custom_flags,
+        FlagScope::Account => &account.custom_flags,
+    };
+    let set = flags::launch_set(lighter, custom);
+    let flags = match (set.is_empty(), exe.bootstrapper) {
+        (true, _) => None,
+        (false, true) => {
+            log::info!("FFlags skipped for account {account_id}: a bootstrapper manages Roblox's flags");
             None
         }
-        (true, false) => flags::apply(&exe.path, &settings.render_flags),
+        (false, false) => flags::apply(&exe.path, &set),
     };
     let waiting = undo.is_some() || flags.is_some();
     let put_back = move |undo: Option<client_settings::Undo>| {
@@ -212,13 +218,15 @@ pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget, fps_cap: Op
         _ => put_back(undo),
     }
     let (pid, pid_start) = started?;
+    update::note_started(s, &exe, production, pid, pid_start);
 
     log::info!(
-        "launched account {account_id} (pid {pid}, bootstrapper: {}, {} extra argument(s), Roblox processes running now: {}, lighter rendering: {}, full quality: {})",
+        "launched account {account_id} (pid {pid}, bootstrapper: {}, {} extra argument(s), Roblox processes running now: {}, lighter rendering: {}, custom FFlags: {}, full quality: {})",
         exe.bootstrapper,
         args.len(),
         crate::instances::process::roblox_processes().len(),
         settings.lighter_rendering,
+        custom.len(),
         account.full_quality,
     );
     Ok(LaunchInfo {

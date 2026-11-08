@@ -4,9 +4,12 @@ import { createRoot } from "react-dom/client";
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
 import "./theme.css";
-import App, { THEME_KEY } from "./App";
+import App from "./App";
+import { accentTokens, ACCENT_KEY, applyAccent, THEME_KEY } from "./app/theme";
 import { debugLog } from "./api";
-import { t } from "./i18n";
+import { loadLastLang, t } from "./i18n";
+import { LayoutPreview, type PreviewData } from "./features/launch/LayoutPreview";
+import { assertMotionTokens, installReactive, installReducedMotion } from "./ui/motion";
 
 // Everything that goes wrong in the UI reaches roalt.log (the Debug tab).
 let forwarding = false;
@@ -53,26 +56,58 @@ class Boundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   }
 }
 
+// Before first paint: the last theme and accent, so a light or coloured start doesn't flash.
 try {
-  const t = localStorage.getItem(THEME_KEY);
-  // The resolved theme (never "system").
-  if (t === "light") document.documentElement.dataset.theme = t;
-
+  const theme = localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark";
+  const root = document.documentElement;
+  if (theme === "light") root.dataset.theme = theme;
+  const accent = localStorage.getItem(ACCENT_KEY);
+  if (accent && /^#[0-9a-f]{6}$/i.test(accent)) {
+    applyAccent(accent, theme);
+    // The splash is always dark: its cube takes the dark-theme shade.
+    root.style.setProperty("--splash-accent", accentTokens(accent, "dark").text);
+  }
 } catch {
-  // No storage: the default (dark) applies until settings load.
+  // No storage: the defaults (dark, monochrome) apply until settings load.
 }
 
-// Plain-browser preview (`npm run dev` outside Tauri). Dead code in production builds.
-if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
+// The window layout preview window (`layout_preview`): its spots, not the app.
+const preview = (window as { __ROALT_LAYOUT_PREVIEW__?: PreviewData }).__ROALT_LAYOUT_PREVIEW__;
+// Its window is see-through: the app's own background (and its fade-in) must never paint.
+if (preview) {
+  for (const el of [document.documentElement, document.body]) {
+    el.style.setProperty("background", "transparent", "important");
+    el.style.setProperty("transition", "none", "important");
+  }
+}
+
+installReducedMotion();
+installReactive();
+
+// Plain-browser preview (`npm run dev` outside Tauri), and the website's demo (`npm run build:demo`).
+// Dead code in production builds.
+if (!preview && (import.meta.env.DEV || import.meta.env.MODE === "demo") && !("__TAURI_INTERNALS__" in window)) {
   await import("./dev/mockIpc");
 }
+if (import.meta.env.DEV) assertMotionTokens();
 
-installSounds();
+if (!preview) installSounds();
+
+// Dev only (?gallery): every primitive in its states. Dead code in production builds.
+const gallery = import.meta.env.DEV && new URLSearchParams(location.search).has("gallery") ? await import("./dev/GalleryRoot") : null;
+
+await loadLastLang();
 
 createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <Boundary>
-      <App />
-    </Boundary>
-  </StrictMode>,
+  preview ? (
+    <LayoutPreview data={preview} />
+  ) : gallery ? (
+    <gallery.GalleryRoot />
+  ) : (
+    <StrictMode>
+      <Boundary>
+        <App />
+      </Boundary>
+    </StrictMode>
+  ),
 );

@@ -79,7 +79,7 @@ fn memory_line(r: &super::metrics::Reading) -> String {
 }
 
 /// Our own job object; never a handle to the client.
-struct Job(Owned<HANDLE>);
+pub(crate) struct Job(Owned<HANDLE>);
 // SAFETY: a job handle may be used from any thread; it is only used under the Limiter's lock.
 unsafe impl Send for Job {}
 
@@ -536,7 +536,7 @@ fn set_affinity(pid: u32, t0: u64, mask: Option<u64>) -> Result<()> {
     unsafe { SetProcessAffinityMask(*h, mask as usize) }.map_err(|e| failed(pid, e))
 }
 
-fn new_job() -> Result<Job> {
+pub(crate) fn new_job() -> Result<Job> {
     // SAFETY: default security, no name; Owned closes the handle on drop.
     unsafe { CreateJobObjectW(None, PCWSTR::null()) }.map(|h| Job(unsafe { Owned::new(h) })).map_err(|e| AppError::Internal(e.message()))
 }

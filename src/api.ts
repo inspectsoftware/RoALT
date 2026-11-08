@@ -2,6 +2,12 @@
 import { invoke as rawInvoke, type InvokeArgs } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { AccountInfo } from "./bindings/AccountInfo";
+import type { BrowseNav } from "./bindings/BrowseNav";
+import type { GameSort } from "./bindings/GameSort";
+import type { GameStats } from "./bindings/GameStats";
+import type { AccountValue } from "./bindings/AccountValue";
+import type { PlaytimeRow } from "./bindings/PlaytimeRow";
+import type { PaneRect } from "./bindings/PaneRect";
 import type { AccountPatch } from "./bindings/AccountPatch";
 import type { AccountPresence } from "./bindings/AccountPresence";
 import type { AccountSummary } from "./bindings/AccountSummary";
@@ -12,6 +18,7 @@ import type { BulkRequest } from "./bindings/BulkRequest";
 import type { ClientMetrics } from "./bindings/ClientMetrics";
 import type { SystemUsage } from "./bindings/SystemUsage";
 import type { Profile } from "./bindings/Profile";
+import type { Benchmark } from "./bindings/Benchmark";
 import type { ServerVisit } from "./bindings/ServerVisit";
 import type { ConflictPolicy } from "./bindings/ConflictPolicy";
 import type { Crash } from "./bindings/Crash";
@@ -25,6 +32,8 @@ import type { Group } from "./bindings/Group";
 import type { GroupInput } from "./bindings/GroupInput";
 import type { Headshot } from "./bindings/Headshot";
 import type { ImportReport } from "./bindings/ImportReport";
+import type { FriendReport } from "./bindings/FriendReport";
+import type { CookieExport } from "./bindings/CookieExport";
 import type { InstallProgress } from "./bindings/InstallProgress";
 import type { Instance } from "./bindings/Instance";
 import type { JoinCandidate } from "./bindings/JoinCandidate";
@@ -34,26 +43,36 @@ import type { Limits } from "./bindings/Limits";
 import type { LogsCleaned } from "./bindings/LogsCleaned";
 import type { MultiInstanceStatus } from "./bindings/MultiInstanceStatus";
 import type { Notice } from "./bindings/Notice";
+import type { Online } from "./bindings/Online";
 import type { ParsedInput } from "./bindings/ParsedInput";
 import type { PrivateServerPage } from "./bindings/PrivateServerPage";
+import type { PrivateServerBuy } from "./bindings/PrivateServerBuy";
+import type { PrivateServerPatch } from "./bindings/PrivateServerPatch";
+import type { PrivateServerSettings } from "./bindings/PrivateServerSettings";
 import type { NetworkStatus } from "./bindings/NetworkStatus";
+import type { News } from "./bindings/News";
 import type { RobloxClient } from "./bindings/RobloxClient";
 import type { ServerOrder } from "./bindings/ServerOrder";
 import type { ServerPage } from "./bindings/ServerPage";
 import type { Settings } from "./bindings/Settings";
 import type { SettingsPatch } from "./bindings/SettingsPatch";
 import type { UserRef } from "./bindings/UserRef";
+import type { UserSearchResult } from "./bindings/UserSearchResult";
+import type { GameSearchResult } from "./bindings/GameSearchResult";
 import type { VaultMode } from "./bindings/VaultMode";
 import type { VaultStatus } from "./bindings/VaultStatus";
 
 export type {
-  AccountInfo, AccountPresence, Headshot,
+  AccountInfo, AccountPresence, Headshot, UserSearchResult, GameSearchResult,
   Favourite, FavouriteInput, JoinCandidate, LaunchInfo, LaunchTarget, ParsedInput, UserRef,
   BandwidthStatus, ClientMetrics, Crash, DiscordStatus, Instance, MultiInstanceStatus, BulkProgress, BulkRequest, ServerOrder, ServerPage, GameInfo, PrivateServerPage, DataDir, LogsCleaned, Notice, RobloxClient,
   AccountPatch, AccountSummary, AppUpdate, ConflictPolicy, ErrorPayload, Group, GroupInput,
   ImportReport, InstallProgress, Settings, SettingsPatch, VaultMode, VaultStatus,
 };
 export type { AccountStatus } from "./bindings/AccountStatus";
+export type { News } from "./bindings/News";
+export type { NewsItem } from "./bindings/NewsItem";
+export type { NewsSource } from "./bindings/NewsSource";
 export type { Adaptive } from "./bindings/Adaptive";
 export type { Profile } from "./bindings/Profile";
 export type { SystemUsage } from "./bindings/SystemUsage";
@@ -66,6 +85,8 @@ export type { Density } from "./bindings/Density";
 export type { DiscordEvents } from "./bindings/DiscordEvents";
 export type { GameServer } from "./bindings/GameServer";
 export type { PrivateServer } from "./bindings/PrivateServer";
+export type { AllowedUser } from "./bindings/AllowedUser";
+export type { PrivateServerBuy, PrivateServerPatch, PrivateServerSettings };
 export type { SameServer } from "./bindings/SameServer";
 export type { InstanceState } from "./bindings/InstanceState";
 export type { Limits } from "./bindings/Limits";
@@ -73,6 +94,23 @@ export type { Presence } from "./bindings/Presence";
 export type { PresenceKind } from "./bindings/PresenceKind";
 export type { Subscription } from "./bindings/Subscription";
 export type { Theme } from "./bindings/Theme";
+export type { BrowsePage } from "./bindings/BrowsePage";
+export type { BrowsePlay } from "./bindings/BrowsePlay";
+export type { BrowseBlocked } from "./bindings/BrowseBlocked";
+export type { BrowseNav, PaneRect, GameSort, PlaytimeRow, GameStats, AccountValue };
+export type { PopularGame } from "./bindings/PopularGame";
+export type { GamePass } from "./bindings/GamePass";
+export type { GameBadge } from "./bindings/GameBadge";
+export type { LimitedItem } from "./bindings/LimitedItem";
+export type { RolimonsItem } from "./bindings/RolimonsItem";
+export type { AgeRating } from "./bindings/AgeRating";
+export type { PlayerGame } from "./bindings/PlayerGame";
+export type { PlayerGroup } from "./bindings/PlayerGroup";
+export type { RobloxBadge } from "./bindings/RobloxBadge";
+import type { PlayerStats } from "./bindings/PlayerStats";
+import type { PlayerValue } from "./bindings/PlayerValue";
+export type { PlayerStats, PlayerValue };
+import type { PageCard } from "./bindings/PageCard";
 
 /** What instance_show does with a client's window (window::Show). */
 export type WindowShow = "focus" | "minimize" | "restore";
@@ -98,7 +136,7 @@ function invoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
 }
 
 /** One `log://log` event (tauri-plugin-log's Webview target): level 1 trace … 5 error. */
-export type LogRecord = { level: number; message: string };
+type LogRecord = { level: number; message: string };
 
 export const api = {
   vaultStatus: () => invoke<VaultStatus>("vault_status"),
@@ -123,28 +161,41 @@ export const api = {
   /** Roblox Account Manager's AccountData.json (plain or DPAPI, not password-locked). */
   accountsImportRam: (path: string) => invoke<ImportReport>("accounts_import_ram", { path }),
   /** Opens the Roblox sign-in window; resolves once the cookie is captured. */
-  accountAddLogin: () => invoke<AccountSummary>("account_add_login"),
+  /** Roblox's sign-in window; `fill` goes into its form (a bulk `user:pass` line), never stored. */
+  accountAddLogin: (fill?: { username: string; password: string }) => invoke<AccountSummary>("account_add_login", { username: fill?.username, password: fill?.password }),
+  /** Closes the open sign-in window: its accountAddLogin fails "cancelled". */
+  accountLoginCancel: () => invoke<void>("account_login_cancel"),
   accountUpdate: (id: number, patch: AccountPatch) => invoke<AccountSummary>("account_update", { id, patch }),
   accountsReorder: (ids: number[]) => invoke<void>("accounts_reorder", { ids }),
   accountsRemove: (ids: number[]) => invoke<void>("accounts_remove", { ids }),
   accountsValidate: (ids?: number[]) => invoke<AccountSummary[]>("accounts_validate", { ids }),
+  accountsBefriend: (ids: number[]) => invoke<FriendReport>("accounts_befriend", { ids }),
   /** Master mode needs the password; DPAPI mode shows Windows Hello. */
   accountRevealCookie: (id: number, password?: string) => invoke<string>("account_reveal_cookie", { id, password }),
   accountCopyCookie: (id: number, password?: string) => invoke<void>("account_copy_cookie", { id, password }),
+  /** `username:cookie` lines in a file in RoALT's folder, selected in Explorer; all accounts with no ids. */
+  accountsExportCookies: (accountIds?: number[], password?: string) => invoke<CookieExport>("accounts_export_cookies", { accountIds, password }),
+  cookieExportDelete: () => invoke<number>("cookie_export_delete"),
+  cookieExportReveal: () => invoke<void>("cookie_export_reveal"),
 
   /** Cached for settings.cacheMinutes unless refresh. Parts Roblox didn't answer are null and named in `unavailable`. */
   accountInfo: (id: number, refresh = false) => invoke<AccountInfo>("account_info", { id, refresh }),
+  /** The account's limiteds as last counted (null: never); `refresh` counts them now (slow). */
+  accountValue: (id: number, refresh = false) => invoke<AccountValue | null>("account_value", { id, refresh }),
   /** Avatar URLs for all accounts (cached 6 h); accounts without one are missing from the list. */
   accountsHeadshots: (refresh = false) => invoke<Headshot[]>("accounts_headshots", { refresh }),
   /** Presence of these accounts, each asked with its own cookie (accounts without a valid cookie are left out). */
   accountsPresence: (ids: number[]) => invoke<AccountPresence[]>("accounts_presence", { ids }),
   /** Opens roblox.com signed in as the account in its own window. */
-  accountOpenSession: (id: number) => invoke<void>("account_open_session", { id }),
 
   /** Local, instant: what pasted text points at. */
   targetParse: (input: string) => invoke<ParsedInput>("target_parse", { input }),
   /** A Roblox username (current or previous) to its user. */
   userLookup: (name: string) => invoke<UserRef>("user_lookup", { name }),
+  /** Header typeahead: up to 5 best-matching Roblox users, with headshot URLs. */
+  searchUsers: (keyword: string) => invoke<UserSearchResult[]>("search_users", { keyword }),
+  /** Header typeahead: up to 5 best-matching Roblox experiences, with icon URLs. */
+  searchGames: (keyword: string) => invoke<GameSearchResult[]>("search_games", { keyword }),
   /** Starts the Roblox client as this account. */
   /** `fpsCap`: this launch's own, instead of the account's and the default; 0 or none: those. */
   launch: (accountId: number, target: LaunchTarget, favouriteId?: number, fpsCap?: number | null) =>
@@ -159,6 +210,23 @@ export const api = {
   instancesList: () => invoke<Instance[]>("instances_list"),
   /** Graceful unless `force`; not counted as an unexpected exit. */
   instanceClose: (id: string, force: boolean) => invoke<void>("instance_close", { id, force }),
+  /** Browse: www.roblox.com/`path` as the account, at `rect` (the main window's CSS pixels). */
+  browseOpen: (accountId: number, path: string, rect: PaneRect) => invoke<void>("browse_open", { accountId, path, rect }),
+  browseBounds: (rect: PaneRect, shown: boolean) => invoke<void>("browse_bounds", { rect, shown }),
+  /** A short notice rendered over Browse's native Roblox page. */
+  browseNotice: (message: string) => invoke<void>("browse_notice", { message }),
+  /** Search suggestions rendered in Browse's native Roblox page. `null` removes them. */
+  browseTypeahead: (overlay: unknown | null) => invoke<void>("browse_typeahead", { overlay }),
+  browseNav: (action: BrowseNav) => invoke<void>("browse_nav", { action }),
+  browseClose: () => invoke<void>("browse_close"),
+  /** Roblox's Charts lists with icons (Browse's Popular; cached). */
+  gamesPopular: () => invoke<GameSort[]>("games_popular"),
+  /** Every account's time in each place, the most played first. */
+  playtimeList: () => invoke<PlaytimeRow[]>("playtime_list"),
+  /** Closes a playing account's client and launches it again into `target` (the smallest other
+   * server when that is the game it is in). `fpsCap` as `launch`'s; none: the old client's. */
+  instanceMove: (id: string, target: LaunchTarget, favouriteId?: number, fpsCap?: number | null) =>
+    invoke<LaunchInfo>("instance_move", { id, target, favouriteId, fpsCap: fpsCap || null }),
   instancesCloseAll: (force: boolean) => invoke<void>("instances_close_all", { force }),
   instancesClearEnded: () => invoke<void>("instances_clear_ended"),
   /** CPU cap, efficiency mode, trim interval and cores for one running client (they win over adaptive ones). */
@@ -178,6 +246,10 @@ export const api = {
   instanceMicro: (id: string, on: boolean, size?: [number, number]) => invoke<[number, number]>("instance_micro", { id, on, size }),
   /** Lays every running client that isn't hidden or minimized out in a grid on RoALT's monitor; how many it laid out. */
   instancesTile: (micro: boolean) => invoke<number>("instances_tile", { micro }),
+  /** Draws the window layout's spots for launching these accounts (in order) over RoALT's monitor for a few seconds. */
+  layoutPreview: (accountIds: number[], running: string) => invoke<void>("layout_preview", { accountIds, running }),
+  /** Takes the layout preview off the screen before its time. */
+  layoutPreviewStop: () => invoke<void>("layout_preview_stop"),
   /** CPU, memory and IO of each running client (sampled at most every 2 s). */
   instancesMetrics:() => invoke<ClientMetrics[]>("instances_metrics"),
   /** How busy the whole PC is (sampled at most every 2 s); null if Windows doesn't say. */
@@ -221,10 +293,27 @@ export const api = {
   serversList: (placeId: number, order: ServerOrder, excludeFull: boolean, limit: 10 | 25 | 50 | 100, cursor?: string, accountId?: number) =>
     invoke<ServerPage>("servers_list", { placeId, order, excludeFull, limit, cursor, accountId }),
   gameInfo: (placeId: number) => invoke<GameInfo>("game_info", { placeId }),
+  gameStats: (universeId: number) => invoke<GameStats>("game_stats", { universeId }),
+  /** Shows the profile card on Browse's page (null: takes it away). */
+  browseCard: (card: PageCard | null) => invoke<void>("browse_card", { card }),
+  /** A Roblox player's profile, asked as `accountId` (the Browse account). */
+  playerStats: (accountId: number, userId: number) => invoke<PlayerStats>("player_stats", { accountId, userId }),
+  /** A player's limiteds: a recent count kept, else counted now (slow for big inventories). */
+  playerValue: (accountId: number, userId: number, refresh = false) => invoke<PlayerValue>("player_value", { accountId, userId, refresh }),
   /** The place a target leads to (universes, share links with the account's cookie). */
   targetPlace: (target: LaunchTarget, accountId?: number) => invoke<number>("target_place", { target, accountId }),
   privateServersList: (placeId: number, accountId: number, cursor?: string) =>
     invoke<PrivateServerPage>("private_servers_list", { placeId, accountId, cursor }),
+  /** As the owner's account (`accountId`); another account gets "Only the owner's account can change this". */
+  privateServerGet: (accountId: number, vipServerId: number) =>
+    invoke<PrivateServerSettings>("private_server_get", { accountId, vipServerId }),
+  privateServerUpdate: (accountId: number, vipServerId: number, patch: PrivateServerPatch) =>
+    invoke<PrivateServerSettings>("private_server_update", { accountId, vipServerId, patch }),
+  /** Auto-renew on spends `price` Robux a month: confirm first. `price` comes from privateServerGet. */
+  privateServerRenew: (accountId: number, vipServerId: number, on: boolean, price: number) =>
+    invoke<PrivateServerSettings>("private_server_renew", { accountId, vipServerId, on, price }),
+  /** Spends Robux: confirm first. One idempotencyKey per buy dialog. */
+  privateServerBuy: (buy: PrivateServerBuy) => invoke<void>("private_server_buy", { buy }),
 
   groupsList: () => invoke<Group[]>("groups_list"),
   groupSave: (input: GroupInput) => invoke<Group>("group_save", { input }),
@@ -237,6 +326,8 @@ export const api = {
   /** A profile file or text, checked; nothing is saved until it goes through settingsSet. */
   performanceRead: (path: string) => invoke<Profile>("performance_read", { path }),
   performanceParse: (text: string) => invoke<Profile>("performance_parse", { text }),
+  /** Watches the clients in a game for about 22 s, then what to turn on for `target` clients like them (default: as many). */
+  performanceBenchmark: (target?: number) => invoke<Benchmark>("performance_benchmark", { target }),
   backupExport: (path: string, password: string, currentPassword?: string, accountIds?: number[]) =>
     invoke<number>("backup_export", { path, password, currentPassword, accountIds }),
   backupImport: (path: string, password: string, onConflict: ConflictPolicy) =>
@@ -246,6 +337,8 @@ export const api = {
   /** Downloads Roblox's installer, checks it is signed by Roblox Corporation, runs it; progress on onRobloxInstall. */
   robloxInstall: () => invoke<RobloxClient>("roblox_install"),
   /** RoALT's version and the newer release the last check found (no network). */
+  news: () => invoke<News>("news"),
+  onlinePing: () => invoke<Online | null>("online_ping"),
   selfUpdateStatus: () => invoke<AppUpdate>("self_update_status"),
   /** Asks GitHub for a newer RoALT now. */
   selfUpdateCheck: () => invoke<AppUpdate>("self_update_check"),
@@ -264,6 +357,7 @@ export const api = {
   backgroundGet: () => invoke<ArrayBuffer>("background_get"),
   /** Deletes Roblox client logs over a day old or 50 MB, never a running client's. */
   logsClean: () => invoke<LogsCleaned>("logs_clean"),
+  browserDataReset: () => invoke<boolean>("browser_data_reset"),
   /** Windows shuts down in `inSecs` or at `atMs` (1 min to 7 days); the deadline (Unix ms). */
   shutdownSchedule: (when: { atMs?: number; inSecs?: number }, closeClients: boolean) =>
     invoke<number | null>("shutdown_schedule", { atMs: when.atMs ?? null, inSecs: when.inSecs ?? null, closeClients }),

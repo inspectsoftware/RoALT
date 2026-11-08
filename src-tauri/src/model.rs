@@ -1,5 +1,7 @@
 //! Types shared with the UI. `npm run bindings` exports each one to `src/bindings/<Type>.ts`.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -91,6 +93,11 @@ pub struct AccountSummary {
     pub fps_cap: Option<u32>,
     /// Its clients keep the user's own graphics: no lowest graphics or lighter rendering.
     pub full_quality: bool,
+    /// The user's own account (at most one): listed first, left out of select-all while
+    /// `Settings.protect_main`, and confirmed before removal or showing its cookie.
+    pub main: bool,
+    /// Its own FFlags (`launcher::flags`), used while `Settings.custom_flags_scope` is Account.
+    pub custom_flags: BTreeMap<String, String>,
 }
 
 /// Partial update from the UI; `None` leaves a field as it is.
@@ -121,6 +128,12 @@ pub struct AccountPatch {
     pub fps_cap: Option<u32>,
     #[ts(optional)]
     pub full_quality: Option<bool>,
+    /// `Some(true)` also unmarks the previous MAIN.
+    #[ts(optional)]
+    pub main: Option<bool>,
+    /// Replaces the account's own FFlags (`launcher::flags::check` rules); empty: none.
+    #[ts(optional)]
+    pub custom_flags: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
@@ -143,6 +156,20 @@ pub struct GroupInput {
     pub name: String,
     #[ts(optional)]
     pub color: Option<String>,
+}
+
+/// Where launched clients' windows go (`instances::window::slot_rect`) once they reach a game.
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum WindowLayout {
+    /// Where Roblox puts them (and "Tiny on launch", if on).
+    #[default]
+    Off,
+    /// A grid as big as all of them fit, like the Dashboard's Tile.
+    Fit,
+    /// Tiny-sized cells, as many as fit, left to right.
+    Tiny,
 }
 
 /// Where the accounts go in the window.
@@ -223,6 +250,12 @@ pub struct Settings {
     pub close_to_tray: bool,
     /// Open at full size, without the start-up animation (`splash`); from the next start.
     pub skip_splash: bool,
+    /// Select-all (accounts list, launch picker) leaves the MAIN account out.
+    pub protect_main: bool,
+    /// Each client's own Windows audio session is muted once it reaches a game (`instances::audio`).
+    pub mute_on_launch: bool,
+    /// Launched clients go into this layout on RoALT's monitor; not Off: it replaces `tiny_on_launch`.
+    pub window_layout: WindowLayout,
     /// Restart a client whose private memory stays over this many MB (3 samples, 10 s apart),
     /// within the breaker; 0: off, else 512..=65 536.
     pub mem_restart_mb: u32,
@@ -251,12 +284,17 @@ pub struct Settings {
     /// Discord rich presence through the Discord app on this PC (`rpc`): "Playing RoALT" with
     /// the game and how many alts run.
     pub discord_presence: bool,
+    /// Ping RoALT's online counter every 2 minutes with a random id made once per launch, and
+    /// show how many people use RoALT beside the Discord button (`online`). Off: nothing is sent.
+    pub online_count: bool,
+    /// While counting an account's limiteds, download Rolimons' public item list (`rolimons`;
+    /// api.rolimons.com, at most every 30 minutes) and add its value, demand and trend. No user id,
+    /// name or cookie is sent. Off by default: Rolimons isn't Roblox.
+    pub rolimons_values: bool,
     /// Hide each client (without taking the focus) once, when it first reaches a game, unless its
     /// account is full quality. A hidden client (`instances::window`) stays live while Home shows
     /// it and sleeps otherwise, and comes back from the taskbar or Alt-Tab.
     pub minimize_on_launch: bool,
-    /// Home's previews keep hidden clients awake and drawing. Off: they sleep and show their last picture.
-    pub live_hidden_previews: bool,
     /// System-wide key combination for Kill all, like "Ctrl+Shift+F12"; "" for none.
     pub panic_hotkey: String,
     /// Delete old or huge Roblox client logs at start and every hour (`logwatch::clean`).
@@ -270,6 +308,14 @@ pub struct Settings {
     /// geometry detail and what `render_flags` picks.
     pub lighter_rendering: bool,
     pub render_flags: RenderFlags,
+    /// The user's own FFlags (`launcher::flags`), written over `lighter_rendering`'s at each
+    /// launch while `custom_flags_scope` is Global; Roblox ignores those off its allowlist.
+    pub custom_flags: BTreeMap<String, String>,
+    /// Whose FFlags a launch writes: `custom_flags`, or the account's own.
+    pub custom_flags_scope: FlagScope,
+    /// Browse refuses anything that spends Robux (free items still work) and the Robux, Premium and
+    /// billing pages (`browse`); RoALT's own private server purchase is refused too. On by default.
+    pub lock_purchases: bool,
     /// Width and height "Make it tiny" and "Tile tiny windows" use.
     pub micro_width: u32,
     pub micro_height: u32,
@@ -367,6 +413,18 @@ impl Default for RenderFlags {
     }
 }
 
+/// Where custom FFlags come from (`Settings.custom_flags_scope`).
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum FlagScope {
+    /// `Settings.custom_flags`, for every account.
+    #[default]
+    Global,
+    /// Each account's own `custom_flags`.
+    Account,
+}
+
 /// Anti-AFK: every `interval_min` (1..=19) minutes each client in a game that hasn't opted out
 /// gets a key press (`instances::afk`).
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
@@ -385,7 +443,7 @@ impl Default for AntiAfk {
 
 
 /// Events sent to the Discord webhook (`discord`), each on or off.
-#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", default)]
 #[ts(export)]
 pub struct DiscordEvents {
@@ -402,11 +460,13 @@ pub struct DiscordEvents {
     pub launch: bool,
     /// A summary of the running clients every this many minutes (0: off, else 5..=1440).
     pub status_every_min: u32,
+    /// Who bad alerts mention, as `<@id>` (a user) or `<@&id>` (a role); "" for no one.
+    pub ping: String,
 }
 
 impl Default for DiscordEvents {
     fn default() -> Self {
-        Self { crash: true, hang: true, mem_restart: true, disconnect: true, restart: true, breaker: true, batch_done: true, launch: false, status_every_min: 0 }
+        Self { crash: true, hang: true, mem_restart: true, disconnect: true, restart: true, breaker: true, batch_done: true, launch: false, status_every_min: 0, ping: String::new() }
     }
 }
 
@@ -458,6 +518,9 @@ impl Default for Settings {
             launch_args: String::new(),
             close_to_tray: false,
             skip_splash: false,
+            protect_main: true,
+            mute_on_launch: false,
+            window_layout: WindowLayout::Off,
             mem_restart_mb: 0,
             mem_throttle: MemThrottle::default(),
             trim_every_min: 0,
@@ -470,14 +533,18 @@ impl Default for Settings {
             auto_update: false,
             self_update: true,
             discord_presence: true,
+            online_count: true,
+            rolimons_values: false,
             minimize_on_launch: false,
-            live_hidden_previews: true,
 panic_hotkey: String::new(),
             clean_logs: false,
             fps_cap: 0,
             low_graphics: true,
             lighter_rendering: true,
             render_flags: RenderFlags::default(),
+            custom_flags: BTreeMap::new(),
+            custom_flags_scope: FlagScope::Global,
+            lock_purchases: true,
             micro_width: 320,
             micro_height: 240,
             tiny_on_launch: false,
@@ -528,6 +595,12 @@ pub struct SettingsPatch {
     #[ts(optional)]
     pub skip_splash: Option<bool>,
     #[ts(optional)]
+    pub protect_main: Option<bool>,
+    #[ts(optional)]
+    pub mute_on_launch: Option<bool>,
+    #[ts(optional)]
+    pub window_layout: Option<WindowLayout>,
+    #[ts(optional)]
     pub mem_restart_mb: Option<u32>,
     #[ts(optional)]
     pub mem_throttle: Option<MemThrottle>,
@@ -550,9 +623,11 @@ pub struct SettingsPatch {
     #[ts(optional)]
     pub discord_presence: Option<bool>,
     #[ts(optional)]
-    pub minimize_on_launch: Option<bool>,
+    pub online_count: Option<bool>,
     #[ts(optional)]
-    pub live_hidden_previews: Option<bool>,
+    pub rolimons_values: Option<bool>,
+    #[ts(optional)]
+    pub minimize_on_launch: Option<bool>,
     #[ts(optional)]
     pub panic_hotkey: Option<String>,
     #[ts(optional)]
@@ -565,6 +640,12 @@ pub struct SettingsPatch {
     pub lighter_rendering: Option<bool>,
     #[ts(optional)]
     pub render_flags: Option<RenderFlags>,
+    #[ts(optional)]
+    pub custom_flags: Option<BTreeMap<String, String>>,
+    #[ts(optional)]
+    pub custom_flags_scope: Option<FlagScope>,
+    #[ts(optional)]
+    pub lock_purchases: Option<bool>,
     #[ts(optional)]
     pub micro_width: Option<u32>,
     #[ts(optional)]
@@ -709,6 +790,32 @@ pub struct ImportReport {
     pub failed: u32,
 }
 
+/// What "Export cookies" wrote (`cookie_export`).
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CookieExport {
+    /// The file, selected in Explorer.
+    pub path: String,
+    pub count: u32,
+    /// Accounts whose cookie couldn't be read.
+    pub skipped: u32,
+    /// Unix ms when RoALT deletes it.
+    pub deletes_at: i64,
+}
+
+/// What "make friends" did, counted in pairs of accounts.
+#[derive(Serialize, TS, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FriendReport {
+    pub added: u32,
+    pub already: u32,
+    pub failed: u32,
+    /// Accounts Roblox asked to solve a captcha (on roblox.com) before sending requests.
+    pub challenged: Vec<i64>,
+}
+
 /// Where to launch. Ids are numbers; codes stay strings (link codes can be 25-32 digits).
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -795,6 +902,32 @@ pub struct UserRef {
     pub display_name: String,
 }
 
+/// One row of the header search typeahead (people tab). `thumbnail` is a Roblox avatar-headshot
+/// URL, or None when Roblox didn't send one in time.
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UserSearchResult {
+    pub user_id: i64,
+    pub username: String,
+    pub display_name: String,
+    pub has_verified_badge: bool,
+    pub thumbnail: Option<String>,
+}
+
+/// One row of the header search typeahead (games tab). `thumbnail` is a Roblox place-icon URL.
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct GameSearchResult {
+    pub place_id: i64,
+    pub universe_id: Option<i64>,
+    pub name: String,
+    pub creator_name: String,
+    pub player_count: Option<i64>,
+    pub thumbnail: Option<String>,
+}
+
 /// A client RoALT started.
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -866,6 +999,11 @@ pub struct Instance {
     /// Its window was made small by RoALT (`instance_micro`, `instances_tile`); "Normal size"
     /// puts it back.
     pub micro: bool,
+    /// The client size it was made small at, when not the Settings tiny size (a window-layout cell):
+    /// the tiny sweep keeps it at that, also after RoALT restarts.
+    #[serde(default)]
+    #[ts(skip)]
+    pub micro_size: Option<(u32, u32)>,
     /// The FPS cap its launch asked for (`LaunchInfo::fps_cap`); a rejoin uses it again.
     pub fps_cap: Option<u32>,
     /// RoALT is working on relaunching it (`instances::rejoin`). Not kept over a restart of RoALT.
@@ -960,8 +1098,8 @@ pub struct MultiInstanceStatus {
 
 // ---------- M5: bulk launch ----------
 
-/// How a bulk launch puts everyone in one server (public-game targets only; targets that
-/// already name one server ignore it).
+/// How a bulk launch places its accounts: all in one server, or each in a different one
+/// (public-game targets only; targets that already name one server ignore it).
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -975,6 +1113,23 @@ pub enum SameServer {
     /// Launch the first account normally, read its server from its client log (presence as a
     /// fallback), send the rest there.
     FollowFirst,
+    /// Each account to a private server it owns of the game; one without goes `RandomPublic`.
+    OwnPrivate,
+    /// Each account to a different public server with room, picked at random from the list.
+    RandomPublic,
+    /// Each account to a different public server with room, the closest first (`BestLatency`).
+    Closest,
+    /// Each account to a different public server with room, the most players first.
+    MostFull,
+    /// Each account to a different public server with room, the fewest players first.
+    MostEmpty,
+}
+
+impl SameServer {
+    /// Each account in a different server.
+    pub fn spreads(self) -> bool {
+        matches!(self, Self::OwnPrivate | Self::RandomPublic | Self::Closest | Self::MostFull | Self::MostEmpty)
+    }
 }
 
 #[derive(Deserialize, TS, Clone, Debug)]
@@ -1134,6 +1289,76 @@ pub struct PrivateServerPage {
     pub join_restricted: bool,
 }
 
+/// A private server as its owner manages it (`GET /v1/vip-servers/{id}`), without its join
+/// secrets. Missing fields read as off / empty.
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PrivateServerSettings {
+    pub vip_server_id: i64,
+    pub name: String,
+    /// The server is on (anyone allowed can join).
+    pub active: bool,
+    pub friends_allowed: bool,
+    pub allowed_users: Vec<AllowedUser>,
+    /// Auto-renew is on: Robux are spent each month.
+    pub renews: bool,
+    pub expired: bool,
+    /// When the paid time ends (ISO 8601), when Roblox says.
+    pub expires: Option<String>,
+    /// Robux a month, when Roblox says.
+    pub price: Option<i64>,
+}
+
+/// A player the owner let into a private server.
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AllowedUser {
+    pub user_id: i64,
+    pub username: String,
+    pub display_name: String,
+}
+
+/// What `private_server_update` changes; unset (and empty) parts are not sent.
+#[derive(Deserialize, TS, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PrivateServerPatch {
+    /// Trimmed; an empty name is refused.
+    #[ts(optional)]
+    pub name: Option<String>,
+    #[ts(optional)]
+    pub active: Option<bool>,
+    /// `Some(true)` makes a new invite link; the old one stops working.
+    #[ts(optional)]
+    pub new_join_code: Option<bool>,
+    #[ts(optional)]
+    pub friends_allowed: Option<bool>,
+    /// User ids.
+    #[ts(optional)]
+    pub users_to_add: Option<Vec<i64>>,
+    /// User ids.
+    #[ts(optional)]
+    pub users_to_remove: Option<Vec<i64>>,
+}
+
+/// Buying a private server (spends Robux). Roblox refuses, charging nothing, when
+/// `expected_price` isn't the real price.
+#[derive(Deserialize, TS, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PrivateServerBuy {
+    /// The paying account.
+    pub account_id: i64,
+    pub universe_id: i64,
+    /// Trimmed; an empty name is refused.
+    pub name: String,
+    pub expected_price: i64,
+    /// A UUID made once per buy dialog, so a repeated click can't buy twice.
+    pub idempotency_key: String,
+}
+
 // ---------- M7 ----------
 
 /// The Roblox client RoALT would start.
@@ -1163,6 +1388,44 @@ pub struct AppUpdate {
     pub current: String,
     /// The newer version (`x.y.z`); None when up to date or not checked yet.
     pub available: Option<String>,
+}
+
+/// Where a News item comes from (`news`). Roblox client updates are the UI's own, from `roblox_client`.
+#[derive(Serialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum NewsSource {
+    Roalt,
+    Devforum,
+    Newsroom,
+}
+
+/// One item of Home's News tab.
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct NewsItem {
+    /// The same on every fetch: what "read" is kept by.
+    pub id: String,
+    pub source: NewsSource,
+    pub title: String,
+    /// Plain text; a RoALT release's notes as Markdown.
+    pub summary: String,
+    /// Rebuilt from ids and slugs on the source's own host, never taken as given.
+    pub url: String,
+    /// RFC 3339, or `YYYY-MM` where the source names only the month (the newsroom).
+    pub published: String,
+    /// A RoALT release's version (`x.y.z`).
+    pub version: Option<String>,
+}
+
+/// Newest first; a source that couldn't be read is left out and named in `failed`.
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct News {
+    pub items: Vec<NewsItem>,
+    pub failed: Vec<NewsSource>,
 }
 
 /// Where `roblox_install` is (`roblox://install`).
@@ -1228,6 +1491,243 @@ impl CrashKind {
             }
         }
     }
+}
+
+/// One of Roblox's Charts lists (Top Trending, Up-and-Coming, ...), for Browse's Popular.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct GameSort {
+    pub id: String,
+    /// As Roblox names it (in English).
+    pub name: String,
+    pub games: Vec<PopularGame>,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PopularGame {
+    pub universe_id: i64,
+    pub root_place_id: i64,
+    pub name: String,
+    pub playing: i64,
+    pub up_votes: i64,
+    pub down_votes: i64,
+    /// On Roblox's CDN; None when it has none yet.
+    pub icon_url: Option<String>,
+}
+
+/// A game's numbers for its details panel (`game_stats`). A part that is None didn't answer.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct GameStats {
+    pub universe_id: i64,
+    pub playing: i64,
+    pub visits: i64,
+    pub favourites: i64,
+    pub max_players: i32,
+    /// ISO 8601, as Roblox sends them.
+    pub created: Option<String>,
+    pub updated: Option<String>,
+    pub genre: Option<String>,
+    pub subgenre: Option<String>,
+    pub up_votes: Option<i64>,
+    pub down_votes: Option<i64>,
+    pub passes: Option<Vec<GamePass>>,
+    pub badges: Option<Vec<GameBadge>>,
+    /// The list goes on past what was read (more than 500, or Roblox stopped answering).
+    pub more_passes: bool,
+    pub more_badges: bool,
+    pub age_rating: Option<AgeRating>,
+    /// "MorphToR6", "MorphToR15" or "PlayerChoice", as Roblox says it.
+    pub avatar_type: Option<String>,
+    /// Anyone may copy it in Studio.
+    pub copying: Option<bool>,
+    /// Places in the game (its start place and sub-places).
+    pub places: Option<i64>,
+    /// About how many servers run now: players over server size, rounded up.
+    pub servers: Option<i64>,
+    /// Members of the group that made it.
+    pub group_members: Option<i64>,
+    pub archived: Option<bool>,
+}
+
+/// A game's age rating ("Mild", from 9 up) and why.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AgeRating {
+    /// Roblox's own words, in English.
+    pub label: String,
+    pub minimum_age: Option<i64>,
+    /// "Violence (Repeated/Mild)", …
+    pub descriptors: Vec<String>,
+}
+
+/// A Roblox player's profile numbers for Browse's player details (`player_stats`). A part that
+/// is None didn't answer.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PlayerStats {
+    pub user_id: i64,
+    pub name: String,
+    pub display_name: String,
+    pub verified: bool,
+    pub banned: bool,
+    /// ISO 8601.
+    pub created: Option<String>,
+    pub headshot_url: Option<String>,
+    pub friends: Option<i64>,
+    pub followers: Option<i64>,
+    pub following: Option<i64>,
+    /// As the Browse account sees it: where they play only when Roblox tells that account.
+    pub presence: Option<PlayerPresence>,
+    pub groups: Option<Vec<PlayerGroup>>,
+    pub badges: Option<Vec<RobloxBadge>>,
+    pub games: Option<Vec<PlayerGame>>,
+    /// They made more games than were read.
+    pub more_games: bool,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PlayerPresence {
+    /// 0 offline, 1 website, 2 in a game, 3 in Studio.
+    pub kind: i64,
+    /// The game's name, when Roblox tells.
+    pub place: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PlayerGroup {
+    pub id: i64,
+    pub name: String,
+    pub role: String,
+    pub members: i64,
+}
+
+/// A Roblox badge (Veteran, Friendship, …) a player holds.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RobloxBadge {
+    pub id: i64,
+    pub name: String,
+    pub image_url: Option<String>,
+}
+
+/// A public game a player made.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PlayerGame {
+    pub universe_id: i64,
+    pub place_id: i64,
+    pub name: String,
+    pub visits: i64,
+}
+
+/// A player's limiteds (`player_value`): `private` when their inventory is hidden.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PlayerValue {
+    pub private: bool,
+    /// Another count was running and none was kept: nothing to show yet.
+    pub busy: bool,
+    pub value: Option<AccountValue>,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct GamePass {
+    pub id: i64,
+    pub name: String,
+    /// Robux; None: off sale.
+    pub price: Option<i64>,
+    pub icon_url: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct GameBadge {
+    pub id: i64,
+    pub name: String,
+    pub awarded: i64,
+    pub awarded_yesterday: i64,
+    /// The share of players who won it, 0..1 (Roblox's "win rate"; 0 when it has none).
+    pub win_rate: f64,
+    pub icon_url: Option<String>,
+}
+
+/// An account's limiteds, as last counted (`account_value`).
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AccountValue {
+    /// Copies held.
+    pub count: u32,
+    /// Robux: RAP of every copy.
+    pub rap: i64,
+    /// Robux: each copy at its Rolimons value, else its RAP. None without Rolimons values.
+    pub value: Option<i64>,
+    /// The most valuable, highest first (at most 10).
+    pub top: Vec<LimitedItem>,
+    /// Not every copy was counted (the inventory is bigger than RoALT reads, or Roblox stopped answering).
+    pub partial: bool,
+    /// Unix ms.
+    pub fetched_at: i64,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LimitedItem {
+    pub asset_id: i64,
+    pub name: String,
+    pub copies: u32,
+    /// Each.
+    pub rap: i64,
+    pub rolimons: Option<RolimonsItem>,
+}
+
+/// What Rolimons says about a limited (`rolimons::parse`).
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RolimonsItem {
+    /// Robux; None: not valued.
+    pub value: Option<i64>,
+    /// 0 Terrible .. 4 Amazing.
+    pub demand: Option<u8>,
+    /// 0 Lowering, 1 Unstable, 2 Stable, 3 Raising, 4 Fluctuating.
+    pub trend: Option<u8>,
+    /// Its RAP is pushed above what it's worth.
+    pub projected: bool,
+    pub hyped: bool,
+    pub rare: bool,
+    pub acronym: Option<String>,
+}
+
+/// One account's time in one place (`Db::playtime`), from the clients RoALT followed.
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PlaytimeRow {
+    pub account_id: i64,
+    pub place_id: i64,
+    /// In a game, not teleporting.
+    pub ms: i64,
+    /// Unix ms.
+    pub last_played: i64,
 }
 
 /// A server an account's client reached (the newest 50 per account are kept).

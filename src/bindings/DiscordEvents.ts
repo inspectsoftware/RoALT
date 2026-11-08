@@ -19,4 +19,8 @@ launch: boolean,
 /**
  * A summary of the running clients every this many minutes (0: off, else 5..=1440).
  */
-statusEveryMin: number, };
+statusEveryMin: number, 
+/**
+ * Who bad alerts mention, as `<@id>` (a user) or `<@&id>` (a role); "" for no one.
+ */
+ping: string, };

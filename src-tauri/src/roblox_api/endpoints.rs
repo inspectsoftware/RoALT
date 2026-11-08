@@ -1,4 +1,4 @@
-//! Every Roblox URL in one place (verified 2026-10-24, see docs/DESIGN.md).
+//! Every Roblox URL in one place (verified 2026-10-24).
 
 pub const USERS_AUTHENTICATED: &str = "https://users.roblox.com/v1/users/authenticated";
 pub const LOGIN_PAGE: &str = "https://www.roblox.com/login";
@@ -27,14 +27,57 @@ pub const SHARE_LINK: &str = "https://apis.roblox.com/sharelinks/v1/resolve-link
 pub const SHARE_LINK_V2: &str = "https://apis.roblox.com/deeplinks/v2/resolve";
 pub const GAMES: &str = "https://games.roblox.com/v1/games?universeIds={}";
 pub const USERS_BY_NAME: &str = "https://users.roblox.com/v1/usernames/users";
+pub const USERS_SEARCH: &str = "https://users.roblox.com/v1/users/search?keyword={}&limit=10";
+pub const OMNI_SEARCH: &str = "https://apis.roblox.com/search-api/omni-search?searchQuery={}&pageType=all&sessionId={}";
 pub const FRIENDS_ONLINE: &str = "https://friends.roblox.com/v1/users/{}/friends/online";
+
+// Friending stored accounts with each other. Statuses is in the public spec (Experimental); the
+// two POSTs are no longer listed there but are what the website calls.
+pub const FRIEND_STATUSES: &str = "https://friends.roblox.com/v1/users/{}/friends/statuses";
+pub const REQUEST_FRIENDSHIP: &str = "https://friends.roblox.com/v1/users/{}/request-friendship";
+pub const ACCEPT_FRIEND: &str = "https://friends.roblox.com/v1/users/{}/accept-friend-request";
 
 // Servers (query string appended by the caller).
 pub const SERVERS_PUBLIC: &str = "https://games.roblox.com/v2/games/{}/servers/Public";
 pub const SERVERS_PRIVATE: &str = "https://games.roblox.com/v1/games/{}/private-servers";
+// Private servers, as their owner (cookie + CSRF). Shapes from the public spec, unrecorded signed in.
+pub const VIP_SERVER: &str = "https://games.roblox.com/v1/vip-servers/{}";
+pub const VIP_SERVER_PERMISSIONS: &str = "https://games.roblox.com/v1/vip-servers/{}/permissions";
+pub const VIP_SERVER_SUBSCRIPTION: &str = "https://games.roblox.com/v1/vip-servers/{}/subscription";
+/// Buys a private server of a universe: spends Robux.
+pub const VIP_SERVER_CREATE: &str = "https://games.roblox.com/v1/games/vip-servers/{}";
 pub const PLACE_UNIVERSE: &str = "https://apis.roblox.com/universes/v1/places/{}/universe";
 pub const PLACE_ICONS: &str =
     "https://thumbnails.roblox.com/v1/places/gameicons?placeIds={}&returnPolicy=PlaceHolder&size=150x150&format=Png&isCircular=false";
+
+// Browse's Popular (no cookie): the Charts' lists, and game icons by universe.
+pub const EXPLORE_SORTS: &str = "https://apis.roblox.com/explore-api/v1/get-sorts?sessionId={}&device=computer";
+pub const GAME_ICONS: &str = "https://thumbnails.roblox.com/v1/games/icons?universeIds={}&returnPolicy=PlaceHolder&size=150x150&format=Png&isCircular=false";
+
+// A game's details (no cookie, verified 2026-11-08). Paging is appended by the caller: passes
+// `&pageToken=`, badges and collectibles `&cursor=`. (games.roblox.com's own game-passes list is gone: 404.)
+pub const GAME_VOTES: &str = "https://games.roblox.com/v1/games/votes?universeIds={}";
+pub const GAME_PASSES: &str = "https://apis.roblox.com/game-passes/v1/universes/{}/game-passes?passView=Full&pageSize=100";
+pub const PASS_ICONS: &str = "https://thumbnails.roblox.com/v1/game-passes?gamePassIds={}&size=150x150&format=Png";
+pub const GAME_BADGES: &str = "https://badges.roblox.com/v1/universes/{}/badges?limit=100&sortOrder=Asc";
+pub const BADGE_ICONS: &str = "https://thumbnails.roblox.com/v1/badges/icons?badgeIds={}&size=150x150&format=Png";
+/// An account's limiteds, one row per copy, with their RAP (`recentAveragePrice`). Sent with the
+/// account's own cookie: it sees a private inventory, and the limit is per user, not per address.
+pub const COLLECTIBLES: &str = "https://inventory.roblox.com/v1/users/{}/assets/collectibles?limit=100&sortOrder=Asc";
+/// More of a game (no cookie, verified 2026-11-08): its age rating (POST `{universeId}`), its
+/// universe (`isArchived`) and places, and the group that owns it (7 a minute: only inside the
+/// cached `game_stats`).
+pub const AGE_RATING: &str = "https://apis.roblox.com/experience-guidelines-api/experience-guidelines/get-age-recommendation";
+pub const UNIVERSE: &str = "https://develop.roblox.com/v1/universes/{}";
+pub const UNIVERSE_PLACES: &str = "https://develop.roblox.com/v1/universes/{}/places?limit=100";
+pub const GROUP: &str = "https://groups.roblox.com/v1/groups/{}";
+
+// A player's profile (no cookie, verified 2026-11-08). Their badge list, Premium and username
+// history need a cookie or allow 1 call a minute: not asked.
+pub const USER_GROUPS: &str = "https://groups.roblox.com/v2/users/{}/groups/roles";
+pub const ROBLOX_BADGES: &str = "https://accountinformation.roblox.com/v1/users/{}/roblox-badges";
+/// `limit` must be 10, 25 or 50.
+pub const USER_GAMES: &str = "https://games.roblox.com/v2/users/{}/games?accessFilter=Public&limit=50&sortOrder=Desc";
 
 /// `template` with its `{}` replaced by `value`.
 pub fn fill(template: &str, value: impl std::fmt::Display) -> String {

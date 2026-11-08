@@ -1,7 +1,7 @@
 //! Following the clients RoALT starts: one entry per launch, polled once a second.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -11,7 +11,7 @@ use tauri::{AppHandle, Manager};
 use super::logwatch::{self, LogFacts};
 use super::metrics::{MEM_STRIKES, mem_strikes, mem_throttled};
 use super::process::{self, ProcInfo};
-use crate::model::{CrashKind, Instance, InstanceState, LaunchInfo, LaunchTarget, Limits};
+use crate::model::{CrashKind, Instance, InstanceState, LaunchInfo, LaunchTarget, Limits, WindowLayout};
 
 /// A client that vanishes this soon after launch without reaching a game may come back under
 /// a new PID (Roblox's updater relaunches it, research M8/M9), or, behind a bootstrapper, may
@@ -62,8 +62,129 @@ pub struct Tracker {
     claimed: Mutex<Vec<i64>>,
     /// Clients that ended badly since the last `take_crashes`; locked after `inner`.
     crashes: Mutex<Vec<Ended>>,
+    /// Playtime of entries cleared before `take_playtime` handed it out; locked after `inner`.
+    unsaved_play: Mutex<Vec<(i64, i64, i64)>>,
     /// What `persist` last wrote to the database; locked after `inner`.
     persisted: Mutex<Vec<Saved>>,
+    /// The window layout's slots: account id by slot (`reserve`). In memory only; never locked
+    /// together with `inner`.
+    slots: Mutex<Vec<i64>>,
+    /// A running batch's accounts: their slots are kept while they start (`reserve_slots`).
+    slots_pending: Mutex<Vec<i64>>,
+    /// How many slots the Fit grid was last laid out for; 0 after anything else placed windows.
+    fit_n: AtomicUsize,
+    /// Bumped by each re-layout (and Tile): an older one still placing stops (the newer has every window).
+    pub(crate) layout_gen: AtomicUsize,
+}
+
+/// One window for the layout: (instance id, pid, window rect, client size the tiny sweep keeps).
+type Place = (String, u32, super::window::Rect, Option<(u32, u32)>);
+
+/// The window-layout placements, on RoALT's monitor: for `arrived` (instance id, pid, account; its
+/// slot reserved now if need be) first, then, when the Fit grid's size changed, every other client
+/// already placed and not minimized. With the re-layout generation they belong to.
+/// The frame size to lay windows out with (Roblox windows share a style): measured on the first of
+/// `pids` that isn't minimized; with none to measure, the last one measured, at first a titled
+/// window's at the system DPI (`window::default_frame`).
+pub fn frame_size(pids: impl IntoIterator<Item = u32>) -> (i32, i32) {
+    static LAST_FRAME: Mutex<Option<(i32, i32)>> = Mutex::new(None);
+    let mut last = LAST_FRAME.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(f) = pids.into_iter().find_map(super::window::frame_of) {
+        *last = Some(f);
+    }
+    *last.get_or_insert_with(super::window::default_frame)
+}
+
+fn plan_layout(app: &AppHandle, s: &crate::App, v: &crate::model::Settings, arrived: Option<(&str, u32, i64)>) -> (Vec<Place>, usize) {
+    let layout = v.window_layout;
+    // Anything else placed windows since: the next Fit arrival lays the whole grid out again.
+    if layout != WindowLayout::Fit {
+        s.tracker.fit_n.store(0, Ordering::Relaxed);
+    }
+    let round = s.tracker.layout_gen.load(Ordering::Relaxed);
+    let Some(area) = (layout != WindowLayout::Off)
+        .then(|| app.get_webview_window("main").and_then(|w| w.hwnd().ok()).and_then(super::window::work_area))
+        .flatten()
+    else {
+        return (Vec::new(), round);
+    };
+    // Minimized ones stay so (the user may have minimized it as it came up): placing would bring them
+    // back on screen. They keep their slot.
+    let visible = |pid| matches!(process::main_window(pid), Some((_, false)));
+    let mut list: Vec<(String, u32, usize)> = arrived
+        .map(|(id, pid, account)| (id.to_owned(), pid, s.tracker.slot_of(account).0))
+        .filter(|c| visible(c.1))
+        .into_iter()
+        .collect();
+    let n = s.tracker.slots().len();
+    let mut round = round;
+    if layout == WindowLayout::Fit && s.tracker.fit_n.swap(n, Ordering::Relaxed) != n {
+        round = s.tracker.layout_gen.fetch_add(1, Ordering::Relaxed) + 1;
+        let first = arrived.map(|a| a.0.to_owned());
+        // The accounts the user plays keep their window (a slot can come from readopt or Tile).
+        let played = s.db.full_quality_accounts().unwrap_or_default();
+        list.extend(
+            s.tracker
+                .slotted()
+                .into_iter()
+                .filter(|o| Some(&o.0) != first.as_ref() && !played.contains(&o.3) && visible(o.1))
+                .map(|(id, pid, slot, _)| (id, pid, slot)),
+        );
+    }
+    let frame = frame_size(list.iter().map(|c| c.1));
+    let micro = (v.micro_width, v.micro_height);
+    let places = list.into_iter().filter_map(|(id, pid, slot)| super::window::slot_rect(layout, slot, n, area, frame, micro).map(|(r, small)| (id, pid, r, small))).collect();
+    (places, round)
+}
+
+/// Puts `places` in place, in order, then marks each `micro` as its placement made it (after, so a
+/// failed one isn't left marked small). Once a newer re-layout started, this one stops after the
+/// first `keep` (that newer one has the rest). Waits for the clients: not on the poll's thread.
+fn do_places(app: &AppHandle, places: Vec<Place>, keep: usize, round: usize) {
+    let s = app.state::<crate::App>();
+    for (i, (id, pid, rect, small)) in places.into_iter().enumerate() {
+        if i >= keep && s.tracker.layout_gen.load(Ordering::Relaxed) != round {
+            break;
+        }
+        match super::window::place(&id, pid, rect, small) {
+            Ok(()) => {
+                s.tracker.set_micro(&id, small);
+            }
+            Err(e) => log::debug!("instance {id}: not placed in the window layout: {e}"),
+        }
+    }
+}
+
+/// A batch is over: its accounts that never started give their slots up, and a Fit grid that
+/// shrank because of that is laid out again.
+pub fn layout_batch_done(app: &AppHandle) {
+    let s = app.state::<crate::App>();
+    s.tracker.end_batch_slots();
+    let Ok(v) = s.db.settings() else { return };
+    let (places, round) = plan_layout(app, &s, &v, None);
+    if !places.is_empty() {
+        let app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || do_places(&app, places, 0, round));
+    }
+}
+
+/// Gives each of `accounts` a layout slot in `slots` (account ids by slot), in order: a slot it has
+/// it keeps; else the lowest one whose account isn't `live` and isn't asked for now; else a new
+/// one at the end. Then free slots at the end are dropped, so the count follows what runs (pure).
+pub fn reserve(slots: &mut Vec<i64>, accounts: &[i64], live: &dyn Fn(i64) -> bool) {
+    let free = |a: i64| !live(a) && !accounts.contains(&a);
+    for &a in accounts {
+        if slots.contains(&a) {
+            continue;
+        }
+        match slots.iter().position(|&s| free(s)) {
+            Some(i) => slots[i] = a,
+            None => slots.push(a),
+        }
+    }
+    while slots.last().is_some_and(|&s| free(s)) {
+        slots.pop();
+    }
 }
 
 /// What a restarted RoALT needs to follow a running client again (`readopt`), kept in the
@@ -166,6 +287,46 @@ struct Entry {
     window_seen: bool,
     /// A failure to read its log was already logged at warn (later ones go to debug).
     log_warned: bool,
+    /// Its time in a game not yet handed out (`take_playtime`).
+    played: Played,
+}
+
+/// Time in a game, counted at each poll and handed out in pieces (`Tracker::take_playtime`).
+#[derive(Clone, Default, Debug)]
+struct Played {
+    /// The place it is counted toward; None while not in a game.
+    place: Option<i64>,
+    ms: i64,
+    /// Unix ms of the last poll that counted.
+    tick: Option<i64>,
+}
+
+/// The longest gap between two polls that counts: a PC asleep or hibernating with a client open
+/// adds nothing.
+const PLAY_GAP_MAX_MS: i64 = 5_000;
+
+impl Played {
+    /// Counts the time since the last poll toward `place` (Some while in a game). Hands out what
+    /// was counted for a place it left (out of a game, another place, ended), and all of it when
+    /// `flush` (pure).
+    fn step(&mut self, place: Option<i64>, now: i64, flush: bool) -> Option<(i64, i64)> {
+        let mut out = None;
+        if self.place != place {
+            out = self.place.filter(|_| self.ms > 0).map(|p| (p, self.ms));
+            *self = Played { place, ..Played::default() };
+        }
+        if place.is_some() {
+            if let Some(t) = self.tick {
+                self.ms += (now - t).clamp(0, PLAY_GAP_MAX_MS);
+            }
+            self.tick = Some(now);
+        }
+        if flush && out.is_none() && self.ms > 0 {
+            out = self.place.map(|p| (p, self.ms));
+            self.ms = 0;
+        }
+        out
+    }
 }
 
 impl Entry {
@@ -199,6 +360,7 @@ impl Entry {
             mem_restart: false,
             window_seen: false,
             log_warned: false,
+            played: Played::default(),
         }
     }
 
@@ -239,7 +401,12 @@ impl Tracker {
             inner: Mutex::new(Vec::new()),
             claimed: Mutex::new(Vec::new()),
             crashes: Mutex::new(Vec::new()),
+            unsaved_play: Mutex::new(Vec::new()),
             persisted: Mutex::new(Vec::new()),
+            slots: Mutex::new(Vec::new()),
+            slots_pending: Mutex::new(Vec::new()),
+            fit_n: AtomicUsize::new(0),
+            layout_gen: AtomicUsize::new(0),
         }
     }
 
@@ -271,6 +438,7 @@ impl Tracker {
             relaunching: false,
             relaunch_problem: None,
             sign_in_problem: false,
+            micro_size: None,
             applied_limits: Limits::default(),
         };
         let mut entries = self.entries();
@@ -325,7 +493,8 @@ impl Tracker {
     /// Follows clients from before RoALT restarted again (before the first poll): each one
     /// `readoptable` among the running Roblox clients `roblox`, its log read on from where it
     /// was. Returns the (pid, start time) of each one followed again.
-    pub fn readopt(&self, saved: Vec<Saved>, roblox: &[ProcInfo]) -> Vec<(u32, u64)> {
+    /// `played`: accounts the window layout leaves alone (full quality), given no slot.
+    pub fn readopt(&self, saved: Vec<Saved>, roblox: &[ProcInfo], played: &[i64]) -> Vec<(u32, u64)> {
         let mut entries = self.entries();
         let mut out = Vec::new();
         for s in saved {
@@ -339,6 +508,15 @@ impl Tracker {
             e.window_seen = true;
             entries.push(e);
         }
+        // Layout slots in launch order, so new clients go after them, not over them.
+        let mut back: Vec<(i64, i64)> = entries
+            .iter()
+            .filter(|e| e.inst.state != InstanceState::Exited && !played.contains(&e.inst.account_id))
+            .map(|e| (e.inst.started_at, e.inst.account_id))
+            .collect();
+        drop(entries);
+        back.sort_unstable();
+        self.reserve_slots(&back.into_iter().map(|b| b.1).collect::<Vec<_>>(), false);
         out
     }
 
@@ -414,6 +592,20 @@ impl Tracker {
         out
     }
 
+    /// Time clients spent in a game since it was last handed out, as (account id, place id, ms):
+    /// counted at each poll (`Played::step`), handed out when a client leaves a game or its place
+    /// or ends, and all of it when `flush` (once a minute, and at exit). Only RoALT's own clients.
+    pub fn take_playtime(&self, now: i64, flush: bool) -> Vec<(i64, i64, i64)> {
+        let mut out = std::mem::take(&mut *self.unsaved_play.lock().unwrap_or_else(|e| e.into_inner()));
+        for e in self.entries().iter_mut() {
+            let place = (e.inst.state == InstanceState::InGame).then_some(e.inst.place_id).flatten();
+            if let Some((p, ms)) = e.played.step(place, now, flush) {
+                out.push((e.inst.account_id, p, ms));
+            }
+        }
+        out
+    }
+
     pub fn take_crashes(&self) -> Vec<Ended> {
         std::mem::take(&mut *self.crashes.lock().unwrap_or_else(|e| e.into_inner()))
     }
@@ -481,8 +673,8 @@ impl Tracker {
         true
     }
 
-    /// Clients anti-AFK may press keys in: in a game, opted in, not being closed, the client
-    /// itself known. `since`: its last anti-AFK press, else when it reached the game.
+    /// Clients anti-AFK may press keys in: in a game, opted in, not being closed, the client itself
+    /// known. `since`: its last anti-AFK press, else when it reached the game.
     pub fn afk_clients(&self) -> Vec<super::afk::AfkClient> {
         self.entries()
             .iter()
@@ -494,12 +686,92 @@ impl Tracker {
             .collect()
     }
 
-    /// Marks a running client's window as made small (or back to normal); false when there is
-    /// no such client.
-    pub fn set_micro(&self, id: &str, on: bool) -> bool {
+    fn slots(&self) -> MutexGuard<'_, Vec<i64>> {
+        self.slots.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Layout slots for `accounts`, in their order (`reserve`). `batch`: a batch takes its slots up
+    /// front, so they follow the list, not which client loads first; until `end_batch_slots` its
+    /// accounts count as running, so nothing launched meanwhile takes or trims their slots.
+    pub fn reserve_slots(&self, accounts: &[i64], batch: bool) {
+        let pending = {
+            let mut p = self.slots_pending.lock().unwrap_or_else(|e| e.into_inner());
+            if batch {
+                *p = accounts.to_vec();
+            }
+            p.clone()
+        };
+        let live = self.slot_holders(pending);
+        reserve(&mut self.slots(), accounts, &|a| live.contains(&a));
+    }
+
+    /// Accounts whose slot stays theirs: running ones, ones with a rejoin or restart on its way
+    /// (it keeps the slot for the new client), and `pending` (a batch's, still starting).
+    fn slot_holders(&self, pending: Vec<i64>) -> Vec<i64> {
+        let mut live: Vec<i64> = self
+            .entries()
+            .iter()
+            .filter(|e| e.inst.state != InstanceState::Exited || e.relaunching.is_some())
+            .map(|e| e.inst.account_id)
+            .collect();
+        live.extend(pending);
+        live
+    }
+
+    /// What a batch of `accounts` would make the slots (account id by slot), without changing
+    /// them, and which accounts have a client (not a running batch's still to start): for the layout preview.
+    pub fn preview_slots(&self, accounts: &[i64]) -> (Vec<i64>, Vec<i64>) {
+        let live = self.slot_holders(self.pending_slots());
+        let mut slots = self.slots().clone();
+        reserve(&mut slots, accounts, &|a| live.contains(&a));
+        (slots, self.slot_holders(Vec::new()))
+    }
+
+    /// A running batch's accounts, whose slots are kept while they start.
+    pub fn pending_slots(&self) -> Vec<i64> {
+        self.slots_pending.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// The batch is over: its accounts that didn't start give their slots up (trimmed at the end).
+    pub fn end_batch_slots(&self) {
+        self.slots_pending.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.reserve_slots(&[], false);
+    }
+
+    /// The slots in this order from now on (the Dashboard's Tile laid them out so). `fit`: as the
+    /// Fit grid; else the next Fit arrival lays every window out again.
+    pub fn set_slots(&self, accounts: Vec<i64>, fit: bool) {
+        self.fit_n.store(if fit { accounts.len() } else { 0 }, Ordering::Relaxed);
+        *self.slots() = accounts;
+    }
+
+    /// `account`'s layout slot (reserved now if it has none) and how many slots there are.
+    pub fn slot_of(&self, account: i64) -> (usize, usize) {
+        if !self.slots().contains(&account) {
+            self.reserve_slots(&[account], false);
+        }
+        let s = self.slots();
+        (s.iter().position(|&a| a == account).unwrap_or(s.len()), s.len())
+    }
+
+    /// Running clients already in a game (or disconnected from one: they keep their slot), past their
+    /// launch steps, that hold a layout slot: (instance id, pid, slot, account id). Loading ones get
+    /// placed when they arrive.
+    pub fn slotted(&self) -> Vec<(String, u32, usize, i64)> {
+        let slots = self.slots().clone();
+        self.entries()
+            .iter()
+            .filter(|e| matches!(e.inst.state, InstanceState::InGame | InstanceState::Disconnected) && e.window_seen)
+            .filter_map(|e| Some((e.inst.id.clone(), client_of(e)?.0, slots.iter().position(|&a| a == e.inst.account_id)?, e.inst.account_id)))
+            .collect()
+    }
+
+    /// Marks a running client's window as made small at that client size (or back to normal,
+    /// None); false when there is no such client. The tiny sweep keeps it at that size.
+    pub fn set_micro(&self, id: &str, small: Option<(u32, u32)>) -> bool {
         let mut entries = self.entries();
         let Some(e) = entries.iter_mut().find(|e| e.inst.id == id && e.inst.state != InstanceState::Exited) else { return false };
-        e.inst.micro = on;
+        (e.inst.micro, e.inst.micro_size) = (small.is_some(), small);
         true
     }
 
@@ -703,7 +975,18 @@ impl Tracker {
 
     /// Forgets ended entries.
     pub fn clear_ended(&self) {
-        self.entries().retain(|e| e.inst.state != InstanceState::Exited);
+        let mut entries = self.entries();
+        // Playtime not handed out yet goes to the next `take_playtime` with them gone.
+        let mut unsaved = self.unsaved_play.lock().unwrap_or_else(|e| e.into_inner());
+        entries.retain(|e| {
+            let keep = e.inst.state != InstanceState::Exited;
+            if !keep
+                && let Some(place) = e.played.place.filter(|_| e.played.ms > 0)
+            {
+                unsaved.push((e.inst.account_id, place, e.played.ms));
+            }
+            keep
+        });
     }
 
     /// Runs for the app's lifetime (started in setup). Once a second: process liveness by
@@ -779,12 +1062,29 @@ impl Tracker {
                     // Once per client, without taking the focus.
                     for pid in s.tracker.first_in_game(&|pid| process::main_window(pid).is_some()) {
                         let id = clients.iter().find(|c| c.1 == pid).map(|c| c.0.clone());
-                        let full_quality = id.as_deref().and_then(|id| s.tracker.get(id)).and_then(|i| s.db.account(i.account_id).ok()).is_some_and(|a| a.full_quality);
-                        let tiny = id.filter(|id| v.tiny_on_launch && !full_quality && s.tracker.set_micro(id, true));
-                        let (size, minimize) = ((v.micro_width, v.micro_height), v.minimize_on_launch && !full_quality);
-                        log::info!("client {pid}: in a game; making it tiny: {}, minimizing it: {minimize}", tiny.is_some());
+                        let inst = id.as_deref().and_then(|id| s.tracker.get(id));
+                        let full_quality = inst.as_ref().and_then(|i| s.db.account(i.account_id).ok()).is_some_and(|a| a.full_quality);
+                        let size = (v.micro_width, v.micro_height);
+                        // In the window layout: this client's slot, and every other one's again when a Fit
+                        // grid changed size. The accounts the user plays keep their window, as with tiny and minimize.
+                        let (places, round) = match (full_quality, id.as_deref(), inst.as_ref()) {
+                            (false, Some(id), Some(inst)) => plan_layout(&handle, &s, &v, Some((id, pid, inst.account_id))),
+                            _ => (Vec::new(), 0),
+                        };
+                        let layout_app = handle.clone();
+                        // A layout replaces "Tiny on launch" (also for a minimized arrival it leaves alone),
+                        // and a minimized client stays so either way.
+                        let in_layout = !full_quality && v.window_layout != WindowLayout::Off;
+                        let visible = matches!(process::main_window(pid), Some((_, false)));
+                        let tiny = id.filter(|id| !in_layout && visible && v.tiny_on_launch && !full_quality && s.tracker.set_micro(id, Some(size)));
+                        let minimize = v.minimize_on_launch && !full_quality;
+                        // The accounts the user plays keep their sound, as they keep their window.
+                        let mute = v.mute_on_launch && !full_quality;
+                        log::info!("client {pid}: in a game; placing {} window(s), making it tiny: {}, minimizing it: {minimize}, muting it: {mute}", places.len(), tiny.is_some());
                         // Not on this thread: a busy client's ShowWindow would stop every poll.
                         tauri::async_runtime::spawn_blocking(move || {
+                            // This client's own place always runs: its minimize follows.
+                            do_places(&layout_app, places, 1, round);
                             if let Some(id) = tiny
                                 && let Err(e) = super::window::micro(&id, pid, true, size)
                             {
@@ -793,13 +1093,20 @@ impl Tracker {
                             if minimize {
                                 super::window::hide_on_launch(pid);
                             }
+                            // Last: it may wait seconds for the client's audio. Always set, unmuted when
+                            // the setting is off or the client is full quality: Windows can carry one
+                            // client's mute over to the next one.
+                            if !super::audio::set_mute(pid, mute) {
+                                log::info!("client {pid}: no audio session found to set muted: {mute}");
+                            }
                         });
                     }
                     // Tiny clients stay at their size. One round at a time, off this thread.
                     static SWEEPING: AtomicBool = AtomicBool::new(false);
                     if !clients.is_empty() && !SWEEPING.swap(true, Ordering::Relaxed) {
                         let size = (v.micro_width, v.micro_height);
-                        let list: Vec<_> = clients.iter().map(|c| (c.1, s.tracker.get(&c.0).is_some_and(|i| i.micro).then_some(size))).collect();
+                        // Each at the size it was made small at (a layout cell can differ from Settings').
+                        let list: Vec<_> = clients.iter().map(|c| (c.1, s.tracker.get(&c.0).filter(|i| i.micro).map(|i| i.micro_size.unwrap_or(size)))).collect();
                         tauri::async_runtime::spawn_blocking(move || {
                             super::window::sweep(&list);
                             SWEEPING.store(false, Ordering::Relaxed);
@@ -822,6 +1129,13 @@ impl Tracker {
                         if let Err(e) = s.db.add_server(account, &visit) {
                             log::warn!("could not record a server of account {account}: {e}");
                         }
+                    }
+                    let now = crate::commands::now_ms();
+                    let played = s.tracker.take_playtime(now, tick.is_multiple_of(60));
+                    if !played.is_empty()
+                        && let Err(e) = s.db.add_playtime(&played, now)
+                    {
+                        log::warn!("could not record playtime: {e}");
                     }
                     for c in s.tracker.take_crashes() {
                         log::warn!(
@@ -916,11 +1230,13 @@ impl Tracker {
             e.inst.rejoins = old.inst.rejoins;
             (e.inst.limits, e.inst.applied_limits) = (old.inst.limits, old.inst.applied_limits);
             (e.inst.anti_afk, e.inst.afk_at) = (old.inst.anti_afk, old.inst.afk_at);
-            (e.inst.throttled, e.inst.micro, e.window_seen) = (old.inst.throttled, old.inst.micro, old.window_seen);
+            (e.inst.throttled, e.inst.micro, e.inst.micro_size, e.window_seen) = (old.inst.throttled, old.inst.micro, old.inst.micro_size, old.window_seen);
             (e.gave_up, e.relaunching) = (old.gave_up, old.relaunching);
             (e.inst.relaunching, e.inst.relaunch_problem) = (old.inst.relaunching, old.inst.relaunch_problem.clone());
             let had_game = old.in_game_at.is_some();
             (e.mem_strikes, e.mem_mb, e.mem_restart) = (old.mem_strikes, old.mem_mb, old.mem_restart);
+            // take_playtime may have handed its time out since (the exit flush): not counted twice.
+            e.played = old.played.clone();
             if let Some(kind) = settle(e, now) {
                 self.crashes.lock().unwrap_or_else(|e| e.into_inner()).push(ended(e, kind, now));
             }
@@ -957,7 +1273,7 @@ fn restore(app: &AppHandle) {
     *s.tracker.persisted.lock().unwrap_or_else(|e| e.into_inner()) = saved.clone();
     let total = saved.len();
     let roblox = with_unreadable(&saved, process::roblox_processes(), process::unreadable_client);
-    let found = s.tracker.readopt(saved, &roblox);
+    let found = s.tracker.readopt(saved, &roblox, &s.db.full_quality_accounts().unwrap_or_default());
     for &(pid, t0) in &found {
         super::limits::reset_followed(pid, t0);
     }
@@ -1347,7 +1663,8 @@ fn state_of(facts: &LogFacts, bound: bool, ended: bool, closing: bool, expected_
 /// Keeps the newest `MAX_ENDED` ended entries, and those still being relaunched.
 fn prune(entries: &mut Vec<Entry>) {
     loop {
-        let ended = entries.iter().enumerate().filter(|(_, e)| e.inst.state == InstanceState::Exited && e.relaunching.is_none());
+        // Not before its playtime is handed out (`take_playtime`, later this tick).
+        let ended = entries.iter().enumerate().filter(|(_, e)| e.inst.state == InstanceState::Exited && e.relaunching.is_none() && e.played.place.is_none());
         if ended.clone().count() <= MAX_ENDED {
             return;
         }
@@ -1363,6 +1680,55 @@ mod tests {
 
     // The notes in English (tests run in English).
     const WRONG_ACCOUNT: &str = "Signed in as another account";
+
+    #[test]
+    fn the_layout_preview_changes_nothing() {
+        let t = Tracker::new();
+        t.set_slots(vec![4], false);
+        let (seen, _) = t.preview_slots(&[1, 2]);
+        assert_eq!(seen, [1, 2], "nothing runs: slot 0 is free again and the batch follows the list");
+        assert_eq!(*t.slots(), [4], "the real slots are untouched");
+        t.reserve_slots(&[1, 2], true);
+        assert_eq!(*t.slots(), seen, "a real batch gets what the preview showed");
+    }
+
+    #[test]
+    fn the_layout_preview_marks_only_started_clients_running() {
+        let t = Tracker::new();
+        t.reserve_slots(&[1, 2], true);
+        let (seen, running) = t.preview_slots(&[3]);
+        assert_eq!(seen, [1, 2, 3], "the batch still starting keeps its slots");
+        assert!(running.is_empty(), "none of its accounts has a client yet");
+    }
+
+    #[test]
+    fn a_batch_keeps_its_slots_until_it_ends() {
+        let t = Tracker::new();
+        t.reserve_slots(&[1, 2, 3], true);
+        assert_eq!(t.slot_of(9), (3, 4), "a launch during the batch goes after it, not into a pending slot");
+        t.end_batch_slots();
+        assert!(t.slots().is_empty(), "none of them started: their slots go");
+        t.set_slots(vec![7, 8], true);
+        assert_eq!((t.slot_of(8), t.fit_n.load(Ordering::Relaxed)), ((1, 2), 2), "Tile's order is the layout's");
+    }
+
+    #[test]
+    fn layout_slots_follow_the_list() {
+        let none = |_| false;
+        let mut s = Vec::new();
+        reserve(&mut s, &[5, 3, 9], &none);
+        assert_eq!(s, [5, 3, 9], "list order, not load order");
+        // An account keeps its slot; a new one takes the lowest free (not live, not asked for) one.
+        let live = |a| a == 5 || a == 9;
+        reserve(&mut s, &[9, 7], &live);
+        assert_eq!(s, [5, 7, 9]);
+        // A live account is never displaced, and free slots at the end go.
+        let only5 = |a| a == 5;
+        reserve(&mut s, &[], &only5);
+        assert_eq!(s, [5]);
+        reserve(&mut s, &[], &none);
+        assert!(s.is_empty(), "nothing running: no slots");
+    }
     const CHALLENGED: &str = "Roblox wants a human check";
     const UNEXPECTED: &str = "Closed unexpectedly";
     const HUNG: &str = "Not responding";
@@ -1453,6 +1819,22 @@ mod tests {
     }
 
     #[test]
+    fn playtime_counts_in_game_time_and_caps_gaps() {
+        let mut p = Played::default();
+        assert_eq!(p.step(None, 0, false), None, "not in a game: nothing");
+        assert_eq!(p.step(Some(7), 1_000, false), None, "the first poll in a game only starts counting");
+        assert_eq!(p.step(Some(7), 2_000, false), None);
+        assert_eq!(p.step(Some(7), 3_000, true), Some((7, 2_000)), "a flush hands out what was counted");
+        assert_eq!(p.step(Some(7), 3_603_000, false), None, "an hour asleep...");
+        assert_eq!(p.step(Some(7), 3_604_000, true), Some((7, PLAY_GAP_MAX_MS + 1_000)), "...counts 5 s");
+        assert_eq!(p.step(Some(7), 3_605_000, false), None);
+        assert_eq!(p.step(Some(9), 3_606_000, false), Some((7, 1_000)), "a new place hands out the old one's");
+        assert_eq!(p.step(Some(9), 3_607_000, false), None);
+        assert_eq!(p.step(None, 3_608_000, false), Some((9, 1_000)), "leaving the game hands it out");
+        assert_eq!(p.step(None, 3_609_000, true), None, "nothing left");
+    }
+
+    #[test]
     fn loading_hung_and_full_quality_clients_run_free() {
         let t = Tracker::new();
         let start = now_ms();
@@ -1508,8 +1890,9 @@ mod tests {
         assert_eq!(t.first_in_game(&|_| true), Vec::<u32>::new(), "once");
         t.entries().iter_mut().find(|e| e.inst.id == b).unwrap().adopted = true;
         assert_eq!(t.first_in_game(&|_| true), [901]);
-        assert!(t.set_micro(&a, true) && t.get(&a).unwrap().micro);
-        assert!(!t.set_micro("nope", true));
+        assert!(t.set_micro(&a, Some((320, 240))) && t.get(&a).unwrap().micro);
+        assert_eq!(t.get(&a).unwrap().micro_size, Some((320, 240)));
+        assert!(!t.set_micro("nope", Some((320, 240))));
     }
 
     fn temp_dir() -> PathBuf {
@@ -1717,8 +2100,8 @@ mod tests {
         assert!(!readoptable(&saved[0], &[p(900, 51)], &fresh.entries()), "pid reused");
         assert!(!readoptable(&saved[0], &[p(900, 50)], &old.entries()), "already followed");
 
-        assert_eq!(fresh.readopt(saved.clone(), &[p(900, 50)]), [(900, 50)]);
-        assert_eq!(fresh.readopt(saved, &[p(900, 50)]), [], "not twice");
+        assert_eq!(fresh.readopt(saved.clone(), &[p(900, 50)], &[]), [(900, 50)]);
+        assert_eq!(fresh.readopt(saved, &[p(900, 50)], &[]), [], "not twice");
         let e = fresh.entries()[0].clone();
         assert_eq!((e.offset, e.facts.in_game, e.in_game_at, e.window_seen), (4_096, true, Some(start + 9), true));
         assert_eq!(fresh.get(&a), old.get(&a), "the UI sees it as before");
@@ -1735,7 +2118,7 @@ mod tests {
         assert_eq!(with_unreadable(&saved, vec![], |pid| pid == 900), [p(900, 50)], "at its saved start time");
         assert_eq!(with_unreadable(&saved, vec![p(900, 51)], |_| true), [p(900, 51)], "readable: another process took the pid");
         let fresh = Tracker::new();
-        assert_eq!(fresh.readopt(saved.clone(), &with_unreadable(&saved, vec![], |_| true)), [(900, 50)]);
+        assert_eq!(fresh.readopt(saved.clone(), &with_unreadable(&saved, vec![], |_| true), &[]), [(900, 50)]);
     }
 
     #[test]

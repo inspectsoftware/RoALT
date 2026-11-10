@@ -361,5 +361,6 @@
   "That isn't a Roblox username: use 1 to 254 characters without spaces.": "Roblox のユーザー名ではありません: 空白なしで 1〜254 文字にしてください。",
   "The password must be 1 to 256 characters.": "パスワードは 1〜256 文字にしてください。",
   "That page isn't available in Browse.": "そのページは閲覧では開けません。",
-  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "購入はロックされています。購入するには、設定のセキュリティで「購入をロック」をオフにしてください。"
+  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "購入はロックされています。購入するには、設定のセキュリティで「購入をロック」をオフにしてください。",
+  "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it.": "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it."
 }

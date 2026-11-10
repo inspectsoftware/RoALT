@@ -31,6 +31,8 @@
   --color-sel: var(--sel);
   --color-line: var(--line);
   --color-accent-text: var(--accent-text);
+  --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
   --font-sans: var(--font-ui);
   --font-mono: var(--font-code);
 }

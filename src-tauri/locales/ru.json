@@ -383,5 +383,6 @@
   "That isn't a Roblox username: use 1 to 254 characters without spaces.": "Это не логин Roblox: используй от 1 до 254 символов без пробелов.",
   "The password must be 1 to 256 characters.": "Пароль должен быть от 1 до 256 символов.",
   "That page isn't available in Browse.": "Эта страница недоступна в «Обзоре».",
-  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "Покупки заблокированы. Выключи «Блокировать покупки» в настройках, в разделе «Безопасность», чтобы купить это."
+  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "Покупки заблокированы. Выключи «Блокировать покупки» в настройках, в разделе «Безопасность», чтобы купить это.",
+  "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it.": "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it."
 }

@@ -40,7 +40,7 @@ export function PopularTab(actions: Actions) {
   const q = useQuery({ queryKey: ["popular"], queryFn: api.gamesPopular, staleTime: 10 * 60_000 });
   const [sort, setSort] = useState<string | null>(null);
   if (q.error) return <Problem error={q.error} onRetry={() => q.refetch()} />;
-  if (!q.data) return <Skeleton width="100%" height={180} />;
+  if (!q.data) return <PopularSkeleton />;
   if (!q.data.length) return <p className="text-fg-2">{t("browse.popularNone")}</p>;
   const current = q.data.find((s) => s.id === sort) ?? q.data[0];
   return (
@@ -56,6 +56,39 @@ export function PopularTab(actions: Actions) {
         {current.games.map((g) => (
           <li key={g.universeId}>
             <PopularCard game={g} {...actions} />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** A card-shaped first paint makes Popular feel ready immediately, without inventing game details
+ * before Roblox's Charts response arrives. */
+function PopularSkeleton() {
+  return (
+    <div aria-busy="true" aria-label={t("common.loading")} className="flex flex-col gap-4">
+      <div className="flex gap-1.5">
+        <Skeleton width={92} height={32} radius={999} />
+        <Skeleton width={118} height={32} radius={999} />
+        <Skeleton width={104} height={32} radius={999} />
+      </div>
+      <ul className="browse-grid">
+        {Array.from({ length: 6 }, (_, i) => (
+          <li key={i}>
+            <article className="panel browse-card" aria-hidden="true">
+              <div className="flex items-center gap-3">
+                <Skeleton width={52} height={52} radius={12} />
+                <div className="flex-1 flex flex-col gap-2">
+                  <Skeleton width={`${68 - i * 4}%`} height={14} />
+                  <Skeleton width="46%" height={11} />
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <Skeleton width={72} height={32} radius={999} />
+                <Skeleton width={62} height={32} radius={999} />
+              </div>
+            </article>
           </li>
         ))}
       </ul>

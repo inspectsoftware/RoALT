@@ -372,5 +372,6 @@
   "That isn't a Roblox username: use 1 to 254 characters without spaces.": "Bu bir Roblox kullanıcı adı değil: boşluksuz 1 ile 254 karakter kullan.",
   "The password must be 1 to 256 characters.": "Şifre 1 ile 256 karakter olmalı.",
   "That page isn't available in Browse.": "Bu sayfa Gezin'de kullanılamaz.",
-  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "Satın almalar kilitli. Bunu almak için Ayarlar'da, Güvenlik altında Satın almaları kilitle'yi kapat."
+  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "Satın almalar kilitli. Bunu almak için Ayarlar'da, Güvenlik altında Satın almaları kilitle'yi kapat.",
+  "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it.": "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it."
 }

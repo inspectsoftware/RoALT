@@ -1598,5 +1598,14 @@
   "player.visits_one": "{n} posjeta",
   "player.visits_few": "{n} posjete",
   "player.visits_other": "{n} posjeta",
-  "player.busy": "Drugo brojanje je u toku. Pritisni Prebroji kad završi."
+  "player.busy": "Drugo brojanje je u toku. Pritisni Prebroji kad završi.",
+  "common.clear": "Clear",
+  "common.error": "Something went wrong.",
+  "headerSearch.scope": "Search scope",
+  "headerSearch.people": "People",
+  "headerSearch.games": "Games",
+  "headerSearch.placeholderPeople": "Search people",
+  "headerSearch.placeholderGames": "Search games",
+  "headerSearch.noPeople": "No one matches that.",
+  "headerSearch.noGames": "No games match that."
 }

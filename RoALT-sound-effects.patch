@@ -1,0 +1,544 @@
+diff --git a/src/ui/sounds.ts b/src/ui/sounds.ts
+--- /dev/null
++++ b/src/ui/sounds.ts
+@@ -0,0 +1,114 @@
++import { useSyncExternalStore } from "react";
++
++export type Sound = "click" | "on" | "off" | "notification" | "success" | "error";
++type Preferences = { enabled: boolean; volume: number };
++const KEY = "roalt.sounds";
++const DEFAULT: Preferences = { enabled: true, volume: 0.35 };
++function read(): Preferences {
++  try {
++    const saved = JSON.parse(localStorage.getItem(KEY) ?? "null");
++    return { enabled: typeof saved?.enabled === "boolean" ? saved.enabled : DEFAULT.enabled,
++      volume: typeof saved?.volume === "number" && Number.isFinite(saved.volume) ? Math.max(0, Math.min(1, saved.volume)) : DEFAULT.volume };
++  } catch { return DEFAULT; }
++}
++let preferences = read();
++const subscribers = new Set<() => void>();
++const subscribe = (f: () => void) => { subscribers.add(f); return () => { subscribers.delete(f); }; };
++export function useSoundPreferences() {
++  return useSyncExternalStore(subscribe, () => preferences);
++}
++export function setSoundPreferences(patch: Partial<Preferences>) {
++  preferences = { ...preferences, ...patch };
++  try { localStorage.setItem(KEY, JSON.stringify(preferences)); } catch { /* Session-only if storage is unavailable. */ }
++  if (!preferences.enabled || !preferences.volume) active.forEach((node) => { try { node.stop(); } catch { /* Already ended. */ } });
++  subscribers.forEach((f) => f());
++}
++let context: AudioContext | null = null;
++const active = new Set<OscillatorNode>();
++let installed = false;
++let lastControl = -Infinity;
++let lastNotice = -Infinity;
++function unlock() {
++  if (!preferences.enabled || !preferences.volume) return;
++  try {
++    context ??= new AudioContext();
++    if (context.state === "suspended") void context.resume().catch(() => {});
++  } catch { /* Audio must never interrupt an action. */ }
++}
++/** Short locally synthesized sounds; no network or audio assets. */
++export function playSound(sound: Sound) {
++  if (!preferences.enabled || preferences.volume === 0 || document.hidden || !context) return;
++  if (context.state === "suspended") {
++    void context.resume().then(() => { if (context?.state === "running") playSound(sound); }).catch(() => {});
++    return;
++  }
++  if (context.state !== "running") return;
++  const notice = sound === "notification" || sound === "success" || sound === "error";
++  const stamp = performance.now();
++  if (stamp - (notice ? lastNotice : lastControl) < (notice ? 1000 : 35)) return;
++  if (notice) lastNotice = stamp; else lastControl = stamp;
++  // Let a notification replace the click that immediately preceded it.
++  if (notice && stamp - lastControl < 120) active.forEach((node) => { try { node.stop(); } catch { /* Already ended. */ } });
++  const ctx = context;
++  const note = (from: number, to: number, duration: number, delay = 0) => {
++    const oscillator = ctx.createOscillator();
++    const gain = ctx.createGain();
++    const start = ctx.currentTime + delay;
++    oscillator.type = "sine";
++    oscillator.frequency.setValueAtTime(from, start);
++    oscillator.frequency.exponentialRampToValueAtTime(to, start + duration);
++    gain.gain.setValueAtTime(0.0001, start);
++    gain.gain.exponentialRampToValueAtTime(0.12 * preferences.volume, start + 0.005);
++    gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
++    oscillator.connect(gain);
++    gain.connect(ctx.destination);
++    active.add(oscillator);
++    oscillator.onended = () => { active.delete(oscillator); oscillator.disconnect(); gain.disconnect(); };
++    oscillator.start(start);
++    oscillator.stop(start + duration + 0.01);
++  };
++  try {
++    if (sound === "click") note(650, 430, 0.04);
++    else if (sound === "on") { note(480, 480, 0.045); note(720, 720, 0.065, 0.045); }
++    else if (sound === "off") { note(600, 600, 0.045); note(400, 400, 0.065, 0.045); }
++    else if (sound === "notification") { note(740, 740, 0.08); note(620, 620, 0.12, 0.09); }
++    else if (sound === "success") { note(660, 660, 0.07); note(880, 880, 0.10, 0.08); }
++    else { note(240, 210, 0.09); note(190, 170, 0.12, 0.10); }
++  } catch { /* An unavailable audio device doesn't affect the UI. */ }
++}
++export function previewSound() {
++  unlock();
++  if (context?.state === "suspended") void context.resume().then(() => playSound("success")).catch(() => {});
++  else playSound("success");
++}
++/** Read ARIA state before React starts a possibly asynchronous settings update. */
++export function interactionSound(target: HTMLElement): Sound | null {
++  if (target instanceof HTMLInputElement && ["checkbox", "radio"].includes(target.type)) {
++    return target.type === "radio" ? "click" : target.checked ? "on" : "off";
++  }
++  const checked = target.getAttribute("aria-checked");
++  const pressed = target.getAttribute("aria-pressed");
++  const selected = target.getAttribute("aria-selected");
++  // Picking a preset, tab, or option is selection, not switching a feature off.
++  if (target.matches('.seg, .swatch, .preset-select, .preset, .nav-item, .rounded-full[aria-pressed], [role="tab"], [role="option"]')) {
++    return [checked, pressed, selected].includes("true") ? null : "click";
++  }
++  const state = checked ?? pressed;
++  return state === "true" ? "off" : state === "false" || state === "mixed" ? "on" : "click";
++}
++
++export function installSounds() {
++  if (installed) return;
++  installed = true;
++  document.addEventListener("pointerdown", unlock, { capture: true, passive: true });
++  document.addEventListener("keydown", unlock, { capture: true, passive: true });
++  document.addEventListener("click", (event) => {
++    const target = event.target instanceof Element ? event.target.closest<HTMLElement>("button, input[type=checkbox], input[type=radio], input[type=range], input[type=color], summary") : null;
++    if (!target || target.matches(":disabled, [aria-disabled=true]") || target.closest('[data-sound="off"]')) return;
++    const sound = interactionSound(target);
++    if (sound) playSound(sound);
++  }, { capture: true });
++  window.addEventListener("storage", (event) => {
++    if (event.key === KEY || event.key === null) { preferences = read(); subscribers.forEach((f) => f()); }
++  });
++}
+diff --git a/src/main.tsx b/src/main.tsx
+--- a/src/main.tsx
++++ b/src/main.tsx
+@@ -1,3 +1,4 @@
++import { installSounds } from "./ui/sounds";
+ import { Component, StrictMode, type ReactNode } from "react";
+ import { createRoot } from "react-dom/client";
+ import "@fontsource-variable/geist";
+@@ -66,6 +67,8 @@
+   await import("./dev/mockIpc");
+ }
+ 
++installSounds();
++
+ createRoot(document.getElementById("root")!).render(
+   <StrictMode>
+     <Boundary>
+diff --git a/src/ui/Toast.tsx b/src/ui/Toast.tsx
+--- a/src/ui/Toast.tsx
++++ b/src/ui/Toast.tsx
+@@ -1,3 +1,4 @@
++import { playSound, type Sound } from "./sounds";
+ import { useSyncExternalStore } from "react";
+ import { asError, type ErrorPayload } from "../api";
+ import { Icon } from "./Icon";
+@@ -25,7 +26,8 @@
+ 
+ /** Shows a short message bottom-right. Callable from anywhere, including outside React. A sticky
+  *  one stays until dismissed. */
+-export function toast(text: string, tone: Tone = "ok", sticky = false) {
++export function toast(text: string, tone: Tone = "ok", sticky = false, sound?: Sound) {
++  playSound(sound ?? (tone === "error" ? "error" : "success"));
+   const id = ++nextId;
+   publish([...items.slice(-3), { id, text, tone }]);
+   if (!sticky) later(id, tone === "error" ? 7000 : 4000);
+diff --git a/src/App.tsx b/src/App.tsx
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -85,7 +85,7 @@
+       events.onNetwork((n) => qc.setQueryData(qk.network, n)),
+       events.onAppUpdate((u) => qc.setQueryData(qk.appUpdate, u)),
+       // Errors stay until dismissed: the window may have been hidden in the tray.
+-      events.onNotice((n) => toast(n.message, n.error ? "error" : "ok", n.error)),
++      events.onNotice((n) => toast(n.message, n.error ? "error" : "ok", n.error, n.error ? "error" : "notification")),
+       events.onVaultLocked(() => {
+         if (Date.now() - manualLockAt.current > 3000) setLockReason("idle");
+         markLocked();
+diff --git a/src/features/settings/SettingsView.tsx b/src/features/settings/SettingsView.tsx
+--- a/src/features/settings/SettingsView.tsx
++++ b/src/features/settings/SettingsView.tsx
+@@ -1,3 +1,4 @@
++import { playSound, previewSound, setSoundPreferences, useSoundPreferences } from "../../ui/sounds";
+ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+ import { useQuery, useQueryClient } from "@tanstack/react-query";
+ import { open as openFile, save as saveFile } from "@tauri-apps/plugin-dialog";
+@@ -157,6 +158,7 @@
+             onChange={(theme) => set.mutate({ theme })}
+           />
+         </Row>
++        <SoundSettings />
+         <Row title={t("settings.language")} hint={t("settings.languageHint")}>
+           <select
+             className="field w-auto"
+@@ -1057,3 +1059,22 @@
+     </div>
+   );
+ }
++
++/** Sound preferences are local to this installation, like preview frame rate. */
++function SoundSettings() {
++  const sound = useSoundPreferences();
++  return (
++    <Row title={t("settings.soundEffects")} hint={t("settings.soundHint")}>
++      <div className="flex flex-wrap items-center gap-3">
++        <Switch label={t("settings.soundEffects")} checked={sound.enabled} onChange={(enabled) => setSoundPreferences({ enabled })} />
++        <input className="range max-w-32" type="range" min={0} max={100} step={5}
++          aria-label={t("settings.soundVolume")} value={Math.round(sound.volume * 100)} disabled={!sound.enabled}
++          onChange={(e) => setSoundPreferences({ volume: Number(e.target.value) / 100 })}
++          onPointerUp={() => playSound("click")}
++          onKeyUp={(e) => { if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) playSound("click"); }} />
++        <span className="mono text-xs text-dim w-9 text-end">{Math.round(sound.volume * 100)}%</span>
++        <button type="button" className="btn btn-sm" data-sound="off" disabled={!sound.enabled || sound.volume === 0} onClick={previewSound}>{t("settings.soundPreview")}</button>
++      </div>
++    </Row>
++  );
++}
+diff --git a/src/i18n/locales/ar.json b/src/i18n/locales/ar.json
+--- a/src/i18n/locales/ar.json
++++ b/src/i18n/locales/ar.json
+@@ -1373,5 +1373,9 @@
+   "settings.tabLayoutTop": "الحسابات في الأعلى",
+   "settings.tabLayoutSide": "الحسابات على الجانب",
+   "ui.accountsTop": "نقل الحسابات إلى الأعلى",
+-  "ui.accountsSide": "نقل الحسابات إلى الجانب"
++  "ui.accountsSide": "نقل الحسابات إلى الجانب",
++  "settings.soundEffects": "المؤثرات الصوتية",
++  "settings.soundHint": "أصوات خفيفة للنقرات والمفاتيح والإشعارات.",
++  "settings.soundVolume": "مستوى الصوت",
++  "settings.soundPreview": "تشغيل الصوت"
+ }
+diff --git a/src/i18n/locales/bs.json b/src/i18n/locales/bs.json
+--- a/src/i18n/locales/bs.json
++++ b/src/i18n/locales/bs.json
+@@ -1235,5 +1235,9 @@
+   "settings.tabLayoutTop": "Računi gore",
+   "settings.tabLayoutSide": "Računi sa strane",
+   "ui.accountsTop": "Premjesti račune gore",
+-  "ui.accountsSide": "Premjesti račune sa strane"
++  "ui.accountsSide": "Premjesti račune sa strane",
++  "settings.soundEffects": "Zvučni efekti",
++  "settings.soundHint": "Tihi zvukovi za klikove, prekidače i obavijesti.",
++  "settings.soundVolume": "Jačina zvuka",
++  "settings.soundPreview": "Pusti zvuk"
+ }
+diff --git a/src/i18n/locales/de.json b/src/i18n/locales/de.json
+--- a/src/i18n/locales/de.json
++++ b/src/i18n/locales/de.json
+@@ -1189,5 +1189,9 @@
+   "settings.tabLayoutTop": "Konten oben",
+   "settings.tabLayoutSide": "Konten seitlich",
+   "ui.accountsTop": "Konten nach oben verschieben",
+-  "ui.accountsSide": "Konten zur Seite verschieben"
++  "ui.accountsSide": "Konten zur Seite verschieben",
++  "settings.soundEffects": "Soundeffekte",
++  "settings.soundHint": "Dezente Töne für Klicks, Schalter und Benachrichtigungen.",
++  "settings.soundVolume": "Lautstärke",
++  "settings.soundPreview": "Ton abspielen"
+ }
+diff --git a/src/i18n/locales/en.json b/src/i18n/locales/en.json
+--- a/src/i18n/locales/en.json
++++ b/src/i18n/locales/en.json
+@@ -1189,5 +1189,9 @@
+   "settings.tabLayoutTop": "Accounts on top",
+   "settings.tabLayoutSide": "Accounts on the side",
+   "ui.accountsTop": "Move accounts to the top",
+-  "ui.accountsSide": "Move accounts to the side"
++  "ui.accountsSide": "Move accounts to the side",
++  "settings.soundEffects": "Sound effects",
++  "settings.soundHint": "Subtle sounds for clicks, switches and notifications.",
++  "settings.soundVolume": "Sound volume",
++  "settings.soundPreview": "Play sound"
+ }
+diff --git a/src/i18n/locales/es.json b/src/i18n/locales/es.json
+--- a/src/i18n/locales/es.json
++++ b/src/i18n/locales/es.json
+@@ -1189,5 +1189,9 @@
+   "settings.tabLayoutTop": "Cuentas arriba",
+   "settings.tabLayoutSide": "Cuentas al lado",
+   "ui.accountsTop": "Mover las cuentas arriba",
+-  "ui.accountsSide": "Mover las cuentas al lado"
++  "ui.accountsSide": "Mover las cuentas al lado",
++  "settings.soundEffects": "Efectos de sonido",
++  "settings.soundHint": "Sonidos suaves para clics, interruptores y notificaciones.",
++  "settings.soundVolume": "Volumen",
++  "settings.soundPreview": "Reproducir sonido"
+ }
+diff --git a/src/i18n/locales/fil.json b/src/i18n/locales/fil.json
+--- a/src/i18n/locales/fil.json
++++ b/src/i18n/locales/fil.json
+@@ -1189,5 +1189,9 @@
+   "settings.tabLayoutTop": "Mga account sa itaas",
+   "settings.tabLayoutSide": "Mga account sa gilid",
+   "ui.accountsTop": "Ilipat ang mga account sa itaas",
+-  "ui.accountsSide": "Ilipat ang mga account sa gilid"
++  "ui.accountsSide": "Ilipat ang mga account sa gilid",
++  "settings.soundEffects": "Mga sound effect",
++  "settings.soundHint": "Mahihinang tunog para sa mga click, switch at notification.",
++  "settings.soundVolume": "Lakas ng tunog",
++  "settings.soundPreview": "I-play ang tunog"
+ }
+diff --git a/src/i18n/locales/fr.json b/src/i18n/locales/fr.json
+--- a/src/i18n/locales/fr.json
++++ b/src/i18n/locales/fr.json
+@@ -1189,5 +1189,9 @@
+   "settings.tabLayoutTop": "Comptes en haut",
+   "settings.tabLayoutSide": "Comptes sur le côté",
+   "ui.accountsTop": "Déplacer les comptes en haut",
+-  "ui.accountsSide": "Déplacer les comptes sur le côté"
++  "ui.accountsSide": "Déplacer les comptes sur le côté",
++  "settings.soundEffects": "Effets sonores",
++  "settings.soundHint": "Sons discrets pour les clics, les interrupteurs et les notifications.",
++  "settings.soundVolume": "Volume sonore",
++  "settings.soundPreview": "Écouter"
+ }
+diff --git a/src/i18n/locales/id.json b/src/i18n/locales/id.json
+--- a/src/i18n/locales/id.json
++++ b/src/i18n/locales/id.json
+@@ -1143,5 +1143,9 @@
+   "settings.tabLayoutTop": "Akun di atas",
+   "settings.tabLayoutSide": "Akun di samping",
+   "ui.accountsTop": "Pindahkan akun ke atas",
+-  "ui.accountsSide": "Pindahkan akun ke samping"
++  "ui.accountsSide": "Pindahkan akun ke samping",
++  "settings.soundEffects": "Efek suara",
++  "settings.soundHint": "Suara lembut untuk klik, sakelar, dan notifikasi.",
++  "settings.soundVolume": "Volume suara",
++  "settings.soundPreview": "Putar suara"
+ }
+diff --git a/src/i18n/locales/ja.json b/src/i18n/locales/ja.json
+--- a/src/i18n/locales/ja.json
++++ b/src/i18n/locales/ja.json
+@@ -1143,5 +1143,9 @@
+   "settings.tabLayoutTop": "アカウントを上に",
+   "settings.tabLayoutSide": "アカウントを横に",
+   "ui.accountsTop": "アカウントを上に移動",
+-  "ui.accountsSide": "アカウントを横に移動"
++  "ui.accountsSide": "アカウントを横に移動",
++  "settings.soundEffects": "効果音",
++  "settings.soundHint": "クリック、スイッチ、通知に控えめな音を付けます。",
++  "settings.soundVolume": "音量",
++  "settings.soundPreview": "音を再生"
+ }
+diff --git a/src/i18n/locales/ko.json b/src/i18n/locales/ko.json
+--- a/src/i18n/locales/ko.json
++++ b/src/i18n/locales/ko.json
+@@ -1143,5 +1143,9 @@
+   "settings.tabLayoutTop": "계정을 위에",
+   "settings.tabLayoutSide": "계정을 옆에",
+   "ui.accountsTop": "계정을 위로 이동",
+-  "ui.accountsSide": "계정을 옆으로 이동"
++  "ui.accountsSide": "계정을 옆으로 이동",
++  "settings.soundEffects": "효과음",
++  "settings.soundHint": "클릭, 스위치 및 알림에 은은한 소리를 재생합니다.",
++  "settings.soundVolume": "음량",
++  "settings.soundPreview": "소리 재생"
+ }
+diff --git a/src/i18n/locales/pl.json b/src/i18n/locales/pl.json
+--- a/src/i18n/locales/pl.json
++++ b/src/i18n/locales/pl.json
+@@ -1235,5 +1235,9 @@
+   "settings.tabLayoutTop": "Konta na górze",
+   "settings.tabLayoutSide": "Konta z boku",
+   "ui.accountsTop": "Przenieś konta na górę",
+-  "ui.accountsSide": "Przenieś konta na bok"
++  "ui.accountsSide": "Przenieś konta na bok",
++  "settings.soundEffects": "Efekty dźwiękowe",
++  "settings.soundHint": "Subtelne dźwięki kliknięć, przełączników i powiadomień.",
++  "settings.soundVolume": "Głośność",
++  "settings.soundPreview": "Odtwórz dźwięk"
+ }
+diff --git a/src/i18n/locales/pt.json b/src/i18n/locales/pt.json
+--- a/src/i18n/locales/pt.json
++++ b/src/i18n/locales/pt.json
+@@ -1189,5 +1189,9 @@
+   "settings.tabLayoutTop": "Contas em cima",
+   "settings.tabLayoutSide": "Contas ao lado",
+   "ui.accountsTop": "Mover contas para cima",
+-  "ui.accountsSide": "Mover contas para o lado"
++  "ui.accountsSide": "Mover contas para o lado",
++  "settings.soundEffects": "Efeitos sonoros",
++  "settings.soundHint": "Sons suaves para cliques, interruptores e notificações.",
++  "settings.soundVolume": "Volume",
++  "settings.soundPreview": "Reproduzir som"
+ }
+diff --git a/src/i18n/locales/ru.json b/src/i18n/locales/ru.json
+--- a/src/i18n/locales/ru.json
++++ b/src/i18n/locales/ru.json
+@@ -1235,5 +1235,9 @@
+   "settings.tabLayoutTop": "Аккаунты сверху",
+   "settings.tabLayoutSide": "Аккаунты сбоку",
+   "ui.accountsTop": "Переместить аккаунты наверх",
+-  "ui.accountsSide": "Переместить аккаунты вбок"
++  "ui.accountsSide": "Переместить аккаунты вбок",
++  "settings.soundEffects": "Звуковые эффекты",
++  "settings.soundHint": "Негромкие звуки нажатий, переключателей и уведомлений.",
++  "settings.soundVolume": "Громкость",
++  "settings.soundPreview": "Прослушать"
+ }
+diff --git a/src/i18n/locales/sv.json b/src/i18n/locales/sv.json
+--- a/src/i18n/locales/sv.json
++++ b/src/i18n/locales/sv.json
+@@ -1189,5 +1189,9 @@
+   "settings.tabLayoutTop": "Konton överst",
+   "settings.tabLayoutSide": "Konton vid sidan",
+   "ui.accountsTop": "Flytta konton överst",
+-  "ui.accountsSide": "Flytta konton till sidan"
++  "ui.accountsSide": "Flytta konton till sidan",
++  "settings.soundEffects": "Ljudeffekter",
++  "settings.soundHint": "Diskreta ljud för klick, reglage och aviseringar.",
++  "settings.soundVolume": "Ljudvolym",
++  "settings.soundPreview": "Spela ljud"
+ }
+diff --git a/src/i18n/locales/th.json b/src/i18n/locales/th.json
+--- a/src/i18n/locales/th.json
++++ b/src/i18n/locales/th.json
+@@ -1143,5 +1143,9 @@
+   "settings.tabLayoutTop": "บัญชีด้านบน",
+   "settings.tabLayoutSide": "บัญชีด้านข้าง",
+   "ui.accountsTop": "ย้ายบัญชีไปด้านบน",
+-  "ui.accountsSide": "ย้ายบัญชีไปด้านข้าง"
++  "ui.accountsSide": "ย้ายบัญชีไปด้านข้าง",
++  "settings.soundEffects": "เอฟเฟกต์เสียง",
++  "settings.soundHint": "เสียงเบาๆ สำหรับการคลิก สวิตช์ และการแจ้งเตือน",
++  "settings.soundVolume": "ระดับเสียง",
++  "settings.soundPreview": "เล่นเสียง"
+ }
+diff --git a/src/i18n/locales/tr.json b/src/i18n/locales/tr.json
+--- a/src/i18n/locales/tr.json
++++ b/src/i18n/locales/tr.json
+@@ -1189,5 +1189,9 @@
+   "settings.tabLayoutTop": "Hesaplar üstte",
+   "settings.tabLayoutSide": "Hesaplar yanda",
+   "ui.accountsTop": "Hesapları üste taşı",
+-  "ui.accountsSide": "Hesapları yana taşı"
++  "ui.accountsSide": "Hesapları yana taşı",
++  "settings.soundEffects": "Ses efektleri",
++  "settings.soundHint": "Tıklamalar, anahtarlar ve bildirimler için hafif sesler.",
++  "settings.soundVolume": "Ses düzeyi",
++  "settings.soundPreview": "Sesi çal"
+ }
+diff --git a/src/i18n/locales/vi.json b/src/i18n/locales/vi.json
+--- a/src/i18n/locales/vi.json
++++ b/src/i18n/locales/vi.json
+@@ -1143,5 +1143,9 @@
+   "settings.tabLayoutTop": "Tài khoản ở trên",
+   "settings.tabLayoutSide": "Tài khoản ở bên",
+   "ui.accountsTop": "Chuyển tài khoản lên trên",
+-  "ui.accountsSide": "Chuyển tài khoản sang bên"
++  "ui.accountsSide": "Chuyển tài khoản sang bên",
++  "settings.soundEffects": "Hiệu ứng âm thanh",
++  "settings.soundHint": "Âm thanh nhẹ cho thao tác nhấp, công tắc và thông báo.",
++  "settings.soundVolume": "Âm lượng",
++  "settings.soundPreview": "Phát âm thanh"
+ }
+diff --git a/src/i18n/locales/zh.json b/src/i18n/locales/zh.json
+--- a/src/i18n/locales/zh.json
++++ b/src/i18n/locales/zh.json
+@@ -1143,5 +1143,9 @@
+   "settings.tabLayoutTop": "账号在顶部",
+   "settings.tabLayoutSide": "账号在侧边",
+   "ui.accountsTop": "将账号移到顶部",
+-  "ui.accountsSide": "将账号移到侧边"
++  "ui.accountsSide": "将账号移到侧边",
++  "settings.soundEffects": "音效",
++  "settings.soundHint": "为点击、开关和通知播放轻柔的音效。",
++  "settings.soundVolume": "音量",
++  "settings.soundPreview": "播放音效"
+ }
+diff --git a/scripts/test-sounds.mjs b/scripts/test-sounds.mjs
+--- /dev/null
++++ b/scripts/test-sounds.mjs
+@@ -0,0 +1,73 @@
++import assert from "node:assert/strict";
++
++// Audio behavior can be checked without speakers, a browser, or a test framework.
++const events = new Map();
++const storage = new Map();
++let now = 1000;
++let notes = [];
++let stops = 0;
++Object.defineProperty(globalThis, "performance", { value: { now: () => now } });
++globalThis.localStorage = { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) };
++globalThis.document = { hidden: false, addEventListener: (name, fn, options) => events.set(name, { fn, options }) };
++globalThis.window = { addEventListener() {} };
++globalThis.Element = class {
++  constructor(attrs = {}, selection = false) { this.attrs = attrs; this.selection = selection; }
++  getAttribute(name) { return this.attrs[name] ?? null; }
++  matches(selector) { return selector.includes(":disabled") ? false : this.selection; }
++  closest(selector) { return selector.includes("data-sound") ? null : this; }
++};
++globalThis.HTMLInputElement = class extends Element {};
++globalThis.AudioContext = class {
++  state = "suspended"; currentTime = 0; destination = {};
++  resume() { this.state = "running"; return Promise.resolve(); }
++  createOscillator() {
++    const note = {};
++    return {
++      frequency: { setValueAtTime(value) { note.from = value; }, exponentialRampToValueAtTime(value) { note.to = value; } },
++      connect() {}, disconnect() {}, start() { notes.push(note); }, stop() { stops++; },
++    };
++  }
++  createGain() { return { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {}, disconnect() {} }; }
++};
++const sound = await import("../src/ui/sounds.ts");
++sound.installSounds();
++const click = events.get("click");
++sound.installSounds();
++assert.equal(events.get("click"), click);
++assert.equal(click.options.capture, true, "read switches before asynchronous React updates");
++sound.playSound("notification");
++assert.equal(notes.length, 0, "don't play until the user interacts");
++events.get("pointerdown").fn();
++click.fn({ target: new Element({ "aria-checked": "false" }) });
++assert.deepEqual(notes.map((n) => n.from), [480, 720], "switching on rises");
++now += 100;
++notes = [];
++click.fn({ target: new Element({ "aria-checked": "true" }) });
++assert.deepEqual(notes.map((n) => n.from), [600, 400], "switching off falls");
++assert.equal(sound.interactionSound(new Element({ "aria-pressed": "true" }, true)), null, "selected presets stay quiet");
++assert.equal(sound.interactionSound(new Element({ "aria-pressed": "false" }, true)), "click");
++const checkbox = new HTMLInputElement();
++checkbox.type = "checkbox"; checkbox.checked = true;
++assert.equal(sound.interactionSound(checkbox), "on");
++checkbox.checked = false;
++assert.equal(sound.interactionSound(checkbox), "off");
++notes = [];
++now += 100;
++sound.playSound("notification");
++assert.deepEqual(notes.map((n) => n.from), [740, 620]);
++sound.playSound("notification");
++assert.equal(notes.length, 2, "rate-limit repeated notifications");
++sound.setSoundPreferences({ enabled: false });
++assert.ok(stops > 6, "muting stops queued sounds");
++now += 2000;
++sound.playSound("error");
++assert.equal(notes.length, 2);
++sound.setSoundPreferences({ enabled: true, volume: 0 });
++sound.playSound("click");
++assert.equal(notes.length, 2, "zero volume is silent");
++sound.setSoundPreferences({ volume: 0.4 });
++document.hidden = true;
++sound.playSound("click");
++assert.equal(notes.length, 2, "hidden views stay quiet");
++assert.deepEqual(JSON.parse(storage.get("roalt.sounds")), { enabled: true, volume: 0.4 });
++console.log("Sound checks passed: toggle direction, notifications, throttling, mute, volume, persistence, and event order.");
+diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -8,6 +8,7 @@
+     "build": "tsc --noEmit && node scripts/check-i18n.mjs && vite build",
+     "i18n:check": "node scripts/check-i18n.mjs",
+     "typecheck": "tsc --noEmit",
++    "test:sounds": "node --experimental-strip-types scripts/test-sounds.mjs",
+     "tauri": "tauri",
+     "bindings": "cargo test --manifest-path src-tauri/Cargo.toml export_bindings"
+   },

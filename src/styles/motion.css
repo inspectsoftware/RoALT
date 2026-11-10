@@ -324,33 +324,8 @@ textarea.mono {
     translate var(--dur-spring) var(--spring);
 }
 
-/* A switch's thumb stretches as it travels and squashes when it lands (only once it was pressed). */
-.switch[data-moved][aria-checked="true"]::after {
-  transform-origin: left center;
-  animation: lq-thumb-on var(--dur-spring) var(--ease-out);
-}
-.switch[data-moved][aria-checked="false"]::after {
-  transform-origin: right center;
-  animation: lq-thumb-off var(--dur-spring) var(--ease-out);
-}
-:root[dir="rtl"] .switch[data-moved][aria-checked="true"]::after {
-  transform-origin: right center;
-}
-:root[dir="rtl"] .switch[data-moved][aria-checked="false"]::after {
-  transform-origin: left center;
-}
-@keyframes lq-thumb-on {
-  0% { transform: scaleX(1); }
-  35% { transform: scaleX(1.55); }
-  70% { transform: scale(0.88, 1.08); }
-  100% { transform: none; }
-}
-@keyframes lq-thumb-off {
-  0% { transform: scaleX(1); }
-  35% { transform: scaleX(1.55); }
-  70% { transform: scale(0.88, 1.08); }
-  100% { transform: none; }
-}
+/* Switch thumbs glide only inside their track. The old stretch could extend outside compact
+   controls, so every switch now uses the same contained movement. */
 
 /* A checkbox wobbles like jelly when pressed, and its tick draws itself. */
 .cb[data-moved]:checked {

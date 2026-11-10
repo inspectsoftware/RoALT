@@ -27,7 +27,8 @@
   .island-slot {
     display: flex;
   }
-  /* The liquid layer under the tiles (ui/island Drops). Opaque fills: the goo filter melts by alpha. */
+  /* The liquid layer under the tiles (ui/island Drops). Its controlled blur keeps neighbouring
+     fills connected without the hard, cut-out join between a labelled page and an icon tile. */
   .island-drops {
     position: absolute;
     inset: 0;

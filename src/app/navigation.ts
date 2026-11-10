@@ -57,6 +57,7 @@ export const SHORTCUT_VIEW: Record<string, View> = {
   Digit7: "discord",
   Digit8: "debug",
   Digit9: "performance",
+  Digit0: "browse",
 };
 export function shortcutFor(view: View) {
   const code = Object.keys(SHORTCUT_VIEW).find((c) => SHORTCUT_VIEW[c] === view);

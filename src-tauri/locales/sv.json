@@ -372,5 +372,6 @@
   "That isn't a Roblox username: use 1 to 254 characters without spaces.": "Det är inget Roblox-användarnamn: använd 1 till 254 tecken utan mellanslag.",
   "The password must be 1 to 256 characters.": "Lösenordet måste vara 1 till 256 tecken.",
   "That page isn't available in Browse.": "Den sidan finns inte i Bläddra.",
-  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "Köp är låsta. Stäng av Lås köp i Inställningar, under Säkerhet, för att köpa detta."
+  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "Köp är låsta. Stäng av Lås köp i Inställningar, under Säkerhet, för att köpa detta.",
+  "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it.": "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it."
 }

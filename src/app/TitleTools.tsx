@@ -1,19 +1,16 @@
-import type { VaultMode } from "../api";
 import { t } from "../i18n";
 import { IconButton } from "../ui/Button";
-import { Icon } from "../ui/Icon";
 import { IconSwap } from "../ui/motion";
 
 /** The title bar's own keys: refresh (as F5), the layout, the theme, and the vault (a lock key with a
  * master password, else the encryption's state). */
-export function TitleTools({ dark, onRefresh, onToggleTheme, sideTabs, onToggleTabs, onLock, vaultMode }: {
+export function TitleTools({ dark, onRefresh, onToggleTheme, sideTabs, onToggleTabs, onLock }: {
   dark: boolean;
   onRefresh?: () => void;
   onToggleTheme?: () => void;
   sideTabs?: boolean;
   onToggleTabs?: () => void;
   onLock?: () => void;
-  vaultMode?: VaultMode;
 }) {
   return (
     <div className="title-tools">
@@ -26,15 +23,7 @@ export function TitleTools({ dark, onRefresh, onToggleTheme, sideTabs, onToggleT
           <IconSwap name={dark ? "sun" : "moon"} />
         </button>
       )}
-      {onLock ? (
-        <IconButton icon="lock" label={t("ui.lockVault")} shortcut="Ctrl+L" onClick={onLock} />
-      ) : (
-        vaultMode === "dpapi" && (
-          <span className="vault-glyph" role="img" aria-label={t("app.vaultUnlockedDpapi")} data-tip={t("app.encrypted")}>
-            <Icon name="shield" />
-          </span>
-        )
-      )}
+      {onLock && <IconButton icon="lock" label={t("ui.lockVault")} shortcut="Ctrl+L" onClick={onLock} />}
     </div>
   );
 }

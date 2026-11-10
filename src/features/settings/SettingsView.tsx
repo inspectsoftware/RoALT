@@ -75,8 +75,24 @@ export function SettingsView({ area = "launching" }: { area?: SettingsArea }) {
   const def = AREAS.find((a) => a.id === area)!;
   const title = groups ? t("settings.title") : t(def.label);
   // Before the frame a jump into the new area lands in (jump.ts), so it doesn't undo that scroll.
+  // The shared `.scroll` class is deliberately smooth, including imperative `scrollTop` changes.
+  // Override it for this one frame: otherwise a short new page briefly paints at Appearance's old
+  // scroll position while WebView2 scrolls home.
   useLayoutEffect(() => {
-    main.current?.scrollTo({ top: 0, behavior: "instant" });
+    const el = main.current;
+    if (!el) return;
+    const before = el.style.scrollBehavior;
+    el.style.scrollBehavior = "auto";
+    el.scrollTop = 0;
+    const frame = requestAnimationFrame(() => {
+      // DOM exit/enter work can try to anchor the previous position again on this frame.
+      el.scrollTop = 0;
+      el.style.scrollBehavior = before;
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      el.style.scrollBehavior = before;
+    };
   }, [area]);
 
   return (

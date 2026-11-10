@@ -372,5 +372,6 @@
   "That isn't a Roblox username: use 1 to 254 characters without spaces.": "Hindi iyan Roblox username: gumamit ng 1 hanggang 254 na character na walang espasyo.",
   "The password must be 1 to 256 characters.": "Dapat 1 hanggang 256 na character ang password.",
   "That page isn't available in Browse.": "Hindi available ang page na iyan sa Browse.",
-  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "Naka-lock ang mga pagbili. I-off ang I-lock ang pagbili sa Settings, sa ilalim ng Security, para mabili ito."
+  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "Naka-lock ang mga pagbili. I-off ang I-lock ang pagbili sa Settings, sa ilalim ng Security, para mabili ito.",
+  "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it.": "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it."
 }

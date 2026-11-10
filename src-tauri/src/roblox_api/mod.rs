@@ -28,9 +28,10 @@ use zeroize::Zeroizing;
 use crate::error::{AppError, Result};
 use crate::vault::Secret;
 use types::{
-    AgeRecommendation, AuthenticatedUser, BadgePage, CollectiblePage, Data, FriendOnline, FriendStatus, FriendStatusRow, Game, GameDetails, GroupRoleRow,
-    GroupRow, Holding, IdPage, Listed, PassPage, Presences, PrivateServerList, Profiles, RobloxBadgeRow, ServerList, ShareLinkResolution, ShareLinkV2,
-    SocialCounts, Thumbnails, TwoStepConfig, UniverseRow, UserDetails, UserGamePage, UserPresence, VipServerResponse, VoteRow,
+    AgeRecommendation, AuthenticatedUser, BadgePage, CollectiblePage, Data, FriendOnline, FriendStatus, FriendStatusRow, Game, GameDetails,
+    GroupRoleRow, GroupRow, Holding, IdPage, Listed, OmniGameHit, OmniSearchResponse, PassPage, Presences, PrivateServerList, Profiles,
+    RobloxBadgeRow, ServerList, ShareLinkResolution, ShareLinkV2, SocialCounts, Thumbnails, TwoStepConfig, UniverseRow, UserDetails,
+    UserGamePage, UserPresence, UserSearchHit, VipServerResponse, VoteRow,
 };
 
 /// Called with `(account_id, new cookie)` when Roblox rotates a stored account's cookie.
@@ -265,6 +266,54 @@ impl Client {
     /// (root place id, game name). Unknown universes are absent.
     pub async fn universe_root_places(&self, universe_ids: &[i64]) -> Result<HashMap<i64, (i64, String)>> {
         Ok(self.games(universe_ids).await?.into_iter().map(|g| (g.universe_id, (g.root_place_id, g.name))).collect())
+    }
+
+    /// `GET users.roblox.com/v1/users/search?keyword=..&limit=10` — Roblox requires a signed-in
+    /// cookie for this endpoint now; passing one also raises the per-minute cap. An empty keyword
+    /// returns nothing without a call.
+    pub async fn search_users(&self, account_id: i64, cookie: Option<&Secret>, keyword: &str) -> Result<Vec<UserSearchHit>> {
+        let keyword = keyword.trim();
+        if keyword.is_empty() {
+            return Ok(Vec::new());
+        }
+        let route = endpoints::USERS_SEARCH;
+        let url = endpoints::fill(route, crate::launcher::uri::encode(keyword));
+        Ok(self.get::<Data<UserSearchHit>>(route, &url, account_id, cookie).await?.data)
+    }
+
+    /// `GET apis.roblox.com/search-api/omni-search?searchQuery=..&pageType=all&sessionId=..` —
+    /// the website's own game typeahead. Needs a signed-in cookie. Returns the rows in the
+    /// `Game` content group (others, such as Creator and Inventory, are ignored).
+    pub async fn search_games(&self, account_id: i64, cookie: Option<&Secret>, keyword: &str) -> Result<Vec<OmniGameHit>> {
+        let keyword = keyword.trim();
+        if keyword.is_empty() {
+            return Ok(Vec::new());
+        }
+        let route = endpoints::OMNI_SEARCH;
+        let session = uuid::Uuid::new_v4().to_string();
+        let url = route
+            .replacen("{}", &crate::launcher::uri::encode(keyword), 1)
+            .replacen("{}", &session, 1);
+        let res: OmniSearchResponse = self.get(route, &url, account_id, cookie).await?;
+        Ok(res.search_results.into_iter()
+            .filter(|g| g.content_group_type.eq_ignore_ascii_case("Game"))
+            .flat_map(|g| g.contents)
+            .filter(|c| c.content_type.is_empty() || c.content_type.eq_ignore_ascii_case("Game"))
+            .collect())
+    }
+
+    /// Avatar headshots in one call, no retry (typeahead speed). Ids that end up Pending/Error/
+    /// Blocked or with an empty url are absent from the map.
+    pub async fn headshots_once(&self, user_ids: &[i64]) -> Result<HashMap<i64, String>> {
+        let ids: Vec<_> = valid_ids(user_ids).into_iter().take(100).collect();
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let url = endpoints::fill(endpoints::HEADSHOTS, csv(&ids));
+        let page: Thumbnails = self.get(endpoints::HEADSHOTS, &url, 0, None).await?;
+        let mut out = HashMap::new();
+        sort_thumbnails(page, &mut out);
+        Ok(out)
     }
 
     /// `POST users.roblox.com/v1/usernames/users {usernames ≤200, excludeBannedUsers:true}`

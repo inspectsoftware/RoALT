@@ -361,5 +361,6 @@
   "That isn't a Roblox username: use 1 to 254 characters without spaces.": "Roblox 아이디가 아니에요: 공백 없이 1~254자로 입력하세요.",
   "The password must be 1 to 256 characters.": "비밀번호는 1~256자여야 해요.",
   "That page isn't available in Browse.": "그 페이지는 둘러보기에서 열 수 없어요.",
-  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "구매가 잠겨 있어요. 구매하려면 설정의 보안에서 구매 잠금을 끄세요."
+  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "구매가 잠겨 있어요. 구매하려면 설정의 보안에서 구매 잠금을 끄세요.",
+  "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it.": "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it."
 }

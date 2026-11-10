@@ -902,6 +902,32 @@ pub struct UserRef {
     pub display_name: String,
 }
 
+/// One row of the header search typeahead (people tab). `thumbnail` is a Roblox avatar-headshot
+/// URL, or None when Roblox didn't send one in time.
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UserSearchResult {
+    pub user_id: i64,
+    pub username: String,
+    pub display_name: String,
+    pub has_verified_badge: bool,
+    pub thumbnail: Option<String>,
+}
+
+/// One row of the header search typeahead (games tab). `thumbnail` is a Roblox place-icon URL.
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct GameSearchResult {
+    pub place_id: i64,
+    pub universe_id: Option<i64>,
+    pub name: String,
+    pub creator_name: String,
+    pub player_count: Option<i64>,
+    pub thumbnail: Option<String>,
+}
+
 /// A client RoALT started.
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]

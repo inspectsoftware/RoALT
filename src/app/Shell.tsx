@@ -65,6 +65,9 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
   const groups = useGroups();
   const instances = useInstances().data ?? [];
   const [view, setView] = useState<View>("dashboard");
+  // The island responds to a click immediately. The content view may still be loading inside a
+  // React transition, but its active label must not wait for that work to commit.
+  const [navView, setNavView] = useState<View>("dashboard");
   const [area, setArea] = useState<SettingsArea>("launching");
   const [group, setGroup] = useState<number | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
@@ -128,6 +131,7 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
     focusNext.current = opts.focus ? { view: next, to: opts.focus } : null;
     if (next === wanted.current) return;
     wanted.current = next;
+    setNavView(next);
     markViewEntering();
     startTransition(() => setView(next));
   };
@@ -240,7 +244,7 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
       icon: SECTION_ICON[s],
       label: t(VIEW_NAME[v]),
       shortcut: shortcutFor(v),
-      current: view === v,
+      current: navView === v,
       count: s === "accounts" && accounts.data!.length > 0 ? accounts.data!.length : undefined,
       onSelect: () => (s === "servers" ? openServers() : s === "accounts" ? showAll() : go(v)),
     };
@@ -261,7 +265,7 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
           icon: a.icon,
           label: t(a.label),
           shortcut: a.id === "launching" ? shortcutFor("settings") : undefined,
-          current: view === "settings" && area === a.id,
+          current: navView === "settings" && area === a.id,
           // A request (Shell runs openArea for it): Settings also ends a search for the area on screen.
           onSelect: () => requestNavigation("settings", a.id),
         })),

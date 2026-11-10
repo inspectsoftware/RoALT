@@ -383,5 +383,6 @@
   "That isn't a Roblox username: use 1 to 254 characters without spaces.": "To nije Roblox korisničko ime: koristite 1 do 254 znaka bez razmaka.",
   "The password must be 1 to 256 characters.": "Lozinka mora imati 1 do 256 znakova.",
   "That page isn't available in Browse.": "Ta stranica nije dostupna u Pregledu.",
-  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "Kupovine su zaključane. Isključite Zaključaj kupovine u Postavkama, pod Sigurnost, da kupite ovo."
+  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "Kupovine su zaključane. Isključite Zaključaj kupovine u Postavkama, pod Sigurnost, da kupite ovo.",
+  "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it.": "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it."
 }

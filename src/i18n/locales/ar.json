@@ -1769,5 +1769,14 @@
   "player.visits_few": "{n} زيارات",
   "player.visits_many": "{n} زيارةً",
   "player.visits_other": "{n} زيارة",
-  "player.busy": "يجري إحصاء آخر الآن. اضغط «إحصاء» عند انتهائه."
+  "player.busy": "يجري إحصاء آخر الآن. اضغط «إحصاء» عند انتهائه.",
+  "common.clear": "Clear",
+  "common.error": "Something went wrong.",
+  "headerSearch.scope": "Search scope",
+  "headerSearch.people": "People",
+  "headerSearch.games": "Games",
+  "headerSearch.placeholderPeople": "Search people",
+  "headerSearch.placeholderGames": "Search games",
+  "headerSearch.noPeople": "No one matches that.",
+  "headerSearch.noGames": "No games match that."
 }

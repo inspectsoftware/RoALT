@@ -48,6 +48,50 @@ pub struct UserPresence {
     pub universe_id: Option<i64>,
 }
 
+/// A row of `GET users.roblox.com/v1/users/search?keyword=..`.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UserSearchHit {
+    pub id: i64,
+    pub name: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub has_verified_badge: bool,
+}
+
+/// One row inside an omni-search `Game` content group.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OmniGameHit {
+    pub universe_id: Option<i64>,
+    pub root_place_id: Option<i64>,
+    pub name: Option<String>,
+    #[serde(default)]
+    pub creator_name: String,
+    pub player_count: Option<i64>,
+    pub total_up_votes: Option<i64>,
+    pub total_down_votes: Option<i64>,
+    #[serde(default)]
+    pub content_type: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OmniContentGroup {
+    #[serde(default)]
+    pub content_group_type: String,
+    #[serde(default)]
+    pub contents: Vec<OmniGameHit>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OmniSearchResponse {
+    #[serde(default)]
+    pub search_results: Vec<OmniContentGroup>,
+}
+
 /// The `{data:[..]}` envelope of list answers.
 #[derive(Deserialize, Debug)]
 pub struct Data<T> {

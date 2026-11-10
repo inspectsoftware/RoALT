@@ -1484,5 +1484,14 @@
   "player.private": "คลังของเขาเป็นส่วนตัว: Roblox ไม่แสดงลิมิเต็ดของเขา",
   "player.members_other": "สมาชิก {n} คน",
   "player.visits_other": "เข้าชม {n} ครั้ง",
-  "player.busy": "มีการนับอื่นกำลังทำงานอยู่ กด “นับ” เมื่อเสร็จแล้ว"
+  "player.busy": "มีการนับอื่นกำลังทำงานอยู่ กด “นับ” เมื่อเสร็จแล้ว",
+  "common.clear": "Clear",
+  "common.error": "Something went wrong.",
+  "headerSearch.scope": "Search scope",
+  "headerSearch.people": "People",
+  "headerSearch.games": "Games",
+  "headerSearch.placeholderPeople": "Search people",
+  "headerSearch.placeholderGames": "Search games",
+  "headerSearch.noPeople": "No one matches that.",
+  "headerSearch.noGames": "No games match that."
 }

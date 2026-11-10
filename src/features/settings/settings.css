@@ -4,6 +4,10 @@
     max-width: 840px;
     margin-inline: auto;
   }
+  /* An outgoing settings area must not pull the incoming area back to its old scroll anchor. */
+  .scroll:has(.set-page) {
+    overflow-anchor: none;
+  }
   .set-head {
     display: flex;
     flex-wrap: wrap;

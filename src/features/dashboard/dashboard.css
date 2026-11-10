@@ -53,8 +53,13 @@
   }
   .home-afk {
     gap: 10px;
-    padding-inline: 12px 8px;
+    /* Reserve the full 40px switch track plus its comfortable tap target. */
+    padding-inline: 12px 12px;
     cursor: pointer;
+  }
+  .home-afk .switch {
+    /* Never let the switch shrink when Home's header is tight. */
+    flex: 0 0 40px;
   }
   .home-afk:hover {
     color: var(--fg);

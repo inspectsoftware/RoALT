@@ -372,5 +372,6 @@
   "That isn't a Roblox username: use 1 to 254 characters without spaces.": "Ce n'est pas un identifiant Roblox : utilise 1 à 254 caractères sans espace.",
   "The password must be 1 to 256 characters.": "Le mot de passe doit faire 1 à 256 caractères.",
   "That page isn't available in Browse.": "Cette page n'est pas disponible dans Parcourir.",
-  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "Les achats sont bloqués. Désactive Bloquer les achats dans les Paramètres, sous Sécurité, pour acheter ceci."
+  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "Les achats sont bloqués. Désactive Bloquer les achats dans les Paramètres, sous Sécurité, pour acheter ceci.",
+  "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it.": "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it."
 }

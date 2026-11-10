@@ -15,9 +15,8 @@ import { friendly, toast, toastError } from "../../ui/Toast";
 import { launchBlocked, launchOne, useLaunchStep } from "../launch/launchQueue";
 import { STATES } from "../launch/Running";
 import { Limiteds } from "./Limiteds";
-import { accountAge, ago, formatDate, PresenceStatus, Status, SWATCHES } from "./shared";
+import { accountAge, ago, formatDate, PresenceStatus, Status } from "./shared";
 
-const HEX = /^#[0-9a-f]{6}$/i;
 const NO_ANSWER: Key = "accounts.detail.noAnswer";
 /** A client's stage by shape too, as elsewhere: on its way a ring, in game a dot, dropped a diamond. */
 const STAGE_SHAPE: Record<Instance["state"], "ring" | "dot" | "diamond"> = { starting: "ring", joining: "ring", inGame: "dot", disconnected: "diamond", exited: "ring" };
@@ -254,23 +253,13 @@ function ServerName({ visit: v }: { visit: ServerVisit }) {
   );
 }
 
-/** What the user calls it, its groups and colour, and how it is treated. Text saves on blur or Enter. */
+/** What the user calls it, its groups, and how it is treated. Text saves on blur or Enter. */
 function Organise({ account: a, groups }: { account: AccountSummary; groups: Group[] }) {
   const update = useUpdateAccount();
   const save = (patch: AccountPatch) => update.mutate({ id: a.id, patch });
   const [alias, setAlias] = useState(a.alias);
   const [notes, setNotes] = useState(a.notes);
-  const [hex, setHex] = useState(a.color ?? "");
   const groupsId = useId();
-  const colourId = useId();
-
-  const hexBad = hex.trim() !== "" && !HEX.test(hex.trim());
-  // A bad value stays, with its error, until it is fixed or cleared.
-  const commitHex = () => {
-    const v = hex.trim();
-    if (v === (a.color ?? "") || hexBad) return;
-    save({ color: v.toLowerCase() });
-  };
   const toggleGroup = (gid: number) =>
     save({ groupIds: a.groupIds.includes(gid) ? a.groupIds.filter((x) => x !== gid) : [...a.groupIds, gid] });
 
@@ -306,43 +295,6 @@ function Organise({ account: a, groups }: { account: AccountSummary; groups: Gro
               </Chip>
             ))}
           </div>
-        )}
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <span className="label" id={colourId}>{t("accounts.detail.colour")}</span>
-        <div className="flex flex-wrap items-center gap-2" role="group" aria-labelledby={colourId}>
-          {SWATCHES.map((c) => (
-            <button
-              key={c}
-              type="button"
-              className="swatch"
-              style={{ background: c }}
-              aria-label={t("accounts.groups.colourValue", { color: c })}
-              aria-pressed={a.color?.toLowerCase() === c.toLowerCase()}
-              onClick={() => {
-                setHex(c.toLowerCase());
-                save({ color: c.toLowerCase() });
-              }}
-            />
-          ))}
-          <input
-            className="field mono min-h-8 w-[96px] px-2 text-xs"
-            aria-label={t("accounts.detail.customColour")}
-            placeholder="#rrggbb"
-            value={hex}
-            maxLength={7}
-            spellCheck={false}
-            aria-invalid={hexBad || undefined}
-            aria-describedby={hexBad ? `${colourId}-error` : undefined}
-            onChange={(e) => setHex(e.target.value)}
-            onBlur={commitHex}
-            onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
-          />
-        </div>
-        {hexBad && (
-          <p id={`${colourId}-error`} className="text-[13px] text-attention">
-            {t("accounts.detail.colourInvalid")}
-          </p>
         )}
       </div>
       <Row label={t("accounts.detail.favourite")}>

@@ -1484,5 +1484,14 @@
   "player.private": "インベントリが非公開です: Roblox は限定アイテムを表示しません。",
   "player.members_other": "メンバー {n} 人",
   "player.visits_other": "{n} 回訪問",
-  "player.busy": "別の集計を実行中です。終わってから「集計」を押してください。"
+  "player.busy": "別の集計を実行中です。終わってから「集計」を押してください。",
+  "common.clear": "Clear",
+  "common.error": "Something went wrong.",
+  "headerSearch.scope": "Search scope",
+  "headerSearch.people": "People",
+  "headerSearch.games": "Games",
+  "headerSearch.placeholderPeople": "Search people",
+  "headerSearch.placeholderGames": "Search games",
+  "headerSearch.noPeople": "No one matches that.",
+  "headerSearch.noGames": "No games match that."
 }

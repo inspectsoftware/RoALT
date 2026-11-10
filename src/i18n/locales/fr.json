@@ -1541,5 +1541,14 @@
   "player.members_other": "{n} membres",
   "player.visits_one": "{n} visite",
   "player.visits_other": "{n} visites",
-  "player.busy": "Un autre comptage est en cours. Appuie sur Compter quand il est terminé."
+  "player.busy": "Un autre comptage est en cours. Appuie sur Compter quand il est terminé.",
+  "common.clear": "Clear",
+  "common.error": "Something went wrong.",
+  "headerSearch.scope": "Search scope",
+  "headerSearch.people": "People",
+  "headerSearch.games": "Games",
+  "headerSearch.placeholderPeople": "Search people",
+  "headerSearch.placeholderGames": "Search games",
+  "headerSearch.noPeople": "No one matches that.",
+  "headerSearch.noGames": "No games match that."
 }

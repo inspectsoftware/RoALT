@@ -1,5 +1,5 @@
 import "./browse.css";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api, type AccountSummary, type BrowseBlocked, type BrowsePage, type BrowsePlay } from "../../api";
 import type { BrowseRequest } from "../../app/navigation";
@@ -7,7 +7,7 @@ import { useSettings } from "../../data";
 import { t, type Key } from "../../i18n";
 import { Button, IconButton } from "../../ui/Button";
 import { Segmented } from "../../ui/controls";
-import { Input, Select } from "../../ui/Field";
+import { Select } from "../../ui/Field";
 import type { IconName } from "../../ui/Icon";
 import { readStored, writeStored } from "../../ui/stored";
 import { Tabs } from "../../ui/Tabs";
@@ -20,6 +20,7 @@ import { PlaytimeTab, PopularTab } from "./Native";
 import { usePageCard } from "./pageCard";
 import { usePlayerDetails } from "./PlayerDetails";
 import { RobloxPane } from "./RobloxPane";
+import { SearchTypeahead } from "./SearchTypeahead";
 
 const LAST_KEY = "roalt.browseAccount";
 const lastAccount = () => Number(readStored(LAST_KEY)) || null;
@@ -70,6 +71,7 @@ export function BrowseView({ accounts, ask }: { accounts: AccountSummary[]; ask:
   const [error, setError] = useState<string | null>(null);
   const [kind, setKind] = useState<"people" | "games">("people");
   const [query, setQuery] = useState("");
+  const stage = useRef<HTMLDivElement>(null);
   // One of RoALT's own tabs, over Roblox's page (which stays where it was, hidden).
   const [native, setNative] = useState<Native | null>(null);
   // Counts Browse's page reports: a reload of the same page needs the profile card again.
@@ -99,6 +101,7 @@ export function BrowseView({ accounts, ask }: { accounts: AccountSummary[]; ask:
     const un = listen<BrowsePage>("browse://page", (e) => {
       if (e.payload.accountId !== accountId) return;
       if (!launches(e.payload.path)) lastPath = e.payload.path;
+      setQuery("");
       setShown(e.payload.path);
       setSeq((n) => n + 1);
     });
@@ -122,7 +125,13 @@ export function BrowseView({ accounts, ask }: { accounts: AccountSummary[]; ask:
   }, []);
   // What Browse refused: Create, and spending while purchases are locked.
   useEffect(() => {
-    const un = listen<BrowseBlocked>("browse://blocked", (e) => toast(t(BLOCKED[e.payload]), "error"));
+    const un = listen<BrowseBlocked>("browse://blocked", (e) => {
+      const message = t(BLOCKED[e.payload]);
+      // Browse is a native child webview, so an app-level toast would need an empty strip below it.
+      // Put this notice in the page itself instead: it stays visible over Roblox and the page keeps
+      // its full height.
+      void api.browseNotice(message).catch(() => toast(message, "error"));
+    });
     return () => void un.then((f) => f());
   }, []);
 
@@ -136,6 +145,14 @@ export function BrowseView({ accounts, ask }: { accounts: AccountSummary[]; ask:
     setNative(null);
     void api.browseNav(action).catch(toastError);
   };
+  const setNativeTypeahead = useCallback((overlay: { rect: { left: number; top: number; width: number }; rows: unknown[]; note?: string } | null) => {
+    const r = stage.current?.getBoundingClientRect();
+    if (!overlay || !r) return void api.browseTypeahead(null).catch(() => {});
+    // The child webview starts at the stage, so translate the app's screen coordinates into its
+    // own viewport. A small inset keeps a menu that starts a pixel above the stage fully visible.
+    void api.browseTypeahead({ x: Math.max(8, overlay.rect.left - r.left), y: Math.max(8, overlay.rect.top - r.top), width: overlay.rect.width, rows: overlay.rows, note: overlay.note }).catch(() => {});
+  }, []);
+  useEffect(() => () => { void api.browseTypeahead(null).catch(() => {}); }, []);
   const account = accounts.find((a) => a.id === accountId);
   const details = useGameDetails();
   const player = usePlayerDetails(account?.id ?? 0);
@@ -205,11 +222,19 @@ export function BrowseView({ accounts, ask }: { accounts: AccountSummary[]; ask:
               { value: "games", label: t("browse.games") },
             ]}
           />
-          <Input data-find leading="search" aria-label={t("browse.search")} placeholder={t("browse.search")} value={query} onChange={(e) => setQuery(e.target.value)} />
+          <SearchTypeahead
+            kind={kind}
+            query={query}
+            setQuery={setQuery}
+            nativeOverlay={!native}
+            onNativeOverlay={setNativeTypeahead}
+            onPickUser={(userId) => go(`users/${userId}/profile`)}
+            onPickGame={(placeId) => go(`games/${placeId}`)}
+          />
         </form>
       </div>
       {error && !native && <p role="alert" className="alert px-1 pb-2">{error}</p>}
-      <div className="browse-stage">
+      <div ref={stage} className="browse-stage">
         <RobloxPane accountId={account.id} path={page.path} n={page.n} hidden={!!native} resume={lastPath} onError={setError} />
         {native && (
           <div className="browse-native scroll">

@@ -27,22 +27,8 @@ function useOverlayOpen() {
   return open;
 }
 
-/** The height the toasts take at the bottom while there are any: the page leaves it free, so they
- * never end up under it. */
-function useToastInset() {
-  const [inset, setInset] = useState(0);
-  useEffect(() => {
-    const el = document.querySelector<HTMLElement>(".toaster");
-    if (!el) return;
-    const ro = new ResizeObserver(() => setInset(el.offsetHeight ? el.offsetHeight + 24 : 0));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  return inset;
-}
-
-/** Where Roblox's page goes: this element's box, less the toasts' room. RoALT keeps it there as the
- * window and the layout change, and hides it under dialogs and menus. `n` loads `path` again. */
+/** Where Roblox's page goes. It always fills this element: browser notices render inside the
+ * native page, so the app no longer needs to reserve a black strip beneath it. */
 export function RobloxPane({ accountId, path, n, hidden, resume, onError }: {
   accountId: number;
   path: string;
@@ -55,14 +41,13 @@ export function RobloxPane({ accountId, path, n, hidden, resume, onError }: {
 }) {
   const box = useRef<HTMLDivElement>(null);
   const overlay = useOverlayOpen() || hidden;
-  const inset = useToastInset();
   // The last box sent: what a cleanup uses, once the element is already gone.
   const last = useRef<PaneRect>({ x: 0, y: 0, width: 1, height: 1 });
   const rect = (): PaneRect => {
     const el = box.current;
     if (!el) return last.current;
     const r = el.getBoundingClientRect();
-    last.current = { x: r.left, y: r.top, width: r.width, height: Math.max(1, r.height - inset) };
+    last.current = { x: r.left, y: r.top, width: r.width, height: Math.max(1, r.height) };
     return last.current;
   };
   const latest = useRef({ rect, overlay });
@@ -124,7 +109,7 @@ export function RobloxPane({ accountId, path, n, hidden, resume, onError }: {
       ro.disconnect();
       window.removeEventListener("resize", send);
     };
-  }, [overlay, inset]);
+  }, [overlay]);
 
   // Another view: the page hides at once, and closes if Browse isn't back within a while.
   useEffect(() => {

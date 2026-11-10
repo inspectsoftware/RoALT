@@ -1598,5 +1598,14 @@
   "player.visits_one": "{n} wizyta",
   "player.visits_few": "{n} wizyty",
   "player.visits_many": "{n} wizyt",
-  "player.busy": "Trwa już inne liczenie. Naciśnij Policz, gdy się skończy."
+  "player.busy": "Trwa już inne liczenie. Naciśnij Policz, gdy się skończy.",
+  "common.clear": "Clear",
+  "common.error": "Something went wrong.",
+  "headerSearch.scope": "Search scope",
+  "headerSearch.people": "People",
+  "headerSearch.games": "Games",
+  "headerSearch.placeholderPeople": "Search people",
+  "headerSearch.placeholderGames": "Search games",
+  "headerSearch.noPeople": "No one matches that.",
+  "headerSearch.noGames": "No games match that."
 }

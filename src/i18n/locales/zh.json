@@ -1484,5 +1484,14 @@
   "player.private": "其库存为私密：Roblox 不显示其限量物品。",
   "player.members_other": "{n} 名成员",
   "player.visits_other": "{n} 次访问",
-  "player.busy": "另一项统计正在进行。完成后再点“统计”。"
+  "player.busy": "另一项统计正在进行。完成后再点“统计”。",
+  "common.clear": "Clear",
+  "common.error": "Something went wrong.",
+  "headerSearch.scope": "Search scope",
+  "headerSearch.people": "People",
+  "headerSearch.games": "Games",
+  "headerSearch.placeholderPeople": "Search people",
+  "headerSearch.placeholderGames": "Search games",
+  "headerSearch.noPeople": "No one matches that.",
+  "headerSearch.noGames": "No games match that."
 }

@@ -27,6 +27,8 @@ pub const SHARE_LINK: &str = "https://apis.roblox.com/sharelinks/v1/resolve-link
 pub const SHARE_LINK_V2: &str = "https://apis.roblox.com/deeplinks/v2/resolve";
 pub const GAMES: &str = "https://games.roblox.com/v1/games?universeIds={}";
 pub const USERS_BY_NAME: &str = "https://users.roblox.com/v1/usernames/users";
+pub const USERS_SEARCH: &str = "https://users.roblox.com/v1/users/search?keyword={}&limit=10";
+pub const OMNI_SEARCH: &str = "https://apis.roblox.com/search-api/omni-search?searchQuery={}&pageType=all&sessionId={}";
 pub const FRIENDS_ONLINE: &str = "https://friends.roblox.com/v1/users/{}/friends/online";
 
 // Friending stored accounts with each other. Statuses is in the public spec (Experimental); the

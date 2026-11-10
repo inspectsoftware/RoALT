@@ -57,11 +57,13 @@ import type { ServerPage } from "./bindings/ServerPage";
 import type { Settings } from "./bindings/Settings";
 import type { SettingsPatch } from "./bindings/SettingsPatch";
 import type { UserRef } from "./bindings/UserRef";
+import type { UserSearchResult } from "./bindings/UserSearchResult";
+import type { GameSearchResult } from "./bindings/GameSearchResult";
 import type { VaultMode } from "./bindings/VaultMode";
 import type { VaultStatus } from "./bindings/VaultStatus";
 
 export type {
-  AccountInfo, AccountPresence, Headshot,
+  AccountInfo, AccountPresence, Headshot, UserSearchResult, GameSearchResult,
   Favourite, FavouriteInput, JoinCandidate, LaunchInfo, LaunchTarget, ParsedInput, UserRef,
   BandwidthStatus, ClientMetrics, Crash, DiscordStatus, Instance, MultiInstanceStatus, BulkProgress, BulkRequest, ServerOrder, ServerPage, GameInfo, PrivateServerPage, DataDir, LogsCleaned, Notice, RobloxClient,
   AccountPatch, AccountSummary, AppUpdate, ConflictPolicy, ErrorPayload, Group, GroupInput,
@@ -190,6 +192,10 @@ export const api = {
   targetParse: (input: string) => invoke<ParsedInput>("target_parse", { input }),
   /** A Roblox username (current or previous) to its user. */
   userLookup: (name: string) => invoke<UserRef>("user_lookup", { name }),
+  /** Header typeahead: up to 5 best-matching Roblox users, with headshot URLs. */
+  searchUsers: (keyword: string) => invoke<UserSearchResult[]>("search_users", { keyword }),
+  /** Header typeahead: up to 5 best-matching Roblox experiences, with icon URLs. */
+  searchGames: (keyword: string) => invoke<GameSearchResult[]>("search_games", { keyword }),
   /** Starts the Roblox client as this account. */
   /** `fpsCap`: this launch's own, instead of the account's and the default; 0 or none: those. */
   launch: (accountId: number, target: LaunchTarget, favouriteId?: number, fpsCap?: number | null) =>
@@ -207,6 +213,10 @@ export const api = {
   /** Browse: www.roblox.com/`path` as the account, at `rect` (the main window's CSS pixels). */
   browseOpen: (accountId: number, path: string, rect: PaneRect) => invoke<void>("browse_open", { accountId, path, rect }),
   browseBounds: (rect: PaneRect, shown: boolean) => invoke<void>("browse_bounds", { rect, shown }),
+  /** A short notice rendered over Browse's native Roblox page. */
+  browseNotice: (message: string) => invoke<void>("browse_notice", { message }),
+  /** Search suggestions rendered in Browse's native Roblox page. `null` removes them. */
+  browseTypeahead: (overlay: unknown | null) => invoke<void>("browse_typeahead", { overlay }),
   browseNav: (action: BrowseNav) => invoke<void>("browse_nav", { action }),
   browseClose: () => invoke<void>("browse_close"),
   /** Roblox's Charts lists with icons (Browse's Popular; cached). */

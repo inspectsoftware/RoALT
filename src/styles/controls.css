@@ -376,9 +376,13 @@
   /* ---- Switch: 40x24 track, 18px thumb on a spring. ---- */
   .switch {
     position: relative;
-    flex: none;
+    box-sizing: border-box;
+    flex: 0 0 40px;
+    min-width: 40px;
+    max-width: 40px;
     width: 40px;
     height: 24px;
+    overflow: clip;
     padding: 0;
     border-radius: var(--r-pill);
     background: var(--surface-3);
@@ -408,7 +412,7 @@
       scale var(--dur-fast) var(--ease-out);
   }
   .switch:active::after {
-    scale: 1.12 0.92;
+    scale: 1.04 0.96;
   }
   .switch[aria-checked="true"] {
     background: var(--accent);
@@ -477,9 +481,11 @@
   .field:focus {
     border-color: var(--accent-text);
   }
+  /* A field already says "focused" by turning its own edge to the accent. Do not add the global
+     focus outline as a second, larger pink capsule around it. */
+  .field:focus-visible,
   .field:focus-within {
-    outline: 2px solid var(--focus);
-    outline-offset: 2px;
+    outline: none;
   }
   .field:disabled {
     color: var(--fg-3);

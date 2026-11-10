@@ -1541,5 +1541,14 @@
   "player.members_other": "{n} üye",
   "player.visits_one": "{n} ziyaret",
   "player.visits_other": "{n} ziyaret",
-  "player.busy": "Başka bir sayım sürüyor. Bitince Say düğmesine bas."
+  "player.busy": "Başka bir sayım sürüyor. Bitince Say düğmesine bas.",
+  "common.clear": "Clear",
+  "common.error": "Something went wrong.",
+  "headerSearch.scope": "Search scope",
+  "headerSearch.people": "People",
+  "headerSearch.games": "Games",
+  "headerSearch.placeholderPeople": "Search people",
+  "headerSearch.placeholderGames": "Search games",
+  "headerSearch.noPeople": "No one matches that.",
+  "headerSearch.noGames": "No games match that."
 }

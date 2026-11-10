@@ -1598,5 +1598,14 @@
   "player.visits_one": "{n} посещение",
   "player.visits_few": "{n} посещения",
   "player.visits_many": "{n} посещений",
-  "player.busy": "Уже идёт другой подсчёт. Нажмите «Посчитать», когда он закончится."
+  "player.busy": "Уже идёт другой подсчёт. Нажмите «Посчитать», когда он закончится.",
+  "common.clear": "Clear",
+  "common.error": "Something went wrong.",
+  "headerSearch.scope": "Search scope",
+  "headerSearch.people": "People",
+  "headerSearch.games": "Games",
+  "headerSearch.placeholderPeople": "Search people",
+  "headerSearch.placeholderGames": "Search games",
+  "headerSearch.noPeople": "No one matches that.",
+  "headerSearch.noGames": "No games match that."
 }

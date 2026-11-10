@@ -361,5 +361,6 @@
   "That isn't a Roblox username: use 1 to 254 characters without spaces.": "Đó không phải tên người dùng Roblox: dùng 1 đến 254 ký tự, không có khoảng trắng.",
   "The password must be 1 to 256 characters.": "Mật khẩu phải có 1 đến 256 ký tự.",
   "That page isn't available in Browse.": "Trang đó không có trong Duyệt.",
-  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "Mua hàng đang bị khóa. Tắt Khóa mua hàng trong Cài đặt, mục Bảo mật, để mua món này."
+  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "Mua hàng đang bị khóa. Tắt Khóa mua hàng trong Cài đặt, mục Bảo mật, để mua món này.",
+  "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it.": "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it."
 }

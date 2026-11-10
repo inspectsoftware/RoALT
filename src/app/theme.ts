@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Settings } from "../api";
 import { useBackgroundUrl } from "../data";
-import { prefersReducedMotion } from "../ui/motion";
 import { writeStored } from "../ui/stored";
 
 /** Last applied theme, read before first paint so a light-theme start does not flash dark. */
@@ -56,8 +55,7 @@ export function applyAccent(hex: string, theme: "dark" | "light") {
 }
 
 /** Applies the theme to <html>: `data-theme` (dark or light, "system" follows Windows live), the
- * accent (`data-accent`), and the background image. A theme change cross-fades the whole window in
- * one snapshot. Returns whether it is dark. */
+ * accent (`data-accent`), and the background image. Returns whether it is dark. */
 export function useTheme(s: Settings | undefined) {
   const [dark, setDark] = useState(() => document.documentElement.dataset.theme !== "light");
   const theme = s?.theme;
@@ -91,36 +89,28 @@ export function useTheme(s: Settings | undefined) {
       writeStored(THEME_KEY, t);
       writeStored(ACCENT_KEY, accent || null);
     };
-    // Only a real switch (not the first apply, not a background change) cross-fades.
+    // Only a real switch (not the first apply, not a background change) needs the short
+    // transition guard below.
     const key = `${theme}|${mq.matches}`;
     const switching = applied.current !== null && applied.current.split("|")[0] !== theme;
     applied.current = key;
-    if (switching) crossFade(apply);
+    if (switching) applyTheme(apply);
     else apply();
     // Windows' own light/dark matters only while the theme follows it.
     if (theme !== "system") return;
-    const onSystem = () => crossFade(apply);
+    const onSystem = () => applyTheme(apply);
     mq.addEventListener("change", onSystem);
     return () => mq.removeEventListener("change", onSystem);
   }, [theme, accent, image, dim]);
   return dark;
 }
 
-/** One snapshot of the window cross-fades to the new theme; nothing transitions on its own meanwhile
- * (a long list would freeze the window). Without the cross-fade (reduced motion), the switch is
- * instant all the same: thousands of rows each easing their colours would hang the window. */
-function crossFade(apply: () => void) {
+/** Switch themes atomically. WebView2's document snapshot animation can briefly paint stale layers
+ * (especially title-bar controls), so the desktop app deliberately avoids it. */
+function applyTheme(apply: () => void) {
   const root = document.documentElement;
   const settle = () => requestAnimationFrame(() => requestAnimationFrame(() => delete root.dataset.instant));
   root.dataset.instant = "";
-  if (prefersReducedMotion() || !("startViewTransition" in document)) {
-    apply();
-    return settle();
-  }
-  root.dataset.vt = "theme";
-  const vt = document.startViewTransition(apply);
-  vt.finished.finally(() => {
-    delete root.dataset.vt;
-    settle();
-  });
+  apply();
+  settle();
 }

@@ -276,6 +276,96 @@ pub fn browse_bounds(app: AppHandle, rect: PaneRect, shown: bool) -> Result<()> 
     Ok(())
 }
 
+/// Shows a short RoALT notice in Browse's own webview. The Browse page is a native child view and
+/// therefore sits above the main UI; putting its notices here lets the page use the whole stage.
+#[tauri::command]
+pub fn browse_notice(app: AppHandle, message: String) -> Result<()> {
+    let Some(wv) = app.get_webview(LABEL) else { return Ok(()) };
+    let message = serde_json::to_string(&message).expect("a string always serializes");
+    wv.eval(format!(r##"
+        (() => {{
+          const id = "__roalt_browse_notice";
+          const text = {message};
+          const show = () => {{
+            document.getElementById(id)?.remove();
+            const note = document.createElement("div");
+            note.id = id;
+            note.setAttribute("role", "alert");
+            note.textContent = text;
+            Object.assign(note.style, {{
+              position: "fixed", right: "18px", bottom: "18px", zIndex: "2147483647",
+              maxWidth: "360px", padding: "12px 16px", borderRadius: "14px",
+              background: "#161616", color: "#f4f4f5", border: "1px solid rgba(255,255,255,.13)",
+              boxShadow: "0 16px 40px rgba(0,0,0,.38)", font: "600 14px/1.4 system-ui, sans-serif"
+            }});
+            document.body.append(note);
+            window.setTimeout(() => note.remove(), 7000);
+          }};
+          if (document.body) show(); else document.addEventListener("DOMContentLoaded", show, {{ once: true }});
+        }})()
+    "##))?;
+    Ok(())
+}
+
+/// Shows or removes Browse's search suggestions in the native page itself. A child webview always
+/// sits above the main UI, so this keeps the page visible while the suggestions sit over it.
+#[tauri::command]
+pub fn browse_typeahead(app: AppHandle, overlay: Option<serde_json::Value>) -> Result<()> {
+    let Some(wv) = app.get_webview(LABEL) else { return Ok(()) };
+    let overlay = serde_json::to_string(&overlay).expect("JSON values always serialize");
+    wv.eval(format!(r##"
+        (() => {{
+          const id = "__roalt_browse_typeahead";
+          const data = {overlay};
+          const draw = () => {{
+            document.getElementById(id)?.remove();
+            if (!data) return;
+            const box = document.createElement("div");
+            box.id = id;
+            Object.assign(box.style, {{
+              position: "fixed", left: `${{data.x}}px`, top: `${{data.y}}px`, width: `${{data.width}}px`,
+              zIndex: "2147483647", overflow: "hidden", borderRadius: "12px",
+              background: "#1b1b1d", color: "#f4f4f5", border: "1px solid rgba(255,255,255,.18)",
+              boxShadow: "0 14px 34px rgba(0,0,0,.38)", font: "500 14px/1.25 system-ui, sans-serif"
+            }});
+            if (data.note) {{
+              const note = document.createElement("div");
+              note.textContent = data.note;
+              Object.assign(note.style, {{ padding: "12px 14px", color: "#b0b0b8" }});
+              box.append(note);
+            }}
+            for (const row of data.rows || []) {{
+              const item = document.createElement("button");
+              item.type = "button";
+              Object.assign(item.style, {{
+                display: "flex", width: "100%", alignItems: "center", gap: "10px", padding: "8px 10px",
+                border: "0", borderBottom: "1px solid rgba(255,255,255,.1)", background: "transparent",
+                color: "inherit", textAlign: "left", cursor: "pointer", font: "inherit"
+              }});
+              item.onmouseenter = () => item.style.background = "rgba(255,255,255,.08)";
+              item.onmouseleave = () => item.style.background = "transparent";
+              if (row.thumbnail) {{
+                const img = document.createElement("img");
+                img.src = row.thumbnail;
+                Object.assign(img.style, {{ width: "34px", height: "34px", objectFit: "cover", borderRadius: row.square ? "6px" : "50%" }});
+                item.append(img);
+              }}
+              const words = document.createElement("span");
+              Object.assign(words.style, {{ display: "flex", minWidth: "0", flexDirection: "column", gap: "2px" }});
+              const title = document.createElement("strong"); title.textContent = row.title; title.style.whiteSpace = "nowrap"; title.style.overflow = "hidden"; title.style.textOverflow = "ellipsis";
+              const sub = document.createElement("span"); sub.textContent = row.subtitle || ""; sub.style.color = "#a7a7b0"; sub.style.fontSize = "12px";
+              words.append(title, sub); item.append(words);
+              item.onclick = () => location.assign(row.url);
+              box.append(item);
+            }}
+            document.body.append(box);
+          }};
+          if (document.body) draw(); else document.addEventListener("DOMContentLoaded", draw, {{ once: true }});
+        }})()
+    "##))?;
+    Ok(())
+}
+
 /// The main window went to the tray or minimized (`shown` false), or is back.
 pub fn window_shown(app: &AppHandle, shown: bool) {
     let Some(wv) = app.get_webview(LABEL) else { return };

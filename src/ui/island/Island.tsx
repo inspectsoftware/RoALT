@@ -145,15 +145,16 @@ export function Island({ model, live }: { model: IslandModel; live?: ReactNode }
   );
 }
 
-/** The label of a tile, revealed while it is current: width and opacity spring together. */
+/** The label of a tile, revealed while it is current. The island itself can still resize, but the
+ * text's width changes in one frame - clipping a spring midway through a word reads as H, Ho,
+ * Home while moving between sections. */
 function Label({ shown, children }: { shown: boolean; children: ReactNode }) {
-  const reduced = useReducedMotionFlag();
   return (
     <motion.span
       aria-hidden="true"
       initial={false}
       animate={{ width: shown ? "auto" : 0, opacity: shown ? 1 : 0 }}
-      transition={{ width: reduced ? { duration: 0 } : SPRING.size, opacity: shown ? { ...TWEEN.fade, delay: 0.04 } : TWEEN.exit }}
+      transition={{ duration: 0 }}
       style={{ display: "inline-flex", overflow: "clip", overflowClipMargin: 2 }}
     >
       <span className="island-label ps-2">{children}</span>

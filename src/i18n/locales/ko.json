@@ -1484,5 +1484,14 @@
   "player.private": "인벤토리가 비공개예요: Roblox가 한정판을 보여주지 않아요.",
   "player.members_other": "멤버 {n}명",
   "player.visits_other": "방문 {n}회",
-  "player.busy": "다른 집계가 진행 중이에요. 끝나면 집계를 눌러 주세요."
+  "player.busy": "다른 집계가 진행 중이에요. 끝나면 집계를 눌러 주세요.",
+  "common.clear": "Clear",
+  "common.error": "Something went wrong.",
+  "headerSearch.scope": "Search scope",
+  "headerSearch.people": "People",
+  "headerSearch.games": "Games",
+  "headerSearch.placeholderPeople": "Search people",
+  "headerSearch.placeholderGames": "Search games",
+  "headerSearch.noPeople": "No one matches that.",
+  "headerSearch.noGames": "No games match that."
 }

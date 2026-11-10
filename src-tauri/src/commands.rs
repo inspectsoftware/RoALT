@@ -455,10 +455,11 @@ pub async fn accounts_validate(app: AppHandle, s: State<'_, App>, ids: Option<Ve
             Ok((u, _)) if u.id == user_id => {
                 s.db.set_status(id, AccountStatus::Valid, now, Some(&u.name), Some(&u.display_name))
             }
-            // The cookie signs in as someone else (e.g. an account switch in a browser).
-            Ok(_) => s.db.set_status(id, AccountStatus::Invalid, now, None, None),
-            Err(AppError::CookieInvalid | AppError::BoundSessionRequired) => {
-                s.db.set_status(id, AccountStatus::Invalid, now, None, None)
+            // Cookie signs in as someone else, or no longer signs in at all: remove and toast.
+            Ok(_) | Err(AppError::CookieInvalid | AppError::BoundSessionRequired) => {
+                drop_invalid_account(&app, &s, id)?;
+                answered += 1;
+                continue;
             }
             Err(AppError::Challenge) => s.db.set_status(id, AccountStatus::Challenged, now, None, None),
             Err(e) => {
@@ -498,17 +499,51 @@ fn reveal_prompt() -> String {
     tr!("Confirm it's you to reveal a Roblox cookie.")
 }
 
-/// Records a dead or challenged cookie on the account (true when `e` was one).
+/// Records a dead or challenged cookie on the account (true when `e` was one). Invalid or
+/// bound-session-required cookies can't recover, so the account is removed and the user is
+/// told once; challenged accounts stay (2FA still unlocks them).
 pub(crate) fn record_cookie_error(app: &AppHandle, s: &App, id: i64, e: &AppError) -> Result<bool> {
-    let status = match e {
-        AppError::CookieInvalid | AppError::BoundSessionRequired => AccountStatus::Invalid,
-        AppError::Challenge => AccountStatus::Challenged,
-        _ => return Ok(false),
+    match e {
+        AppError::CookieInvalid | AppError::BoundSessionRequired => {
+            drop_invalid_account(app, s, id)?;
+            Ok(true)
+        }
+        AppError::Challenge => {
+            log::info!("account {id} marked Challenged: {e}");
+            s.db.set_status(id, AccountStatus::Challenged, now_ms(), None, None)?;
+            accounts_changed(app);
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+/// Removes an account whose cookie no longer signs in, closes its session window and tells the
+/// user. Safe to call for an id that's already gone.
+pub(crate) fn drop_invalid_account(app: &AppHandle, s: &App, id: i64) -> Result<()> {
+    let account = match s.db.account(id) {
+        Ok(a) => a,
+        Err(AppError::NotFound) => return Ok(()),
+        Err(e) => return Err(e),
     };
-    log::info!("account {id} marked {status:?}: {e}");
-    s.db.set_status(id, status, now_ms(), None, None)?;
+    let user_id = account.user_id;
+    let name = if !account.alias.is_empty() {
+        account.alias.clone()
+    } else if !account.display_name.is_empty() {
+        account.display_name.clone()
+    } else {
+        account.username.clone()
+    };
+    log::info!("account {id} ({name}) removed: cookie no longer signs in");
+    s.db.remove_accounts(&[id])?;
+    if let Some(window) = app.get_webview_window(&format!("session-{user_id}")) {
+        let _ = window.close();
+    }
+    let (handle, dir) = (app.clone(), s.data_dir.clone());
+    std::thread::spawn(move || webview::remove_account_profile(&handle, &dir, id));
     accounts_changed(app);
-    Ok(true)
+    notice(app, true, tr!("Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it.", name = name));
+    Ok(())
 }
 
 fn stored_cookie(s: &App, id: i64) -> Result<Secret> {
@@ -1016,6 +1051,77 @@ pub async fn user_lookup(s: State<'_, App>, name: String) -> Result<UserRef> {
     let found = s.api.users_by_name(std::slice::from_ref(&name)).await?;
     let u = found.into_iter().next().ok_or_else(|| AppError::Invalid(tr!("No Roblox user is called \"{name}\".", name = name)))?;
     Ok(UserRef { user_id: u.id, username: u.name, display_name: u.display_name })
+}
+
+/// First valid account whose cookie we can load (searches need a signed-in cookie now).
+fn search_cookie(s: &App) -> Option<(i64, Secret)> {
+    let accounts = s.db.accounts().ok()?;
+    for a in accounts.iter().filter(|a| a.status == AccountStatus::Valid) {
+        if let Ok(c) = stored_cookie(s, a.id) {
+            return Some((a.id, c));
+        }
+    }
+    // Fallback: any account whose cookie we can decrypt — Roblox will reject bad ones.
+    for a in accounts {
+        if let Ok(c) = stored_cookie(s, a.id) {
+            return Some((a.id, c));
+        }
+    }
+    None
+}
+
+/// Header typeahead for people. Up to 5 best matches + their avatar-headshot URL (one-shot, no
+/// retry — Pending thumbnails come back empty so the dropdown opens fast).
+#[tauri::command]
+pub async fn search_users(s: State<'_, App>, keyword: String) -> Result<Vec<UserSearchResult>> {
+    let (account_id, cookie) = match search_cookie(&s) {
+        Some(c) => (c.0, Some(c.1)),
+        None => (0, None),
+    };
+    let hits = s.api.search_users(account_id, cookie.as_ref(), &keyword).await?;
+    let hits: Vec<_> = hits.into_iter().take(5).collect();
+    if hits.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids: Vec<_> = hits.iter().map(|h| h.id).collect();
+    let thumbs = s.api.headshots_once(&ids).await.unwrap_or_default();
+    Ok(hits.into_iter().map(|h| UserSearchResult {
+        user_id: h.id,
+        username: h.name,
+        display_name: h.display_name,
+        has_verified_badge: h.has_verified_badge,
+        thumbnail: thumbs.get(&h.id).cloned(),
+    }).collect())
+}
+
+/// Header typeahead for games (apis.roblox.com omni-search).
+#[tauri::command]
+pub async fn search_games(s: State<'_, App>, keyword: String) -> Result<Vec<GameSearchResult>> {
+    let (account_id, cookie) = match search_cookie(&s) {
+        Some(c) => (c.0, Some(c.1)),
+        None => (0, None),
+    };
+    let hits = s.api.search_games(account_id, cookie.as_ref(), &keyword).await?;
+    let rows: Vec<_> = hits.into_iter().filter_map(|h| {
+        let place_id = h.root_place_id?;
+        Some(GameSearchResult {
+            place_id,
+            universe_id: h.universe_id,
+            name: h.name.unwrap_or_default(),
+            creator_name: h.creator_name,
+            player_count: h.player_count,
+            thumbnail: None,
+        })
+    }).take(5).collect();
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids: Vec<_> = rows.iter().map(|r| r.place_id).collect();
+    let thumbs = s.api.place_icons(&ids).await.unwrap_or_default();
+    Ok(rows.into_iter().map(|mut r| {
+        r.thumbnail = thumbs.get(&r.place_id).cloned();
+        r
+    }).collect())
 }
 
 /// Launches one account and starts following its client. `favourite_id` marks that

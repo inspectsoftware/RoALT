@@ -361,5 +361,6 @@
   "That isn't a Roblox username: use 1 to 254 characters without spaces.": "这不是 Roblox 用户名：请使用 1 到 254 个字符，不含空格。",
   "The password must be 1 to 256 characters.": "密码必须为 1 到 256 个字符。",
   "That page isn't available in Browse.": "浏览中无法打开该页面。",
-  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "购买已锁定。要购买此项，请在设置的安全中关闭锁定购买。"
+  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "购买已锁定。要购买此项，请在设置的安全中关闭锁定购买。",
+  "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it.": "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it."
 }

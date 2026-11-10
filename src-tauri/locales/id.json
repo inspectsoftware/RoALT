@@ -361,5 +361,6 @@
   "That isn't a Roblox username: use 1 to 254 characters without spaces.": "Itu bukan username Roblox: gunakan 1 sampai 254 karakter tanpa spasi.",
   "The password must be 1 to 256 characters.": "Kata sandi harus 1 sampai 256 karakter.",
   "That page isn't available in Browse.": "Halaman itu tidak tersedia di Jelajahi.",
-  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "Pembelian dikunci. Matikan Kunci pembelian di Pengaturan, bagian Keamanan, untuk membeli ini."
+  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "Pembelian dikunci. Matikan Kunci pembelian di Pengaturan, bagian Keamanan, untuk membeli ini.",
+  "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it.": "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it."
 }

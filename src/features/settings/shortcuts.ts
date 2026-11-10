@@ -11,6 +11,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   go("dashboard", "settings.shortcut.dashboard"),
   go("accounts", "settings.shortcut.accounts"),
   go("launch", "settings.shortcut.launch"),
+  go("browse", "app.nav.browse"),
   go("servers", "settings.shortcut.servers"),
   go("settings", "settings.shortcut.settings"),
   go("monitor", "settings.shortcut.monitor"),

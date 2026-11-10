@@ -372,5 +372,6 @@
   "That isn't a Roblox username: use 1 to 254 characters without spaces.": "Isso não é um nome de usuário do Roblox: use de 1 a 254 caracteres sem espaços.",
   "The password must be 1 to 256 characters.": "A senha deve ter de 1 a 256 caracteres.",
   "That page isn't available in Browse.": "Essa página não está disponível em Navegar.",
-  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "As compras estão bloqueadas. Desative Bloquear compras em Configurações, em Segurança, para comprar isto."
+  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "As compras estão bloqueadas. Desative Bloquear compras em Configurações, em Segurança, para comprar isto.",
+  "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it.": "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it."
 }

@@ -416,5 +416,6 @@
   "That isn't a Roblox username: use 1 to 254 characters without spaces.": "هذا ليس اسم مستخدم في Roblox: استخدم من 1 إلى 254 حرفًا بلا مسافات.",
   "The password must be 1 to 256 characters.": "يجب أن تتكون كلمة المرور من 1 إلى 256 حرفًا.",
   "That page isn't available in Browse.": "هذه الصفحة غير متاحة في التصفح.",
-  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "عمليات الشراء مقفلة. أوقف قفل الشراء من الإعدادات ضمن الأمان لشراء هذا."
+  "Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.": "عمليات الشراء مقفلة. أوقف قفل الشراء من الإعدادات ضمن الأمان لشراء هذا.",
+  "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it.": "Removed {name}: its cookie no longer signs in to Roblox. Add the account again to use it."
 }

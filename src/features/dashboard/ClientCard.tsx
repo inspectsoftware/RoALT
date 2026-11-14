@@ -177,7 +177,9 @@ export function ClientCard({ inst: i, account: a, detailed, width, menuOpen, onS
   now: number;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
-  const { status, painted, ageS } = useThumbnail(i.id, canvas, fps);
+  // A pill or the open menu is over the picture (set below, once they are known).
+  const covered = useRef(false);
+  const { status, painted, ageS } = useThumbnail(i.id, canvas, fps, covered);
   const [inside, setInside] = useState(false);
   // Launches go one at a time: while one starts, Play again says what it is doing.
   const step = useLaunchStep();
@@ -200,6 +202,7 @@ export function ClientCard({ inst: i, account: a, detailed, width, menuOpen, onS
     : painted && pictureNote ? { tone: "neutral", label: pictureNote, tip: hidden ? t("dashboard.lastPictureHint") : undefined }
     : ageS !== null ? { tone: "neutral", label: t("dashboard.pictureAge", { s: ageS }), tip: t("dashboard.pictureAgeHint") }
     : null;
+  covered.current = !!pill || menuOpen;
   // As run: Full quality or an FPS cap may come from its groups.
   const groups = useGroups().data;
   const tags = detailed ? tagsOf(i, a && withGroupDefaults(a, groups ?? []), afkOn, defaultFps) : [];

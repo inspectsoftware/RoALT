@@ -79,8 +79,8 @@ pub fn logs_dir() -> Option<PathBuf> {
     std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Roblox").join("logs"))
 }
 
-/// The `_Player_` log (not `_CrashHandler_`) modified since `since` whose first lines name
-/// this browser tracker id. Reads at most the first ~256 KB of each candidate.
+/// The `_Player_` log (not `_CrashHandler_`) created and modified since `since` whose first lines
+/// name this browser tracker id. Reads at most the first ~256 KB of each candidate.
 pub fn find_log(dir: &Path, browser_tracker_id: i64, since: SystemTime) -> Option<PathBuf> {
     let since = since.checked_sub(SINCE_SLACK).unwrap_or(UNIX_EPOCH);
     let mut candidates: Vec<(SystemTime, PathBuf)> = std::fs::read_dir(dir)
@@ -99,8 +99,12 @@ pub fn find_log(dir: &Path, browser_tracker_id: i64, since: SystemTime) -> Optio
             name.contains("_Player_") && !name.contains("_CrashHandler_")
         })
         .filter_map(|e| {
-            let modified = e.metadata().ok()?.modified().ok()?;
-            (modified >= since).then(|| (modified, e.path()))
+            let m = e.metadata().ok()?;
+            let modified = m.modified().ok()?;
+            // Created before: an earlier client's, still written to. A browser's Play links all
+            // carry the same tracker id.
+            let created = m.created().map_or(true, |c| c >= since);
+            (modified >= since && created).then(|| (modified, e.path()))
         })
         .collect();
     candidates.sort_by_key(|c| std::cmp::Reverse(c.0));
@@ -557,6 +561,12 @@ mod tests {
         let older = write("0.743.0.7431134_20261023T220010Z_Player_33333_last.log", BTID, Duration::from_secs(30));
         assert_eq!(find_log(&dir, BTID, since), Some(older));
         let newer = write("0.743.0.7431134_20261023T220011Z_Player_44444_last.log", BTID, Duration::from_secs(2));
+        assert_eq!(find_log(&dir, BTID, since), Some(newer.clone()));
+        // Written just now, but created before `since`: an earlier client's with the same id.
+        use std::os::windows::fs::FileTimesExt;
+        let earlier = write("0.743.0.7431134_20261023T200000Z_Player_55555_last.log", BTID, Duration::ZERO);
+        let created = std::fs::FileTimes::new().set_created(now - Duration::from_secs(600));
+        File::options().write(true).open(&earlier).unwrap().set_times(created).unwrap();
         assert_eq!(find_log(&dir, BTID, since), Some(newer));
         // Modified a little before `since`: within the slack.
         assert!(find_log(&dir, BTID + 1, now + Duration::from_secs(3)).is_some());

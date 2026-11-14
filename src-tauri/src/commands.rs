@@ -1130,6 +1130,19 @@ pub async fn launch(app: AppHandle, s: State<'_, App>, account_id: i64, target: 
     Ok(launch_tracked(&app, &s, account_id, target, None, fps_cap, true).await?.0)
 }
 
+/// Starts following a client as `info.account_id`'s (`played`: `Tracker::register_played`).
+pub(crate) fn track(s: &App, info: &LaunchInfo, target: LaunchTarget, played: bool) -> Instance {
+    let instance = if played { s.tracker.register_played(info, target) } else { s.tracker.register(info, target) };
+    // What was last set on one of the account's clients is this one's too (a rejoin or restart
+    // comes through here as well), else what its groups give: the limiter gives it them once its
+    // process is found.
+    if let Some(p) = s.db.effective(info.account_id).ok().and_then(|a| a.client_limits) {
+        s.tracker.set_limits(&instance.id, p.limits);
+        s.tracker.set_anti_afk(&instance.id, p.anti_afk);
+    }
+    instance
+}
+
 /// Why launches are refused while `roblox_install` runs.
 pub(crate) fn installing() -> String {
     tr!("Roblox is being installed. Launch again once it is done.")
@@ -1204,14 +1217,7 @@ pub(crate) async fn launch_tracked(
             return Err(e);
         }
     };
-    let instance = s.tracker.register(&info, target);
-    // What was last set on one of the account's clients is this one's too (a rejoin or restart
-    // comes through here as well), else what its groups give: the limiter gives it them once its
-    // process is found.
-    if let Some(p) = s.db.effective(account_id).ok().and_then(|a| a.client_limits) {
-        s.tracker.set_limits(&instance.id, p.limits);
-        s.tracker.set_anti_afk(&instance.id, p.anti_afk);
-    }
+    let instance = track(s, &info, target, false);
     drop(launching);
     instances_changed(app);
     // Kill all pressed while the ticket was fetched: this client goes too.
@@ -2775,6 +2781,21 @@ pub async fn instance_thumbnail(s: State<'_, App>, id: String, max_w: u32, known
     let pid = client_pid(&s, &id)?;
     let preview = blocking(move || crate::instances::window::preview(pid, max_w.clamp(16, 1280))).await?;
     Ok(tauri::ipc::Response::new(preview.to_bytes(known)))
+}
+
+/// Frame-free previews (`instances::thumbs`), where live ones would get Windows' yellow frame: each
+/// client in `places` drawn over its card, the others taken away.
+#[tauri::command]
+pub fn instance_thumbs(app: AppHandle, s: State<'_, App>, places: Vec<crate::instances::thumbs::ThumbPlace>) -> Result<()> {
+    let w = app.get_webview_window("main").ok_or(AppError::NotFound)?;
+    // Tauri's HWND comes from its own `windows` version.
+    let dest = windows::Win32::Foundation::HWND(w.hwnd()?.0 as _);
+    let window_of = |id: &str| {
+        let pid = client_pid(&s, id).ok().flatten()?;
+        crate::instances::process::main_window(pid).filter(|&(_, minimized)| !minimized).map(|(h, _)| h)
+    };
+    crate::instances::thumbs::place(dest, w.scale_factor()?, &places, window_of);
+    Ok(())
 }
 
 /// Brings one client's window to the front, hides or restores it.

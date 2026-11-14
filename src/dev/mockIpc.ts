@@ -1464,6 +1464,9 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "instance_trim":
       await sleep(300);
       return instances.some((x) => x.id === args.id && x.state !== "exited") ? [840, 210] : fail("notFound", "Not found.");
+    case "instance_thumbs":
+      // Windows draws these; the preview has none.
+      return null;
     case "instance_thumbnail": {
       const i = instances.find((x) => x.id === args.id);
       if (!i) return fail("notFound", "Not found.");

@@ -14,6 +14,7 @@ pub mod multi;
 pub mod process;
 pub mod qos;
 pub mod resize;
+pub mod thumbs;
 pub mod window;
 mod tracker;
 

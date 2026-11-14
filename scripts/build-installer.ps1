@@ -9,7 +9,8 @@
 
 .PARAMETER Dev
   Also keeps a copy as installers\RoALT-Setup-<version>-dev-<yyyyMMdd-HHmm>.exe: one installer
-  per change, earlier ones never overwritten.
+  per change, earlier ones never overwritten. The build never offers a RoALT update (ROALT_DEV,
+  self_update.rs): the published release would replace it with older code.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1
@@ -63,6 +64,8 @@ if (-not $perl) { Stop-Build 'Strawberry Perl was not found (OpenSSL, for the en
 $env:PATH = "$perl;$env:PATH"
 
 Write-Host "Building RoALT $version (release)"
+# Set or cleared for every build: a release must never inherit it from the shell.
+$env:ROALT_DEV = if ($Dev) { '1' } else { $null }
 Push-Location $root
 try {
     if (-not (Test-Path node_modules)) {

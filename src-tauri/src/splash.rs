@@ -39,8 +39,9 @@ struct Target {
 pub struct Pending(Mutex<Option<Target>>);
 
 /// Restores the saved window state (the plugin skips "main" at start), remembers it, shrinks the
-/// hidden window to the splash size centered on it and shows it; `skip`: shows it as it will stay.
-pub fn start(app: &AppHandle, w: &WebviewWindow, skip: bool) -> tauri::Result<()> {
+/// hidden window to the splash size centered on it and shows it; `skip`: shows it as it will stay;
+/// `hidden`: leaves it so in the tray.
+pub fn start(app: &AppHandle, w: &WebviewWindow, skip: bool, hidden: bool) -> tauri::Result<()> {
     w.restore_state(StateFlags::all() - StateFlags::VISIBLE)?;
     let maximized = w.is_maximized()?;
     if maximized {
@@ -61,12 +62,15 @@ pub fn start(app: &AppHandle, w: &WebviewWindow, skip: bool) -> tauri::Result<()
     if maximized && let Some(m) = &monitor {
         rect = area(m);
     }
-    if skip {
+    if skip || hidden {
         w.set_size(PhysicalSize::new(rect.w as u32, rect.h as u32))?;
         w.set_position(PhysicalPosition::new(rect.x, rect.y))?;
-        settle(w, maximized);
-        w.show()?;
-        let _ = w.set_focus();
+        // Maximizing would show it: a hidden one opens over the same area, not maximized.
+        settle(w, maximized && !hidden);
+        if !hidden {
+            w.show()?;
+            let _ = w.set_focus();
+        }
         return Ok(());
     }
     let s = centered(rect, (SPLASH.0 * scale) as i32, (SPLASH.1 * scale) as i32);

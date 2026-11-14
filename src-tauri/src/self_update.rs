@@ -42,6 +42,9 @@ use crate::model::AppUpdate;
 
 pub const UPDATE_EVENT: &str = "app://update";
 const CURRENT: &str = env!("CARGO_PKG_VERSION");
+/// An indev build (`build-installer.ps1 -Dev`): its code is newer than the published release its
+/// version trails, so it never offers that release, which would replace it with older code.
+const DEV: bool = option_env!("ROALT_DEV").is_some();
 const LATEST: &str = "https://api.github.com/repos/inspectsoftware/RoALT/releases/latest";
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 const MAX_JSON: u64 = 1_000_000;
@@ -325,8 +328,11 @@ async fn get(http: &reqwest::Client, url: &str, accept: &'static str, max: u64, 
     Ok(out)
 }
 
-/// The newer release on GitHub, if any.
+/// The newer release on GitHub, if any (never for an indev build, `DEV`).
 async fn latest(http: &reqwest::Client) -> Result<Option<Release>> {
+    if DEV {
+        return Ok(None);
+    }
     let body = get(http, LATEST, "application/vnd.github+json", MAX_JSON, Duration::from_secs(20)).await?;
     pick(&body, CURRENT)
 }

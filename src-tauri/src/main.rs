@@ -232,7 +232,15 @@ fn remove_old_db(data_dir: &Path, old: &Path) -> bool {
     gone
 }
 
-fn main_window(app: &TauriApp, data_dir: &Path, skip_splash: bool) -> tauri::Result<()> {
+/// `hidden`: built in the tray (RoALT started by a Play click on roblox.com).
+fn main_window(app: &AppHandle, data_dir: &Path, skip_splash: bool, hidden: bool) -> std::result::Result<(), String> {
+    let failed = |e: tauri::Error| {
+        tr!(
+            "RoALT can't open its window ({why}).\n\nIf this PC was very busy, start RoALT again. Otherwise it needs the Microsoft Edge WebView2 Runtime: \
+             https://go.microsoft.com/fwlink/p/?LinkId=2124703",
+            why = e
+        )
+    };
     // The dark theme's --ground (src/styles/tokens.css) in either theme: the splash is dark, and
     // this is what shows before the UI paints and while the window grows.
     let bg = Color(10, 10, 10, 255);
@@ -248,15 +256,19 @@ fn main_window(app: &TauriApp, data_dir: &Path, skip_splash: bool) -> tauri::Res
         .data_directory(data_dir.join("webview"))
         .on_navigation(in_app);
     // The splash decides before any setting could reach the UI.
-    if skip_splash {
+    if skip_splash || hidden {
         builder = builder.initialization_script("window.__ROALT_SKIP_SPLASH = true;");
     }
     if let Some(args) = cdp_args() {
         builder = builder.additional_browser_args(&args);
     }
-    let w = builder.build()?;
+    let w = builder.build().map_err(failed)?;
     webview::log_process_failures(&w);
-    splash::start(app.handle(), &w, skip_splash)
+    splash::start(app, &w, skip_splash, hidden).map_err(failed)?;
+    if hidden {
+        set_main_shown(app, false);
+    }
+    Ok(())
 }
 
 /// Debug builds only: DevTools protocol for automated UI checks on a hidden desktop. Every window
@@ -478,6 +490,12 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
         network: network::Network::new(),
         shutdown: Mutex::new(shutdown),
     });
+    // Before any client starts: what a launch cut short by a quit or crash left behind goes.
+    launcher::flags::restore();
+    mods::library::sweep(&app.state::<App>().db);
+    // Opened by a `roalt://` link: Play takes it once the UI is up. A Play click on roblox.com
+    // starts its client now, ahead of the rest.
+    let quiet = !commands::open_link(app.handle(), std::env::args().skip(1));
     if let Err(e) = commands::set_panic_hotkey(app.handle(), "", &settings.panic_hotkey) {
         let handle = app.handle().clone();
         // Said once the window is up.
@@ -510,19 +528,22 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
     // Before anything else is started, so a newer RoALT is offered as soon as possible.
     self_update::spawn(app.handle().clone());
     app.manage(splash::Pending::default());
-    main_window(app, data_dir, settings.skip_splash).map_err(|e| {
-        tr!(
-            "RoALT can't open its window ({why}).\n\nIf this PC was very busy, start RoALT again. Otherwise it needs the Microsoft Edge WebView2 Runtime: \
-             https://go.microsoft.com/fwlink/p/?LinkId=2124703",
-            why = e
-        )
-    })?;
+    if quiet {
+        // In the tray, once that client is up: WebView2 starting alongside nearly doubled its start-up.
+        let (handle, dir, skip) = (app.handle().clone(), data_dir.to_owned(), settings.skip_splash);
+        tauri::async_runtime::spawn(async move {
+            launcher::links::started().await;
+            if let Err(message) = main_window(&handle, &dir, skip, true) {
+                fatal(&message);
+            }
+        });
+    } else {
+        main_window(app.handle(), data_dir, settings.skip_splash, false)?;
+    }
     spawn_auto_lock(app.handle().clone());
     instances::Tracker::spawn(app.handle().clone());
     instances::afk::spawn(app.handle().clone());
     network::spawn(app.handle().clone());
-    launcher::flags::restore();
-    mods::library::sweep(&app.state::<App>().db);
     match app.state::<App>().db.prune_cache(commands::now_ms()) {
         Ok(0) => {}
         Ok(n) => log::info!("cache: {n} old rows dropped"),
@@ -688,8 +709,6 @@ fn main() {
             if let Err(message) = init(app, &data_dir, moved_from.as_deref()) {
                 fatal(&message);
             }
-            // Opened by a `roalt://` link: Play takes it once the UI is up.
-            commands::open_link(app.handle(), std::env::args().skip(1));
             Ok(())
         })
         .on_window_event(on_window_event)
@@ -770,6 +789,7 @@ fn main() {
             commands::instance_stop_relaunch,
             commands::instances_retry_relaunch,
             commands::instance_thumbnail,
+            commands::instance_thumbs,
             commands::instance_show,
             commands::instances_show_all,
             commands::instance_micro,

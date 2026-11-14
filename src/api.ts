@@ -8,6 +8,7 @@ import type { GameStats } from "./bindings/GameStats";
 import type { AccountValue } from "./bindings/AccountValue";
 import type { PlaytimeRow } from "./bindings/PlaytimeRow";
 import type { PaneRect } from "./bindings/PaneRect";
+import type { ThumbPlace } from "./bindings/ThumbPlace";
 import type { AccountPatch } from "./bindings/AccountPatch";
 import type { AccountPresence } from "./bindings/AccountPresence";
 import type { AccountSummary } from "./bindings/AccountSummary";
@@ -265,6 +266,8 @@ export const api = {
   instanceSetAntiAfk: (id: string, enabled: boolean) => invoke<void>("instance_set_anti_afk", { id, enabled }),
   /** The client's preview at most maxW wide: always a 24-byte header, then RGBA unless its picture number is `known` or it has no picture (`window::Preview::to_bytes`). */
   instanceThumbnail: (id: string, maxW: number, known: number) => invoke<ArrayBuffer>("instance_thumbnail", { id, maxW, known }),
+  /** Where live pictures would get Windows' yellow frame: Windows draws each client in `places` over its card, the rest go. */
+  instanceThumbs: (places: ThumbPlace[]) => invoke<void>("instance_thumbs", { places }),
   /** Brings the client's window to the front, minimizes or restores it. */
   instanceShow: (id: string, what: WindowShow) => invoke<void>("instance_show", { id, what }),
   /** Minimizes or restores every running client's window. */

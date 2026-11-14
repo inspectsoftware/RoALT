@@ -8,7 +8,8 @@
 //! and only that small copy is read back. Asking (`request`) never waits for the worker and the
 //! newest picture is kept per window (`last`), so a stuck worker only makes pictures older, and
 //! they outlive the capture. Where Windows can't capture without its yellow frame around the game
-//! (before Windows 11 / Windows 10 21H2 server), the picture has the frame.
+//! (before Windows 11 / Windows 10 21H2 server), nothing is captured: the frame would sit around
+//! the client the user plays. There (`unsupported`) Windows draws the cards' pictures (`thumbs`).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -122,7 +123,10 @@ fn run(requests: &Receiver<Request>) {
         log::debug!("live previews: CoInitializeEx failed: {e}");
     }
     if !borderless() {
-        log::info!("live previews: Windows draws a yellow border around captured client windows here");
+        log::info!("live previews off: Windows here would draw a yellow border around every client shown");
+        REFUSED.store(true, Ordering::Relaxed);
+        // Taken and dropped, so `request` never finds the worker gone.
+        return requests.iter().for_each(drop);
     }
     let mut gpu: Option<Gpu> = None;
     let mut gpu_warned = false;

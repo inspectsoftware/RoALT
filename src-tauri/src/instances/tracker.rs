@@ -431,6 +431,16 @@ impl Tracker {
 
     /// Starts following a launch (state Starting).
     pub fn register(&self, info: &LaunchInfo, target: LaunchTarget) -> Instance {
+        self.add(info, target, false)
+    }
+
+    /// `register` for a client the user started to play (Play on roblox.com): "Minimize on
+    /// launch", tiny, mute and the window layout leave its window alone.
+    pub fn register_played(&self, info: &LaunchInfo, target: LaunchTarget) -> Instance {
+        self.add(info, target, true)
+    }
+
+    fn add(&self, info: &LaunchInfo, target: LaunchTarget, window_seen: bool) -> Instance {
         let inst = Instance {
             id: uuid::Uuid::new_v4().to_string(),
             account_id: info.account_id,
@@ -461,7 +471,9 @@ impl Tracker {
         for e in entries.iter_mut().filter(|e| e.inst.account_id == info.account_id) {
             e.inst.relaunch_problem = None;
         }
-        entries.push(Entry::new(inst.clone(), info.browser_tracker_id, info.pid_start, !info.via_bootstrapper));
+        let mut e = Entry::new(inst.clone(), info.browser_tracker_id, info.pid_start, !info.via_bootstrapper);
+        e.window_seen = window_seen;
+        entries.push(e);
         inst
     }
 
@@ -1992,6 +2004,15 @@ mod tests {
         assert!(t.set_micro(&a, Some((320, 240))) && t.get(&a).unwrap().micro);
         assert_eq!(t.get(&a).unwrap().micro_size, Some((320, 240)));
         assert!(!t.set_micro("nope", Some((320, 240))));
+    }
+
+    #[test]
+    fn a_client_the_user_plays_keeps_its_window() {
+        let t = Tracker::new();
+        t.register_played(&LaunchInfo { pid_start: Some(50), ..info(900, now_ms(), false) }, target());
+        t.entries().iter_mut().for_each(|e| e.inst.state = InGame);
+        assert_eq!(t.first_in_game(&|_| true), Vec::<u32>::new(), "no minimize, tiny, mute or layout");
+        assert_eq!(t.clients().len(), 1, "followed all the same");
     }
 
     fn temp_dir() -> PathBuf {

@@ -8,6 +8,8 @@
 //! stays on each link's key as `RoALTBefore`, which the uninstaller puts back.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Manager};
 use windows::Win32::System::Registry::{HKEY_CURRENT_USER, REG_SZ, RegSetKeyValueW};
@@ -16,7 +18,7 @@ use windows::core::HSTRING;
 use super::{client, client_settings, update};
 use crate::App;
 use crate::error::{AppError, Result};
-use crate::model::{LauncherKind, RobloxLauncher};
+use crate::model::{LaunchInfo, LaunchTarget, LauncherKind, RobloxLauncher};
 use crate::vault::Secret;
 
 const SCHEMES: [&str; 2] = ["roblox-player", "roblox"];
@@ -168,20 +170,34 @@ fn launch_link(arg: &str) -> Option<&str> {
     ok.then_some(arg)
 }
 
+/// Set from a launch link's arrival until its client has started up (`start` is done).
+static STARTING: AtomicBool = AtomicBool::new(false);
+
 /// A `roblox-player:` link (the website's Play button, while RoALT opens Roblox's links): starts
-/// the client at once, as Roblox would, as the browser's account. RoALT doesn't know that
-/// account, so the client isn't followed. Modpacks apply. The link is never logged.
+/// the client at once, as Roblox would, as the browser's account, which shows in Overview once
+/// its client names it (`follow`). Modpacks apply. The link is never logged.
 pub fn open(app: &AppHandle, arg: &str) {
     let Some(link) = launch_link(arg).map(Secret::new) else {
         log::warn!("ignored a roblox-player: link that isn't a game launch");
         return;
     };
+    STARTING.store(true, Ordering::Release);
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(e) = start(&app, &link).await {
             crate::commands::notice(&app, true, e.message());
         }
+        STARTING.store(false, Ordering::Release);
     });
+}
+
+/// Waits until no link's client is starting up (at most 30 s). RoALT started by a link opens its
+/// window after this: WebView2 starting alongside nearly doubled the client's own start-up.
+pub async fn started() {
+    let until = Instant::now() + Duration::from_secs(30);
+    while STARTING.load(Ordering::Acquire) && Instant::now() < until {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 async fn start(app: &AppHandle, link: &Secret) -> Result<()> {
@@ -197,14 +213,73 @@ async fn start(app: &AppHandle, link: &Secret) -> Result<()> {
     if let Some(why) = skipped {
         log::info!("Modpacks not applied to a link from the browser: {why}");
     }
-    let since = std::time::SystemTime::now();
+    let (since, started_at) = (std::time::SystemTime::now(), crate::commands::now_ms());
     let (pid, pid_start) = client::start(&exe, link, &[])?;
     log::info!("started a roblox-player: link from the browser (pid {pid}, bootstrapper: {})", exe.bootstrapper);
     if let Some(id) = tracker_id(link.expose()) {
+        // The account isn't known until the client's log names it.
+        let info = LaunchInfo {
+            account_id: 0,
+            pid,
+            browser_tracker_id: id,
+            place_id: None,
+            started_at,
+            via_bootstrapper: exe.bootstrapper,
+            warning: None,
+            fps_cap: None,
+            pid_start: Some(pid_start),
+        };
+        let (app, target) = (app.clone(), super::uri::target_of_player_uri(link.expose()));
+        std::thread::spawn(move || follow(&app, info, target, since));
         // A bootstrapper's own process exits by design: only the log tells then.
         client_settings::wait_until_read(id, since, (!exe.bootstrapper).then_some((pid, pid_start))).await;
     }
     Ok(())
+}
+
+/// How long a client from the browser may take to join a game before it is no longer watched.
+const FOLLOW_FOR: Duration = Duration::from_secs(5 * 60);
+
+/// Shows a client started from the browser in Overview. The link doesn't say which account the
+/// browser is signed in as; the client's log does once it joins a game. When RoALT has that
+/// account, the client is followed as its, window left alone (the user plays it). Not when it's
+/// another user, or the client ends or hasn't joined within `FOLLOW_FOR`. Blocking.
+// shortcut: two browser clients started within 5 s share the browser's tracker id, so the first
+// may be tied to the second's log (`find_log`); give each launch its own id if that shows up.
+fn follow(app: &AppHandle, mut info: LaunchInfo, target: Option<LaunchTarget>, since: std::time::SystemTime) {
+    use crate::instances::{logwatch, process};
+    let Some(dir) = logwatch::logs_dir() else { return };
+    let until = Instant::now() + FOLLOW_FOR;
+    let (mut file, mut offset, mut facts) = (None, 0, logwatch::LogFacts::default());
+    let user = loop {
+        std::thread::sleep(Duration::from_secs(1));
+        // A bootstrapper's own process ends by design: only the time limit ends the wait then.
+        let gone = !info.via_bootstrapper && info.pid_start.is_some_and(|t| t != 0 && process::start_time(info.pid) != Some(t));
+        if gone || Instant::now() > until {
+            let why = if gone { "ended before joining a game" } else { "didn't join a game in time" };
+            return log::info!("the client started from the browser (pid {}) {why}: not shown in Overview", info.pid);
+        }
+        if file.is_none() {
+            file = logwatch::find_log(&dir, info.browser_tracker_id, since);
+        }
+        let Some(path) = &file else { continue };
+        match logwatch::read_new(path, offset, &mut facts, |_, _| {}) {
+            Ok(o) => offset = o,
+            Err(e) => log::debug!("the browser's client log couldn't be read yet: {e}"),
+        }
+        if let Some(user) = facts.user_id {
+            break user;
+        }
+    };
+    let s = app.state::<App>();
+    let Some(account) = s.db.accounts().ok().and_then(|all| all.into_iter().find(|a| a.user_id == user)) else {
+        return log::info!("the client started from the browser (pid {}) plays a Roblox user RoALT doesn't have: not shown in Overview", info.pid);
+    };
+    let Some(target) = target.or_else(|| facts.place_id.map(|place_id| LaunchTarget::Place { place_id, launch_data: None })) else { return };
+    (info.account_id, info.place_id) = (account.id, facts.place_id);
+    let inst = crate::commands::track(&s, &info, target, true);
+    crate::commands::instances_changed(app);
+    log::info!("the client started from the browser (pid {}) is account {}'s: followed as instance {}", info.pid, account.id, inst.id);
 }
 
 /// The `browsertrackerid:` of a launch link (pure): the client's log names it.

@@ -3130,8 +3130,53 @@ pub async fn multi_instance_take_over(app: AppHandle) -> Result<MultiInstanceSta
         }
         s.multi.take_over()?;
         protect_running(&s, &v);
+        follow_outside(&app, &s);
         Ok(s.multi.status(v.multi_instance, v.protect_shared_login))
     }).await?
+}
+
+/// Follows each running client RoALT doesn't follow yet as the account its log names, window left
+/// alone (the user plays it), so a taken-over client shows in Overview. One not in a game yet (its
+/// log names the user on joining) or playing a user RoALT doesn't have stays out, and is told.
+fn follow_outside(app: &AppHandle, s: &App) {
+    use crate::instances::{LOG_SKEW_SECS, logwatch, process};
+    let (Some(dir), Ok(accounts)) = (logwatch::logs_dir(), s.db.accounts()) else { return };
+    let (mut followed, mut left) = (0, 0);
+    for p in process::roblox_processes().into_iter().filter(|p| !s.tracker.follows(p.pid)) {
+        let mut facts = logwatch::LogFacts::default();
+        let read = logwatch::log_started_at(&dir, p.start_time, LOG_SKEW_SECS)
+            .and_then(|log| logwatch::read_new(&log, 0, &mut facts, |_, _| {}).ok().map(|offset| (log, offset)));
+        let account = facts.user_id.and_then(|u| accounts.iter().find(|a| a.user_id == u));
+        let found = read.is_some();
+        let (Some((log, offset)), Some(account), Some(place_id)) = (read, account, facts.place_id) else {
+            let (joined, known) = (facts.user_id.is_some(), account.is_some());
+            log::info!("take-over: client {} not followed (log found: {found}, in a game: {joined}, RoALT's account: {known})", p.pid);
+            left += 1;
+            continue;
+        };
+        let info = LaunchInfo {
+            account_id: account.id,
+            pid: p.pid,
+            browser_tracker_id: facts.browser_tracker_id.unwrap_or(0),
+            place_id: Some(place_id),
+            started_at: i64::try_from(p.start_time * 1000).unwrap_or(0),
+            via_bootstrapper: false,
+            warning: None,
+            fps_cap: None,
+            pid_start: Some(p.start_time),
+        };
+        let inst = track(s, &info, LaunchTarget::Place { place_id, launch_data: None }, true);
+        s.tracker.bind_log(&inst.id, log, offset, facts);
+        s.multi.adopt(&[(p.pid, p.start_time)]);
+        log::info!("take-over: client {} is account {}'s: followed as instance {}", p.pid, account.id, inst.id);
+        followed += 1;
+    }
+    if followed > 0 {
+        instances_changed(app);
+    }
+    if left > 0 {
+        notice(app, false, tr!("A Roblox client that isn't in a game yet, or plays a Roblox user RoALT doesn't have, isn't shown in Overview."));
+    }
 }
 
 /// Closes every Roblox client, tracked or not (including Roblox's tray process), then takes

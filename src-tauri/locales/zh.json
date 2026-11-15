@@ -416,5 +416,6 @@
   "The clip wasn't saved: {why}": "剪辑未保存：{why}",
   "That name can't be a file name: leave out symbols like / : * ? < > |.": "该名称不能用作文件名：请去掉 / : * ? < > | 等符号。",
   "A clip with that name already exists.": "已存在同名剪辑。",
-  "This game only lets players into that place through its start place, so the account starts there.": "这个游戏只允许从起始地点进入那个地方，所以账号会从那里开始。"
+  "This game only lets players into that place through its start place, so the account starts there.": "这个游戏只允许从起始地点进入那个地方，所以账号会从那里开始。",
+  "A Roblox client that isn't in a game yet, or plays a Roblox user RoALT doesn't have, isn't shown in Overview.": "尚未进入游戏，或以 RoALT 中没有的 Roblox 用户游玩的 Roblox 客户端，不会显示在概览中。"
 }

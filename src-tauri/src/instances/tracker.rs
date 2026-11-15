@@ -21,7 +21,7 @@ const MAX_ENDED: usize = 30;
 /// How long a teleport may take to reach its next game; then it failed (`LogFacts::teleporting`).
 const TELEPORT_MS: i64 = 60_000;
 /// How far a client's start may be from its log file's creation, in seconds.
-const LOG_SKEW_SECS: u64 = 3;
+pub const LOG_SKEW_SECS: u64 = 3;
 // Notes are made in the current language and compared against these (a note made before a
 // language switch stops matching until the next poll remakes it).
 /// The note of a client whose log signed in as a different user than its account.
@@ -671,6 +671,19 @@ impl Tracker {
     /// The logs of clients that haven't ended (`logwatch::clean` leaves them).
     pub fn live_logs(&self) -> Vec<PathBuf> {
         self.entries().iter().filter(|e| e.inst.state != InstanceState::Exited).filter_map(|e| e.log.clone()).collect()
+    }
+
+    /// A client not ended yet runs as process `pid`.
+    pub fn follows(&self, pid: u32) -> bool {
+        self.entries().iter().any(|e| e.inst.pid == pid && e.inst.state != InstanceState::Exited)
+    }
+
+    /// Binds instance `id` to its client's `log`, read up to `offset` into `facts` (a client RoALT
+    /// didn't launch: `commands::follow_outside`).
+    pub fn bind_log(&self, id: &str, log: PathBuf, offset: u64, facts: LogFacts) {
+        if let Some(e) = self.entries().iter_mut().find(|e| e.inst.id == id) {
+            (e.log, e.offset, e.facts) = (Some(log), offset, facts);
+        }
     }
 
     /// True while a client RoALT started hasn't ended.

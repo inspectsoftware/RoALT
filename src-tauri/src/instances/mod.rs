@@ -19,4 +19,4 @@ pub mod window;
 mod tracker;
 
 pub mod rejoin;
-pub use tracker::{Tracker, Transition, auth_failed, challenged, closed, frame_size, hung, layout_batch_done, unexpected, wrong_account};
+pub use tracker::{LOG_SKEW_SECS, Tracker, Transition, auth_failed, challenged, closed, frame_size, hung, layout_batch_done, unexpected, wrong_account};

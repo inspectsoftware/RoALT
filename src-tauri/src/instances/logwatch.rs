@@ -93,11 +93,7 @@ pub fn find_log(dir: &Path, browser_tracker_id: i64, since: SystemTime) -> Optio
         })
         .ok()?
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            let name = e.file_name();
-            let name = name.to_string_lossy();
-            name.contains("_Player_") && !name.contains("_CrashHandler_")
-        })
+        .filter(is_player_log)
         .filter_map(|e| {
             let m = e.metadata().ok()?;
             let modified = m.modified().ok()?;
@@ -109,6 +105,25 @@ pub fn find_log(dir: &Path, browser_tracker_id: i64, since: SystemTime) -> Optio
         .collect();
     candidates.sort_by_key(|c| std::cmp::Reverse(c.0));
     candidates.into_iter().map(|(_, p)| p).find(|p| names_tracker(p, browser_tracker_id))
+}
+
+fn is_player_log(e: &std::fs::DirEntry) -> bool {
+    let name = e.file_name();
+    let name = name.to_string_lossy();
+    name.contains("_Player_") && !name.contains("_CrashHandler_")
+}
+
+/// The `_Player_` log a client started at `start` (Unix s) created: the one created closest to
+/// it, at most `skew` s away. For a client RoALT didn't launch, whose tracker id isn't known.
+pub fn log_started_at(dir: &Path, start: u64, skew: u64) -> Option<PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(is_player_log)
+        .filter_map(|e| Some((e.metadata().ok()?.created().ok()?.duration_since(UNIX_EPOCH).ok()?.as_secs().abs_diff(start), e.path())))
+        .filter(|&(d, _)| d <= skew)
+        .min_by_key(|&(d, _)| d)
+        .map(|(_, p)| p)
 }
 
 /// `clean` deletes logs last written over a day ago ...
@@ -571,6 +586,28 @@ mod tests {
         // Modified a little before `since`: within the slack.
         assert!(find_log(&dir, BTID + 1, now + Duration::from_secs(3)).is_some());
         assert_eq!(find_log(&dir.join("missing"), BTID, since), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn finds_the_log_by_start_time() {
+        use std::os::windows::fs::FileTimesExt;
+        let dir = temp_dir();
+        let start = 1_800_000_000;
+        let write = |name: &str, created: u64| {
+            let p = dir.join(name);
+            std::fs::write(&p, "").unwrap();
+            let t = std::fs::FileTimes::new().set_created(UNIX_EPOCH + Duration::from_secs(created));
+            File::options().write(true).open(&p).unwrap().set_times(t).unwrap();
+            p
+        };
+        write("0.743.0.7431134_20261023T220008Z_Player_0A5C5_CrashHandler_last.log", start);
+        write("0.743.0.7431134_20261023T210008Z_Player_11111_last.log", start - 60);
+        assert_eq!(log_started_at(&dir, start, 3), None);
+        let far = write("0.743.0.7431134_20261023T220010Z_Player_33333_last.log", start + 3);
+        assert_eq!(log_started_at(&dir, start, 3), Some(far));
+        let near = write("0.743.0.7431134_20261023T220009Z_Player_22222_last.log", start + 1);
+        assert_eq!(log_started_at(&dir, start, 3), Some(near));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

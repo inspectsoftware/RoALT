@@ -427,5 +427,6 @@
   "The clip wasn't saved: {why}": "Klip kaydedilmedi: {why}",
   "That name can't be a file name: leave out symbols like / : * ? < > |.": "Bu ad dosya adı olamaz: / : * ? < > | gibi simgeleri kullanmayın.",
   "A clip with that name already exists.": "Bu adda bir klip zaten var.",
-  "This game only lets players into that place through its start place, so the account starts there.": "Bu oyun o yere yalnızca başlangıç yerinden girmeye izin veriyor, bu yüzden hesap oradan başlıyor."
+  "This game only lets players into that place through its start place, so the account starts there.": "Bu oyun o yere yalnızca başlangıç yerinden girmeye izin veriyor, bu yüzden hesap oradan başlıyor.",
+  "A Roblox client that isn't in a game yet, or plays a Roblox user RoALT doesn't have, isn't shown in Overview.": "Henüz bir oyunda olmayan ya da RoALT'ta olmayan bir Roblox kullanıcısıyla oynayan Roblox istemcisi Genel bakış'ta gösterilmez."
 }

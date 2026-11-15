@@ -416,5 +416,6 @@
   "The clip wasn't saved: {why}": "Không lưu được clip: {why}",
   "That name can't be a file name: leave out symbols like / : * ? < > |.": "Tên đó không dùng làm tên tệp được: hãy bỏ các ký hiệu như / : * ? < > |.",
   "A clip with that name already exists.": "Đã có clip mang tên đó.",
-  "This game only lets players into that place through its start place, so the account starts there.": "Game này chỉ cho người chơi vào nơi đó qua place khởi đầu, nên tài khoản sẽ bắt đầu ở đó."
+  "This game only lets players into that place through its start place, so the account starts there.": "Game này chỉ cho người chơi vào nơi đó qua place khởi đầu, nên tài khoản sẽ bắt đầu ở đó.",
+  "A Roblox client that isn't in a game yet, or plays a Roblox user RoALT doesn't have, isn't shown in Overview.": "Máy khách Roblox chưa vào trò chơi, hoặc đang chơi bằng người dùng Roblox mà RoALT không có, sẽ không hiện trong Tổng quan."
 }

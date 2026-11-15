@@ -416,5 +416,6 @@
   "The clip wasn't saved: {why}": "클립을 저장하지 못했어요: {why}",
   "That name can't be a file name: leave out symbols like / : * ? < > |.": "파일 이름으로 쓸 수 없는 이름이에요. / : * ? < > | 같은 기호는 빼 주세요.",
   "A clip with that name already exists.": "같은 이름의 클립이 이미 있어요.",
-  "This game only lets players into that place through its start place, so the account starts there.": "이 게임은 시작 플레이스를 거쳐야만 그곳에 들어갈 수 있어서, 계정이 시작 플레이스에서 시작합니다."
+  "This game only lets players into that place through its start place, so the account starts there.": "이 게임은 시작 플레이스를 거쳐야만 그곳에 들어갈 수 있어서, 계정이 시작 플레이스에서 시작합니다.",
+  "A Roblox client that isn't in a game yet, or plays a Roblox user RoALT doesn't have, isn't shown in Overview.": "아직 게임에 들어가지 않았거나 RoALT에 없는 Roblox 사용자로 플레이 중인 Roblox 클라이언트는 개요에 표시되지 않습니다."
 }

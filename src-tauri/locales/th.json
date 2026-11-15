@@ -416,5 +416,6 @@
   "The clip wasn't saved: {why}": "บันทึกคลิปไม่สำเร็จ: {why}",
   "That name can't be a file name: leave out symbols like / : * ? < > |.": "ใช้ชื่อนี้เป็นชื่อไฟล์ไม่ได้: อย่าใส่สัญลักษณ์อย่าง / : * ? < > |",
   "A clip with that name already exists.": "มีคลิปชื่อนี้อยู่แล้ว",
-  "This game only lets players into that place through its start place, so the account starts there.": "เกมนี้ให้ผู้เล่นเข้าที่นั่นได้ผ่านเพลสเริ่มต้นเท่านั้น บัญชีจึงเริ่มที่นั่น"
+  "This game only lets players into that place through its start place, so the account starts there.": "เกมนี้ให้ผู้เล่นเข้าที่นั่นได้ผ่านเพลสเริ่มต้นเท่านั้น บัญชีจึงเริ่มที่นั่น",
+  "A Roblox client that isn't in a game yet, or plays a Roblox user RoALT doesn't have, isn't shown in Overview.": "ไคลเอนต์ Roblox ที่ยังไม่ได้เข้าเกม หรือเล่นเป็นผู้ใช้ Roblox ที่ RoALT ไม่มี จะไม่แสดงในภาพรวม"
 }

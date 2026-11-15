@@ -438,5 +438,6 @@
   "The clip wasn't saved: {why}": "Клип не сохранён: {why}",
   "That name can't be a file name: leave out symbols like / : * ? < > |.": "Такое имя не подходит для файла: уберите символы вроде / : * ? < > |.",
   "A clip with that name already exists.": "Клип с таким именем уже существует.",
-  "This game only lets players into that place through its start place, so the account starts there.": "Эта игра пускает в то место только через стартовое место, поэтому аккаунт начнёт там."
+  "This game only lets players into that place through its start place, so the account starts there.": "Эта игра пускает в то место только через стартовое место, поэтому аккаунт начнёт там.",
+  "A Roblox client that isn't in a game yet, or plays a Roblox user RoALT doesn't have, isn't shown in Overview.": "Клиент Roblox, который ещё не в игре или играет за пользователя Roblox, которого нет в RoALT, не показывается в Обзоре."
 }

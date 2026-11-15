@@ -427,5 +427,6 @@
   "The clip wasn't saved: {why}": "Hindi na-save ang clip: {why}",
   "That name can't be a file name: leave out symbols like / : * ? < > |.": "Hindi puwedeng file name ang pangalang iyon: huwag gumamit ng mga simbolo gaya ng / : * ? < > |.",
   "A clip with that name already exists.": "May clip na may ganyang pangalan na.",
-  "This game only lets players into that place through its start place, so the account starts there.": "Sa start place lang ng larong ito makakapasok ang mga player sa lugar na iyon, kaya doon magsisimula ang account."
+  "This game only lets players into that place through its start place, so the account starts there.": "Sa start place lang ng larong ito makakapasok ang mga player sa lugar na iyon, kaya doon magsisimula ang account.",
+  "A Roblox client that isn't in a game yet, or plays a Roblox user RoALT doesn't have, isn't shown in Overview.": "Hindi ipinapakita sa Overview ang Roblox client na wala pa sa laro, o naglalaro bilang Roblox user na wala sa RoALT."
 }

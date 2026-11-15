@@ -427,5 +427,6 @@
   "The clip wasn't saved: {why}": "Der Clip wurde nicht gespeichert: {why}",
   "That name can't be a file name: leave out symbols like / : * ? < > |.": "Dieser Name geht nicht als Dateiname: Lass Zeichen wie / : * ? < > | weg.",
   "A clip with that name already exists.": "Ein Clip mit diesem Namen existiert bereits.",
-  "This game only lets players into that place through its start place, so the account starts there.": "Dieses Spiel lässt Spieler nur über den Start-Place an diesen Ort, deshalb startet das Konto dort."
+  "This game only lets players into that place through its start place, so the account starts there.": "Dieses Spiel lässt Spieler nur über den Start-Place an diesen Ort, deshalb startet das Konto dort.",
+  "A Roblox client that isn't in a game yet, or plays a Roblox user RoALT doesn't have, isn't shown in Overview.": "Ein Roblox-Client, der noch in keinem Spiel ist oder einen Roblox-Nutzer spielt, den RoALT nicht hat, wird in der Übersicht nicht angezeigt."
 }

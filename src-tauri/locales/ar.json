@@ -471,5 +471,6 @@
   "The clip wasn't saved: {why}": "لم يُحفظ المقطع: {why}",
   "That name can't be a file name: leave out symbols like / : * ? < > |.": "لا يصلح هذا الاسم اسمًا لملف: تجنّب رموزًا مثل / : * ? < > |.",
   "A clip with that name already exists.": "يوجد مقطع بهذا الاسم بالفعل.",
-  "This game only lets players into that place through its start place, so the account starts there.": "هذه اللعبة لا تُدخل اللاعبين إلى ذلك المكان إلا عبر مكان البداية، لذا يبدأ الحساب من هناك."
+  "This game only lets players into that place through its start place, so the account starts there.": "هذه اللعبة لا تُدخل اللاعبين إلى ذلك المكان إلا عبر مكان البداية، لذا يبدأ الحساب من هناك.",
+  "A Roblox client that isn't in a game yet, or plays a Roblox user RoALT doesn't have, isn't shown in Overview.": "عميل Roblox الذي لم يدخل لعبة بعد، أو يلعب بمستخدم Roblox غير موجود في RoALT، لا يظهر في النظرة العامة."
 }

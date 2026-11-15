@@ -416,5 +416,6 @@
   "The clip wasn't saved: {why}": "クリップは保存されませんでした: {why}",
   "That name can't be a file name: leave out symbols like / : * ? < > |.": "その名前はファイル名に使えません。/ : * ? < > | などの記号を除いてください。",
   "A clip with that name already exists.": "その名前のクリップはすでにあります。",
-  "This game only lets players into that place through its start place, so the account starts there.": "このゲームはその場所へ開始プレイスからしか入れないため、アカウントはそこから始まります。"
+  "This game only lets players into that place through its start place, so the account starts there.": "このゲームはその場所へ開始プレイスからしか入れないため、アカウントはそこから始まります。",
+  "A Roblox client that isn't in a game yet, or plays a Roblox user RoALT doesn't have, isn't shown in Overview.": "まだゲームに入っていない Roblox クライアントや、RoALT にない Roblox ユーザーでプレイ中のクライアントは、概要に表示されません。"
 }

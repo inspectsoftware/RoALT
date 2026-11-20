@@ -5,7 +5,7 @@ name: Release
 # - A push to main PUBLISHES it at once: every installed RoALT is offered it. Its version is the
 #   next patch after the latest published release, unless tauri.conf.json already names a newer
 #   one (a release bumped by hand). The bump is written into this build only, not committed.
-#   Its notes list the commits since the last release. Published with the job's own token, so
+#   Its notes are its section of CHANGELOG.md, or else the commits since the last release. Published with the job's own token, so
 #   winget.yml (on "released") does not run for it.
 # - By hand (Actions > Release > Run workflow): a draft of tauri.conf.json's version, which a
 #   maintainer reviews and publishes.
@@ -16,6 +16,7 @@ on:
     # ships the commits waiting behind it.
     paths-ignore:
       - README.md
+      - CHANGELOG.md
       - NOTICE.md
       - LICENSE
       - .gitignore
@@ -198,11 +199,15 @@ jobs:
           if [ -n "$PREV" ]; then
             changes=$(gh api "repos/$GH_REPO/compare/$PREV...$GITHUB_SHA" --jq '.commits[] | "- " + (.commit.message | split("\n")[0])')
           fi
-          { if [ -n "$changes" ]; then printf '## Changes\n\n%s\n\n' "$changes"; fi; cat <<EOF
-          $signing The SHA-256 sums are below and in SHA256SUMS.txt; RoALT-Setup-$VERSION.exe.sig is the signature RoALT's built-in updater checks before it runs the installer.
+          # This version's section of CHANGELOG.md when it has one, else the commits.
+          log=$(gh api -H 'Accept: application/vnd.github.raw' "repos/$GH_REPO/contents/CHANGELOG.md?ref=$GITHUB_SHA" 2>/dev/null || true)
+          section=$(printf '%s\n' "$log" | awk -v v="$VERSION" '/^## /{p = ($2 == v); next} p')
+          { if [ -n "$section" ]; then printf '%s\n\n' "$section"; elif [ -n "$changes" ]; then printf '## Changes\n\n%s\n\n' "$changes"; fi; cat <<EOF
+          $signing
 
-          - **Windows** 10 1809 or later, or Windows 11, x64: RoALT-Setup-$VERSION.exe. SmartScreen warns on first run: More info → Run anyway.
-          - Needs the Microsoft Edge WebView2 Runtime (Windows 11 has it). Setup checks, and offers Microsoft's download when it is missing.
+          - **Windows** 10 1809 or later, or Windows 11, x64: download and run `RoALT-Setup-$VERSION.exe`. If Windows SmartScreen warns on first run, click **More info → Run anyway**.
+          - Needs the Microsoft Edge WebView2 Runtime (built into Windows 11). Setup checks and offers Microsoft's download when missing.
+          - *(Optional)* SHA-256 checksums are below and in `SHA256SUMS.txt`. `RoALT-Setup-$VERSION.exe.sig` is the signature RoALT's built-in updater checks before running an update.
 
           ~~~
           $(cat SHA256SUMS.txt)

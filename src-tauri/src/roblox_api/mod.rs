@@ -29,11 +29,11 @@ use crate::error::{AppError, Result};
 use crate::vault::Secret;
 use types::{
     AgeRecommendation, AuthenticatedUser, BadgePage, CollectiblePage, Data, FriendOnline, FriendStatus, FriendStatusRow, Game, GameDetails, GroupRoleRow,
-    GroupRow, Holding, IdPage, Listed, Look, OutfitPage, PassPage, Presences, PrivateServerList, Profiles, RobloxBadgeRow, ServerList,
-    ShareLinkResolution, ShareLinkV2, SocialCounts, Thumbnails, TradeBody, TradeHead, TradePage, TwoStepConfig, UniverseRow, UserDetails, UserGamePage,
-    UserPresence, VipServerResponse, VoteRow, WornAssets,
+    GroupRow, Holding, IdPage, Listed, PassPage, Presences, PrivateServerList, Profiles, RobloxBadgeRow, ServerList,
+    ShareLinkResolution, ShareLinkV2, SocialCounts, Thumbnails, TwoStepConfig, UniverseRow, UserDetails, UserGamePage,
+    UserPresence, VoteRow,
 };
-use crate::model::{FriendRequest, OwnedPrivateServer, RobuxKind, RobuxTotals, RobuxTransaction, TradeKind, TradeRow};
+use crate::model::{RobuxKind, RobuxTotals, RobuxTransaction};
 
 /// Called with `(account_id, new cookie)` when Roblox rotates a stored account's cookie.
 pub type RotationSink = Arc<dyn Fn(i64, Secret) + Send + Sync>;
@@ -754,292 +754,6 @@ impl Client {
         })
     }
 
-    /// `GET games.roblox.com/v1/vip-servers/{id}` as its owner (403 for anyone else). Lenient;
-    /// the answer's join secrets are never read.
-    pub async fn vip_server(&self, account_id: i64, cookie: &Secret, vip_server_id: i64) -> Result<crate::model::PrivateServerSettings> {
-        let route = endpoints::VIP_SERVER;
-        let r: VipServerResponse = self.get(route, &endpoints::fill(route, vip_server_id), account_id, Some(cookie)).await?;
-        Ok(settings_of(vip_server_id, r))
-    }
-
-    /// `PATCH /v1/vip-servers/{id} {name, active, newJoinCode}` and
-    /// `PATCH …/permissions {friendsAllowed, usersToAdd, usersToRemove}` with only the parts
-    /// `patch` sets; neither is sent when it has none, so an empty patch makes no call. A name
-    /// that trims to nothing is refused first. Callers re-read with `vip_server`.
-    pub async fn vip_server_update(
-        &self,
-        account_id: i64,
-        cookie: &Secret,
-        vip_server_id: i64,
-        patch: &crate::model::PrivateServerPatch,
-    ) -> Result<()> {
-        let mut server = serde_json::Map::new();
-        if let Some(name) = &patch.name {
-            server.insert("name".into(), server_name(name)?.into());
-        }
-        if let Some(active) = patch.active {
-            server.insert("active".into(), active.into());
-        }
-        if patch.new_join_code == Some(true) {
-            server.insert("newJoinCode".into(), true.into());
-        }
-        let mut permissions = serde_json::Map::new();
-        if let Some(friends) = patch.friends_allowed {
-            permissions.insert("friendsAllowed".into(), friends.into());
-        }
-        for (key, ids) in [("usersToAdd", &patch.users_to_add), ("usersToRemove", &patch.users_to_remove)] {
-            let ids = valid_ids(ids.as_deref().unwrap_or_default());
-            if !ids.is_empty() {
-                permissions.insert(key.into(), ids.into());
-            }
-        }
-        for (route, body) in [(endpoints::VIP_SERVER, server), (endpoints::VIP_SERVER_PERMISSIONS, permissions)] {
-            if !body.is_empty() {
-                let url = endpoints::fill(route, vip_server_id);
-                self.request(Method::PATCH, route, &url, Some(&Value::Object(body)), account_id, Some(cookie)).await?;
-            }
-        }
-        Ok(())
-    }
-
-    /// `PATCH /v1/vip-servers/{id}/subscription {active, price}`: auto-renew on (spends `price`
-    /// Robux a month) or off. `price` is what the owner was shown.
-    pub async fn vip_server_subscription(&self, account_id: i64, cookie: &Secret, vip_server_id: i64, active: bool, price: i64) -> Result<()> {
-        let route = endpoints::VIP_SERVER_SUBSCRIPTION;
-        let body = serde_json::json!({ "active": active, "price": price });
-        self.request(Method::PATCH, route, &endpoints::fill(route, vip_server_id), Some(&body), account_id, Some(cookie)).await.map(|_| ())
-    }
-
-    /// `POST /v1/games/vip-servers/{universeId} {name, expectedPrice, isPurchaseConfirmed:true,
-    /// idempotencyKey}`: buys a private server (spends Robux). Roblox refuses, charging nothing,
-    /// when `expected_price` isn't the real price. A blank name or a key that isn't a UUID is
-    /// refused first. The answer (it holds the join secrets) isn't read: a 2xx is the purchase.
-    pub async fn vip_server_buy(
-        &self,
-        account_id: i64,
-        cookie: &Secret,
-        universe_id: i64,
-        name: &str,
-        expected_price: i64,
-        idempotency_key: &str,
-    ) -> Result<()> {
-        let name = server_name(name)?;
-        if !crate::launcher::target::is_uuid(idempotency_key) {
-            return Err(AppError::Internal("bad idempotency key".into()));
-        }
-        let route = endpoints::VIP_SERVER_CREATE;
-        let body = serde_json::json!({
-            "name": name,
-            "expectedPrice": expected_price,
-            "isPurchaseConfirmed": true,
-            "idempotencyKey": idempotency_key,
-        });
-        self.request(Method::POST, route, &endpoints::fill(route, universe_id), Some(&body), account_id, Some(cookie)).await.map(|_| ())
-    }
-
-    /// An account's own saved outfits, (id, name) in Roblox's order (`OUTFITS`, ≤4 pages of 50:
-    /// Roblox allows 50 outfits). Rows without an id are dropped.
-    pub async fn outfits(&self, account_id: i64, cookie: &Secret, user_id: i64) -> Result<Vec<(i64, String)>> {
-        let route = endpoints::OUTFITS;
-        let list = paged("outfits", 4, Duration::ZERO, |token| {
-            let mut url = endpoints::fill(route, user_id);
-            if let Some(t) = token {
-                url.push_str("&paginationToken=");
-                url.push_str(&crate::launcher::uri::encode(&t));
-            }
-            async move {
-                let page: OutfitPage = self.get(route, &url, account_id, Some(cookie)).await?;
-                let rows = page.data.unwrap_or_default().into_iter().filter_map(|o| Some((o.id?, o.name.unwrap_or_default())));
-                Ok((rows.collect(), page.pagination_token))
-            }
-        })
-        .await?;
-        // The token's paging is unrecorded signed in: a page that came twice must not show twice.
-        let mut seen = std::collections::HashSet::new();
-        Ok(list.items.into_iter().filter(|o| seen.insert(o.0)).collect())
-    }
-
-    /// Pictures of outfits (`OUTFIT_THUMBS`, no cookie): outfit id → image URL, and whether every
-    /// picture came (`thumbnails`).
-    pub async fn outfit_thumbnails(&self, outfit_ids: &[i64]) -> (HashMap<i64, String>, bool) {
-        self.thumbnails(endpoints::OUTFIT_THUMBS, outfit_ids).await
-    }
-
-    /// A picture of a user's whole avatar (`AVATAR_THUMBS`, no cookie); None while Roblox makes it.
-    pub async fn avatar_thumbnail(&self, user_id: i64) -> Option<String> {
-        self.thumbnails(endpoints::AVATAR_THUMBS, &[user_id]).await.0.remove(&user_id)
-    }
-
-    /// An outfit's look (`OUTFIT_DETAILS`), read as its owner.
-    pub async fn outfit_look(&self, account_id: i64, cookie: &Secret, outfit_id: i64) -> Result<Look> {
-        let route = endpoints::OUTFIT_DETAILS;
-        self.get(route, &endpoints::fill(route, outfit_id), account_id, Some(cookie)).await
-    }
-
-    /// The look the account wears now (`AVATAR`).
-    pub async fn worn_look(&self, account_id: i64, cookie: &Secret) -> Result<Look> {
-        self.get(endpoints::AVATAR, endpoints::AVATAR, account_id, Some(cookie)).await
-    }
-
-    /// Puts `look` on the account: avatar type, body colors, scales, then the items (four POSTs; a
-    /// part the look lacks is skipped). Roblox only lets an account wear what it owns: when it
-    /// names items it refuses, the rest are sent once more (right whether or not the first call
-    /// wore them) and the refused items' names are returned.
-    pub async fn wear(&self, account_id: i64, cookie: &Secret, look: &Look) -> Result<Vec<String>> {
-        let post = |route: &'static str, body: Value| async move {
-            self.request(Method::POST, route, route, Some(&body), account_id, Some(cookie)).await
-        };
-        if !look.player_avatar_type.is_null() {
-            post(endpoints::SET_AVATAR_TYPE, serde_json::json!({ "playerAvatarType": look.player_avatar_type })).await?;
-        }
-        if look.body_color3s.is_object() {
-            post(endpoints::SET_BODY_COLORS, look.body_color3s.clone()).await?;
-        }
-        if look.scale.is_object() {
-            post(endpoints::SET_SCALES, look.scale.clone()).await?;
-        }
-        let set = |assets: &[Value]| {
-            let sent = post(endpoints::SET_WEARING_ASSETS, serde_json::json!({ "assets": assets }));
-            // A 2xx is the change; an answer that can't be read names no refused items.
-            async move { Ok::<WornAssets, AppError>(serde_json::from_slice(&sent.await?.1).unwrap_or_default()) }
-        };
-        let mut assets = look_assets(look);
-        let answer = set(&assets).await?;
-        let refused = answer.invalid_asset_ids.unwrap_or_default();
-        let mut worn = answer.success != Some(false);
-        if !refused.is_empty() && answer.success != Some(true) {
-            assets.retain(|a| !a["id"].as_i64().is_some_and(|id| refused.contains(&id)));
-            worn = set(&assets).await?.success != Some(false);
-        }
-        // Refused with no item named, or refused again without the named ones.
-        if !worn {
-            return Err(AppError::Roblox("items not worn".into()));
-        }
-        let name = |id: &i64| {
-            let item = look.assets.iter().flatten().find(|a| a["id"].as_i64() == Some(*id));
-            item.and_then(|a| a["name"].as_str()).map_or_else(|| id.to_string(), str::to_owned)
-        };
-        Ok(refused.iter().map(name).collect())
-    }
-
-    /// `POST /v3/outfits/create`: saves `look` as a new outfit. Roblox checks the name (and the
-    /// 50-outfit limit); its refusal is quoted (`refusal`).
-    pub async fn outfit_create(&self, account_id: i64, cookie: &Secret, name: &str, look: &Look) -> Result<()> {
-        let route = endpoints::OUTFIT_CREATE;
-        let body = serde_json::json!({
-            "name": name.trim(),
-            "bodyColor3s": look.body_color3s,
-            "assets": look_assets(look),
-            "scale": look.scale,
-            "playerAvatarType": look.player_avatar_type,
-        });
-        self.request(Method::POST, route, route, Some(&body), account_id, Some(cookie)).await.map(|_| ())
-    }
-
-    /// `PATCH /v3/outfits/{id} {name}`: renames an outfit; the rest of it stays.
-    pub async fn outfit_rename(&self, account_id: i64, cookie: &Secret, outfit_id: i64, name: &str) -> Result<()> {
-        let route = endpoints::OUTFIT;
-        let body = serde_json::json!({ "name": name.trim() });
-        self.request(Method::PATCH, route, &endpoints::fill(route, outfit_id), Some(&body), account_id, Some(cookie)).await.map(|_| ())
-    }
-
-    /// `POST /v1/outfits/{id}/delete`.
-    pub async fn outfit_delete(&self, account_id: i64, cookie: &Secret, outfit_id: i64) -> Result<()> {
-        // `{}` for the same reason as `accept_friend`.
-        let (route, body) = (endpoints::OUTFIT_DELETE, Value::Object(Default::default()));
-        self.request(Method::POST, route, &endpoints::fill(route, outfit_id), Some(&body), account_id, Some(cookie)).await.map(|_| ())
-    }
-
-    /// The account's newest trades of one kind (`TRADES`: one page, 100 at most). Rows without an
-    /// id are dropped.
-    pub async fn trades(&self, account_id: i64, cookie: &Secret, kind: TradeKind) -> Result<Vec<TradeRow>> {
-        let route = endpoints::TRADES;
-        let page: TradePage = self.get(route, &endpoints::fill(route, kind.path()), account_id, Some(cookie)).await?;
-        let row = |t: TradeHead| {
-            let user = t.user.unwrap_or_default();
-            Some(TradeRow {
-                id: t.id?.to_string(),
-                partner_name: user.name.unwrap_or_default(),
-                created: t.created,
-                expires: t.expiration,
-            })
-        };
-        Ok(page.data.unwrap_or_default().into_iter().filter_map(row).collect())
-    }
-
-    /// What both players offer in a trade (`TRADE`), read as one of the two.
-    pub async fn trade(&self, account_id: i64, cookie: &Secret, trade_id: i64) -> Result<TradeBody> {
-        let route = endpoints::TRADE;
-        self.get(route, &endpoints::fill(route, trade_id), account_id, Some(cookie)).await
-    }
-
-    /// `POST /v1/trades/{id}/accept` or `/decline` (declining a trade the account sent cancels
-    /// it). Roblox's refusal is quoted (`refusal`).
-    pub async fn trade_answer(&self, account_id: i64, cookie: &Secret, trade_id: i64, accept: bool) -> Result<()> {
-        let route = if accept { endpoints::TRADE_ACCEPT } else { endpoints::TRADE_DECLINE };
-        // `{}` for the same reason as `accept_friend`.
-        let body = Value::Object(Default::default());
-        self.request(Method::POST, route, &endpoints::fill(route, trade_id), Some(&body), account_id, Some(cookie)).await.map(|_| ())
-    }
-
-    /// The newest friend requests the account got (`FRIEND_REQUESTS`: one page, 100 at most), without
-    /// pictures. Rows without a sender are dropped. Roblox's friend lists come without names, so
-    /// missing ones are read by id (`user_names`); if that fails they stay "".
-    pub async fn friend_requests(&self, account_id: i64, cookie: &Secret) -> Result<Vec<FriendRequest>> {
-        let route = endpoints::FRIEND_REQUESTS;
-        let page: types::FriendRequestPage = self.get(route, route, account_id, Some(cookie)).await?;
-        let row = |r: types::FriendRequestRow| {
-            let info = r.friend_request.unwrap_or_default();
-            Some(FriendRequest {
-                user_id: r.id.or(info.sender_id).filter(|id| *id > 0)?,
-                name: r.name.unwrap_or_default(),
-                display_name: r.display_name.unwrap_or_default(),
-                avatar_url: None,
-                sent_at: info.sent_at,
-                mutual: r.mutual_friends_list.map_or(0, |m| u32::try_from(m.len()).unwrap_or(u32::MAX)),
-            })
-        };
-        let mut rows: Vec<FriendRequest> = page.data.unwrap_or_default().into_iter().filter_map(row).collect();
-        let nameless: Vec<i64> = rows.iter().filter(|r| r.name.is_empty()).map(|r| r.user_id).collect();
-        if !nameless.is_empty() {
-            match self.user_names(&nameless).await {
-                Ok(names) => {
-                    for r in rows.iter_mut().filter(|r| r.name.is_empty()) {
-                        if let Some((name, display)) = names.get(&r.user_id) {
-                            (r.name, r.display_name) = (name.clone(), display.clone());
-                        }
-                    }
-                }
-                Err(e) => log::debug!("friend_requests: the names of {} sender(s) weren't read: {e}", nameless.len()),
-            }
-        }
-        Ok(rows)
-    }
-
-    /// `POST users.roblox.com/v1/users {userIds, excludeBannedUsers:false}` (no cookie, 100 ids a
-    /// call) → id → (name, display name). Unknown ids are absent.
-    pub async fn user_names(&self, user_ids: &[i64]) -> Result<HashMap<i64, (String, String)>> {
-        let (url, mut out) = (endpoints::USERS_BY_ID, HashMap::new());
-        for chunk in valid_ids(user_ids).chunks(100) {
-            let body = serde_json::json!({ "userIds": chunk, "excludeBannedUsers": false });
-            let (_, bytes, _) = self.request(Method::POST, url, url, Some(&body), 0, None).await?;
-            out.extend(json::<Data<AuthenticatedUser>>(&bytes)?.data.into_iter().map(|u| (u.id, (u.name, u.display_name))));
-        }
-        Ok(out)
-    }
-
-    /// Declines the friend request of `requester` (`DECLINE_FRIEND`), or with none every request
-    /// the account has (`DECLINE_ALL_FRIENDS`). Cookie + CSRF; Roblox's refusal is quoted.
-    pub async fn decline_friend(&self, account_id: i64, cookie: &Secret, requester: Option<i64>) -> Result<()> {
-        // `{}` for the same reason as `accept_friend`.
-        let body = Value::Object(Default::default());
-        let (route, url) = match requester {
-            Some(id) => (endpoints::DECLINE_FRIEND, endpoints::fill(endpoints::DECLINE_FRIEND, id)),
-            None => (endpoints::DECLINE_ALL_FRIENDS, endpoints::DECLINE_ALL_FRIENDS.to_owned()),
-        };
-        self.request(Method::POST, route, &url, Some(&body), account_id, Some(cookie)).await.map(|_| ())
-    }
-
     /// The account's newest 25 Robux transactions of one kind (`TRANSACTIONS`).
     pub async fn transactions(&self, account_id: i64, cookie: &Secret, user_id: i64, kind: RobuxKind) -> Result<Vec<RobuxTransaction>> {
         let route = endpoints::TRANSACTIONS;
@@ -1064,39 +778,6 @@ impl Client {
         let t: types::TransactionTotals = self.get(route, &endpoints::fill(route, user_id), account_id, Some(cookie)).await?;
         let whole = |v: Option<f64>| v.map(|v| v.round() as i64);
         Ok(RobuxTotals { incoming: whole(t.incoming_robux_total), outgoing: whole(t.outgoing_robux_total), pending: whole(t.pending_robux_total) })
-    }
-
-    /// The private servers the account owns (`MY_PRIVATE_SERVERS`): 5 pages of 100 at most. Rows
-    /// without an id are dropped.
-    pub async fn my_private_servers(&self, account_id: i64, cookie: &Secret) -> Result<Vec<OwnedPrivateServer>> {
-        let route = endpoints::MY_PRIVATE_SERVERS;
-        let (mut out, mut cursor) = (Vec::new(), None::<String>);
-        for _ in 0..5 {
-            let mut url = route.to_owned();
-            if let Some(c) = &cursor {
-                url.push_str("&cursor=");
-                url.push_str(&crate::launcher::uri::encode(c));
-            }
-            let page: types::MyPrivateServerPage = self.get(route, &url, account_id, Some(cookie)).await?;
-            out.extend(page.data.unwrap_or_default().into_iter().filter_map(|r| {
-                Some(OwnedPrivateServer {
-                    vip_server_id: r.private_server_id?,
-                    name: r.name.unwrap_or_default(),
-                    place_id: r.place_id,
-                    universe_id: r.universe_id,
-                    game: r.universe_name.unwrap_or_default(),
-                    price: r.price_in_robux,
-                    expires: r.expiration_date,
-                    will_renew: r.will_renew.unwrap_or(false),
-                    active: r.active.unwrap_or(false),
-                })
-            }));
-            cursor = page.next_page_cursor.filter(|c| !c.is_empty());
-            if cursor.is_none() {
-                break;
-            }
-        }
-        Ok(out)
     }
 
     /// `GET clientsettingscdn.roblox.com/v2/client-version/WindowsPlayer` (no cookie) → the live
@@ -1233,7 +914,7 @@ impl Client {
                     "Pick an account to sort by Recommended or Best latency: Roblox only does that for a signed-in account."
                 )));
             }
-            let e = refusal(route, status, &headers, &bytes).unwrap_or_else(|| classify(status, &headers, &bytes));
+            let e = classify(status, &headers, &bytes);
             log::warn!("{route}: HTTP {status}, code {:?}: {e}", error_code(&bytes));
             if status == StatusCode::FORBIDDEN {
                 // Whose refusal it is (the API's or a CDN's page), without the body.
@@ -1376,50 +1057,6 @@ fn classify(status: StatusCode, headers: &HeaderMap, body: &[u8]) -> AppError {
     }
 }
 
-/// The routes whose refusals `refusal` quotes: private-server and avatar changes, a trade's answer, a declined friend request.
-const QUOTED: [&str; 15] = [
-    endpoints::DECLINE_FRIEND,
-    endpoints::DECLINE_ALL_FRIENDS,
-    endpoints::TRADE_ACCEPT,
-    endpoints::TRADE_DECLINE,
-    endpoints::VIP_SERVER,
-    endpoints::VIP_SERVER_PERMISSIONS,
-    endpoints::VIP_SERVER_SUBSCRIPTION,
-    endpoints::VIP_SERVER_CREATE,
-    endpoints::SET_AVATAR_TYPE,
-    endpoints::SET_BODY_COLORS,
-    endpoints::SET_SCALES,
-    endpoints::SET_WEARING_ASSETS,
-    endpoints::OUTFIT_CREATE,
-    endpoints::OUTFIT,
-    endpoints::OUTFIT_DELETE,
-];
-
-/// Roblox's own text for a refused change (a wrong price, alts that aren't friends, an outfit
-/// name it doesn't allow, a trade that expired). Unlike `classify` it quotes the body: the
-/// requests on these routes hold only names, a price, ids and a look.
-fn refusal(route: &str, status: StatusCode, headers: &HeaderMap, body: &[u8]) -> Option<AppError> {
-    if !QUOTED.contains(&route) || !status.is_client_error() || status == StatusCode::UNAUTHORIZED || headers.contains_key(CHALLENGE) {
-        return None;
-    }
-    // A 403 on the server itself means not the owner: left as "HTTP 403" for `owner_error` to word.
-    if status == StatusCode::FORBIDDEN && (route == endpoints::VIP_SERVER || route == endpoints::VIP_SERVER_SUBSCRIPTION) {
-        return None;
-    }
-    let message = serde_json::from_slice::<Value>(body).ok().and_then(|v| {
-        let e = v.get("errors").and_then(|e| e.get(0)).unwrap_or(&v);
-        let m: String = e.get("message")?.as_str()?.chars().filter(|c| !c.is_control()).take(200).collect();
-        Some(m.trim().to_owned()).filter(|m| !m.is_empty())
-    });
-    match message {
-        Some(why) => Some(AppError::Invalid(tr!("Roblox refused this: {why}", why = why))),
-        None if route == endpoints::VIP_SERVER_CREATE => {
-            Some(AppError::Invalid(tr!("Roblox refused the purchase and charged nothing: check the price on the game's page.")))
-        }
-        None => None,
-    }
-}
-
 /// `(code, subcode)` of `{errors:[{..}]}` or a flat `{code, ..}` body. Bare strings,
 /// `{Error: ..}` and empty bodies have none.
 fn error_code(body: &[u8]) -> Option<(i64, i64)> {
@@ -1461,53 +1098,6 @@ fn client_version_of(body: &[u8]) -> Result<String> {
     } else {
         log::debug!("client version: unexpected clientVersionUpload {:?}", v.chars().take(64).collect::<String>());
         Err(unreadable())
-    }
-}
-
-/// A private server's name, trimmed; empty is refused.
-/// A look's items as `set-wearing-assets` and `outfits/create` take them: `{id, meta}`. `meta` (a
-/// layered item's order and fit) goes along, or Roblox refuses layered clothing.
-fn look_assets(look: &Look) -> Vec<Value> {
-    let item = |a: &Value| {
-        let mut out = serde_json::Map::new();
-        out.insert("id".into(), a.get("id").filter(|id| id.is_i64())?.clone());
-        if let Some(meta) = a.get("meta").filter(|m| !m.is_null()) {
-            out.insert("meta".into(), meta.clone());
-        }
-        Some(Value::Object(out))
-    };
-    look.assets.iter().flatten().filter_map(item).collect()
-}
-
-fn server_name(name: &str) -> Result<&str> {
-    Some(name.trim()).filter(|n| !n.is_empty()).ok_or_else(|| AppError::Invalid(tr!("A private server needs a name.")))
-}
-
-fn settings_of(vip_server_id: i64, r: VipServerResponse) -> crate::model::PrivateServerSettings {
-    let (sub, perms) = (r.subscription, r.permissions);
-    let allowed_users = perms
-        .as_ref()
-        .and_then(|p| p.users.as_ref())
-        .into_iter()
-        .flatten()
-        .filter_map(|u| {
-            Some(crate::model::AllowedUser {
-                user_id: u.id?,
-                username: u.name.clone().unwrap_or_default(),
-                display_name: u.display_name.clone().unwrap_or_default(),
-            })
-        })
-        .collect();
-    crate::model::PrivateServerSettings {
-        vip_server_id,
-        name: r.name.unwrap_or_default(),
-        active: r.active.unwrap_or_default(),
-        friends_allowed: perms.as_ref().and_then(|p| p.friends_allowed).unwrap_or_default(),
-        allowed_users,
-        renews: sub.as_ref().and_then(|s| s.active).unwrap_or_default(),
-        expired: sub.as_ref().and_then(|s| s.expired).unwrap_or_default(),
-        expires: sub.as_ref().and_then(|s| s.expiration_date.clone()),
-        price: sub.and_then(|s| s.price),
     }
 }
 

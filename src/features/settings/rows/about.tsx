@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { replayOnboarding } from "../../onboarding/qa";
 import { useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../../../api";
@@ -67,6 +68,15 @@ export function VersionRow() {
   return (
     <SettingRow id="version" name={`RoALT ${version}`} title={<span className="set-label">RoALT <span className="mono">{version}</span></span>} detail={t("settings.olderVersions")}>
       <Releases />
+    </SettingRow>
+  );
+}
+
+/** The first-run setup and tour, again (the shell opens it). */
+export function ReplayTourRow() {
+  return (
+    <SettingRow id="replayTour">
+      <Button size="md" onClick={replayOnboarding}>{t("onboarding.replayButton")}</Button>
     </SettingRow>
   );
 }

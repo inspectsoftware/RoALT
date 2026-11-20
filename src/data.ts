@@ -34,17 +34,8 @@ export const qk = {
   /** Browse › Limiteds (Rolimons' list; none while Rolimons values are off). */
   market: ["market"],
   mods: ["mods"],
-  clips: ["clips"],
-  clipsStatus: ["clipsStatus"],
-  outfits: (accountId: number | undefined) => ["outfits", accountId],
-  trades: (accountId: number, kind: string) => ["trades", accountId, kind],
-  friendRequests: (accountId: number) => ["friendRequests", accountId],
-  ownedServers: (accountId: number) => ["ownedServers", accountId],
   robux: (accountId: number, kind: string) => ["robux", accountId, kind],
   robuxTotals: (accountId: number) => ["robuxTotals", accountId],
-  /** Every trade's items: they hold Rolimons values, so the Rolimons switch makes them stale. */
-  tradeDetails: ["trade"],
-  trade: (accountId: number, id: string) => ["trade", accountId, id],
   value: (id: number) => ["value", id],
   servers: ["servers"],
   privateServers: ["privateServers"],
@@ -145,8 +136,8 @@ export function publicBlock(network: { public: boolean } | undefined, settings: 
 export const useGame = (placeId: number | null) =>
   useQuery({ queryKey: qk.game(placeId ?? 0), queryFn: () => api.gameInfo(placeId!), enabled: placeId !== null, staleTime: 10 * 60_000, retry: false });
 
-/** Home's News: fetched at start, then every 30 minutes while RoALT runs. */
-export const useNews = () => useQuery({ queryKey: qk.news, queryFn: api.news, staleTime: 30 * 60_000, refetchInterval: 30 * 60_000 });
+/** Home's News: fetched at start, then every 30 minutes while RoALT runs; only while `enabled` (Settings' news). */
+export const useNews = (enabled: boolean) => useQuery({ queryKey: qk.news, queryFn: api.news, enabled, staleTime: 30 * 60_000, refetchInterval: 30 * 60_000 });
 
 /** RoALT's sponsor and supporters (roalt.dev), asked only while `enabled`: News with Settings'
  * showSponsor on, or Settings › About open. They change rarely: kept 6 hours. */

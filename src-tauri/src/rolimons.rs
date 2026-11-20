@@ -1,5 +1,5 @@
 //! Rolimons' values for limiteds, only while `settings.rolimons_values` is on. While an account's
-//! limiteds are counted, Browse › Limiteds is open, or a trade's items are read, RoALT downloads
+//! limiteds are counted or Browse › Limiteds is open, RoALT downloads
 //! Rolimons' public item list (one GET of api.rolimons.com, at most every 30 minutes; no user id,
 //! name or cookie is sent) and keeps it in the cache table. Rolimons isn't part of Roblox: values
 //! are their opinion, RAP stays Roblox's.

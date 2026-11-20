@@ -101,11 +101,15 @@ fn tick(app: &AppHandle) -> Duration {
             return TICK;
         }
     };
-    if !v.anti_afk.enabled {
+    let clients = if v.anti_afk.enabled { s.tracker.afk_clients() } else { Vec::new() };
+    keep_awake(!clients.is_empty());
+    // Locked, Windows lets no window come to the front: nothing to try until it's unlocked
+    // (`session` tells Discord).
+    if clients.is_empty() || crate::session::locked() {
         return TICK;
     }
     // A hung client would block this one thread, and the others would get kicked for idling.
-    let clients: Vec<_> = s.tracker.afk_clients().into_iter().filter(|c| !process::hung(c.pid)).collect();
+    let clients: Vec<_> = clients.into_iter().filter(|c| !process::hung(c.pid)).collect();
     let idle = idle_ms();
     let ids = match plan(&clients, now_ms(), v.anti_afk.interval_min, idle) {
         Plan::Wait => return TICK,
@@ -154,6 +158,14 @@ fn tick(app: &AppHandle) -> Duration {
     }
     instances_changed(app);
     if failed { RETRY } else { TICK }
+}
+
+/// While anti-AFK has clients, Windows doesn't go to sleep on its idle timer (a sleeping PC presses
+/// nothing). Per thread: this one, for the app's lifetime. The screen may still turn off.
+fn keep_awake(on: bool) {
+    use windows::Win32::System::Power::{ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThreadExecutionState};
+    // SAFETY: only sets this thread's execution state.
+    unsafe { SetThreadExecutionState(if on { ES_CONTINUOUS | ES_SYSTEM_REQUIRED } else { ES_CONTINUOUS }) };
 }
 
 /// Tick count of the last keyboard or mouse input anywhere in the session (ours included);

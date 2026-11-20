@@ -17,7 +17,7 @@ import { EntryRow, Renderers, SearchHits, useCtx, type RowRenderers } from "./ki
 import { SettingSection } from "./kit/SettingSection";
 import { dyn, entry, shown, type Entry } from "./registry";
 import { keyOf, placeNames, search, type HitGroup } from "./search";
-import { SelfUpdateRow, SupportRow, VersionRow } from "./rows/about";
+import { ReplayTourRow, SelfUpdateRow, SupportRow, VersionRow } from "./rows/about";
 import { AccentRow, BackgroundRow, LookRow, LookShareRow, MotionRow, SoundRow, ThemeRow, ThemesRow } from "./rows/appearance";
 import { BackupRow, BrowserDataRow, CleanLogsRow, DataFolderRow } from "./rows/data";
 import { BreakerRow, ClientCard, LauncherRow, MultiRow, ShutdownRow } from "./rows/launching";
@@ -51,6 +51,7 @@ const RENDERERS: RowRenderers = {
   selfUpdate: SelfUpdateRow,
   version: VersionRow,
   support: SupportRow,
+  replayTour: ReplayTourRow,
 };
 
 /** Whether an entry is drawn as a row of Settings. What a panel stands for (a preset card) has no

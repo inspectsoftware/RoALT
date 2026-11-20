@@ -1,4 +1,4 @@
-import "../trades/trades.css";
+import "./crashes.css";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -25,10 +25,10 @@ export function CrashCard({ crash: c, account }: { crash: Crash; account?: Accou
   const game = useGame(c.placeId).data;
   const verdict = verdictOf(c);
   return (
-    <li className="panel trades-card">
-      <div className="trades-card-head">
+    <li className="panel crashes-card">
+      <div className="crashes-card-head">
         {account && (
-          <span className="trades-who">
+          <span className="crashes-who">
             <Avatar account={account} size={20} />
             <span className="truncate">{accountName(account)}</span>
           </span>
@@ -43,7 +43,7 @@ export function CrashCard({ crash: c, account }: { crash: Crash; account?: Accou
       {c.reason && <p className="mono text-xs text-fg-2 break-words selectable">{c.reason}</p>}
       {verdict && <p className="text-[13px]">{verdict}</p>}
       {c.hasLog && (
-        <Button size="sm" iconEnd="external" className="self-start" onClick={() => api.crashOpenLog(c.id).catch(toastError)}>
+        <Button size="sm" iconEnd="external" className="self-start" data-tip={t("crashes.rawLogHint")} onClick={() => api.crashOpenLog(c.id).catch(toastError)}>
           {t("launch.crash.openLog")}
         </Button>
       )}
@@ -73,13 +73,13 @@ export function CrashesView() {
 
   return (
     <main className="scroll flex-1 min-w-0 page">
-      <div className="trades-page">
-        <header className="trades-head">
-          <div className="trades-bar">
+      <div className="crashes-page">
+        <header className="crashes-head">
+          <div className="crashes-bar">
             <h1 className="page-title">{t("app.nav.crashes")}</h1>
             <span className="flex flex-wrap gap-2">
               {all.length > 0 && (
-                <Button icon="download" onClick={() => void exportCsv("RoALT-crashes", api.crashesExport)}>
+                <Button icon="download" data-tip={t("crashes.rawCsvHint")} onClick={() => void exportCsv("RoALT-crashes", api.crashesExport)}>
                   {t("common.exportCsv")}
                 </Button>
               )}
@@ -90,10 +90,10 @@ export function CrashesView() {
           </div>
           <p className="page-sub">{t("crashes.lead")}</p>
           {all.length > 0 && (
-            <div className="trades-bar">
+            <div className="crashes-bar">
               <Select
                 aria-label={t("crashes.kind")}
-                className="trades-select"
+                className="crashes-select"
                 value={kind}
                 onChange={pick<string>((v) => setKind(v as CrashKind | ""))}
                 options={[{ value: "", label: t("crashes.allKinds") }, ...(Object.keys(CRASH_KINDS) as CrashKind[]).map((k) => ({ value: k, label: t(CRASH_KINDS[k]) }))]}
@@ -101,10 +101,10 @@ export function CrashesView() {
               {had.length > 1 && (
                 <Select
                   aria-label={t("monitor.account")}
-                  className="trades-select"
+                  className="crashes-select"
                   value={picked}
                   onChange={pick(setOnly)}
-                  options={[{ value: "", label: t("trades.allAccounts") }, ...had.map((a) => ({ value: String(a.id), label: accountName(a) }))]}
+                  options={[{ value: "", label: t("common.allAccounts") }, ...had.map((a) => ({ value: String(a.id), label: accountName(a) }))]}
                 />
               )}
             </div>

@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import type { AccountSummary, GameServer, PrivateServer } from "../../api";
+import type { GameServer, PrivateServer } from "../../api";
 import { useAccounts, useInstances } from "../../data";
 import { Skeleton } from "../../ui/Bits";
 import { IconButton } from "../../ui/Button";
@@ -174,16 +174,13 @@ export function PublicTable({ servers, placeId, pick, fastest, radio, onPick }: 
   );
 }
 
-/** Access codes stay out of the UI: a row only says whether this account can join. Servers owned by
- *  one of `owners` (valid vault accounts by userId) get a gear that manages them as that owner. */
-export function PrivateTable({ servers, pick, radio, onPick, owners, onManage }: {
+/** Access codes stay out of the UI: a row only says whether this account can join. */
+export function PrivateTable({ servers, pick, radio, onPick }: {
   /** Null: the first page is on its way. */
   servers: PrivateServer[] | null;
   pick: number | null;
   radio: string;
   onPick: (id: number) => void;
-  owners: Map<number, AccountSummary>;
-  onManage: (s: PrivateServer, owner: AccountSummary) => void;
 }) {
   const body = useRowRise(servers?.map((s) => s.vipServerId) ?? []);
   if (servers?.length === 0) return null;
@@ -195,8 +192,7 @@ export function PrivateTable({ servers, pick, radio, onPick, owners, onManage }:
           <th>{t("servers.name")}</th>
           <th className="srv-opt">{t("servers.owner")}</th>
           <th className="w-[26%]">{t("servers.players")}</th>
-          <th className="text-end">{t("servers.access")}</th>
-          <th className="w-14"><span className="sr-only">{t("servers.actions")}</span></th>
+          <th className="text-end pe-5">{t("servers.access")}</th>
         </tr>
       </thead>
       <tbody ref={body}>
@@ -204,7 +200,6 @@ export function PrivateTable({ servers, pick, radio, onPick, owners, onManage }:
           const name = s.name || t("servers.unnamed");
           const can = s.accessCode !== null;
           const on = pick === s.vipServerId;
-          const owner = s.ownerId === null ? undefined : owners.get(s.ownerId);
           return (
             <tr
               key={s.vipServerId}
@@ -225,29 +220,12 @@ export function PrivateTable({ servers, pick, radio, onPick, owners, onManage }:
                 />
               </td>
               <td className="pe-3 max-w-0">
-                <span className="flex items-center gap-2 min-w-0">
-                  <span className="truncate" title={name}>{name}</span>
-                  {owner && <span className="tag">{t("servers.yours")}</span>}
-                </span>
+                <span className="block truncate" title={name}>{name}</span>
               </td>
               <td className="srv-opt pe-3 max-w-0 truncate text-fg-2">{s.ownerName ? `@${s.ownerName}` : NONE}</td>
               <td><Players playing={s.playing} max={s.maxPlayers} /></td>
-              <td className="text-end">
+              <td className="text-end pe-5">
                 <StatusPill tone={can ? "ok" : "neutral"} label={can ? t("servers.joinable") : t("servers.noAccess")} />
-              </td>
-              <td className="pe-3">
-                {owner && (
-                  <IconButton
-                    icon="settings"
-                    size="sm"
-                    className="ms-auto"
-                    label={t("servers.manageName", { name })}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onManage(s, owner);
-                    }}
-                  />
-                )}
               </td>
             </tr>
           );
@@ -257,8 +235,7 @@ export function PrivateTable({ servers, pick, radio, onPick, owners, onManage }:
               <td><Skeleton width={120} /></td>
               <td className="srv-opt"><Skeleton width={84} /></td>
               <td>{SEATS_GHOST}</td>
-              <td><Skeleton width={76} height={22} radius={999} className="ms-auto" /></td>
-              <td />
+              <td className="pe-5"><Skeleton width={76} height={22} radius={999} className="ms-auto" /></td>
             </>,
           )}
       </tbody>

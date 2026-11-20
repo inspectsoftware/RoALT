@@ -95,10 +95,12 @@ fn parse_at(input: &str, depth: u8) -> ParsedInput {
     if let Some(name) = s.strip_prefix('@') {
         return if is_username(name) { username(name) } else { invalid(username_why()) };
     }
-    if is_username(s) {
-        return username(s);
-    }
     let Some((scheme, rest)) = s.split_once(':').filter(|(x, _)| is_scheme(x)) else {
+        // Bare words (e.g. a game title like "Brookhaven") are not usernames: require `@name`
+        // so typing a game name points to Browse games instead of following a stranger.
+        if !s.contains('.') && !s.contains('/') {
+            return invalid(tr!("To search for a game by name, use Browse games. To join a player, put @ before their username."));
+        }
         return web(&format!("https://{s}"), depth);
     };
     match scheme.to_ascii_lowercase().as_str() {
@@ -480,18 +482,22 @@ mod tests {
     #[test]
     fn usernames() {
         let name = |n: &str| ParsedInput::Username { name: n.into() };
+        let bare_hint = invalid(tr!("To search for a game by name, use Browse games. To join a player, put @ before their username."));
         let cases = [
             ("@builderman", name("builderman")),
-            ("  builderman ", name("builderman")),
-            ("Roblox_Dev1", name("Roblox_Dev1")),
+            ("  @builderman ", name("builderman")),
+            ("@Roblox_Dev1", name("Roblox_Dev1")),
             ("@1234", name("1234")),
-            ("abc", name("abc")),
+            ("@abc", name("abc")),
             ("@ab", invalid(username_why())),
             ("@builder-man", invalid(username_why())),
             ("@", invalid(username_why())),
             ("123456", place(123456, None)),
-            ("ab", invalid(not_roblox_why())),
-            ("abcdefghijklmnopqrstu", invalid(not_roblox_why())),
+            // Bare words without `@` are rejected with a hint rather than treated as usernames.
+            ("Brookhaven", bare_hint.clone()),
+            ("builderman", bare_hint.clone()),
+            ("ab", bare_hint.clone()),
+            ("abcdefghijklmnopqrstu", bare_hint),
         ];
         for (input, want) in cases {
             assert_eq!(parse(input), want, "{input}");

@@ -76,7 +76,7 @@ pub fn start(app: &AppHandle, w: &WebviewWindow, skip: bool, hidden: bool) -> ta
     let s = centered(rect, (SPLASH.0 * scale) as i32, (SPLASH.1 * scale) as i32);
     w.set_size(PhysicalSize::new(s.w as u32, s.h as u32))?;
     w.set_position(PhysicalPosition::new(s.x, s.y))?;
-    *app.state::<Pending>().0.lock().unwrap() = Some(Target { rect, maximized });
+    *app.state::<Pending>().0.lock().unwrap_or_else(|e| e.into_inner()) = Some(Target { rect, maximized });
     w.show()?;
     let _ = w.set_focus();
     let handle = app.clone();
@@ -108,7 +108,7 @@ fn lerp(a: Rect, b: Rect, t: f64) -> Rect {
 /// Grows the window from where it is to the target; once (later calls do nothing).
 /// `fallback`: called by the timer, not the UI.
 fn grow(app: &AppHandle, fallback: bool) {
-    let Some(target) = app.state::<Pending>().0.lock().unwrap().take() else { return };
+    let Some(target) = app.state::<Pending>().0.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
     if fallback {
         log::warn!("splash: the UI never called splash_done; growing the window anyway");
     }

@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent,
 import { flushSync } from "react-dom";
 import { motion } from "motion/react";
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
-import { api, asError, type AccountSummary, type GameInfo, type LaunchTarget, type PrivateServer, type ServerOrder } from "../../api";
+import { api, asError, type AccountSummary, type GameInfo, type LaunchTarget, type ServerOrder } from "../../api";
 import { qk } from "../../data";
 import { announce } from "../../ui/a11y";
 import { Skeleton } from "../../ui/Bits";
@@ -19,8 +19,6 @@ import { useGameDetails } from "../browse/GameDetails";
 import { RecentGames } from "../launch/RecentGames";
 import { useNow } from "../launch/Running";
 import { copyRoaltLink } from "../launch/target";
-import { BuyPrivateServerDialog } from "./BuyPrivateServerDialog";
-import { PrivateServerDialog } from "./PrivateServerDialog";
 import { PrivateTable, PublicTable, short, type Pick } from "./ServerTables";
 import "./servers.css";
 
@@ -83,8 +81,6 @@ export function ServerBrowser({ accounts, asker, place, setPlace, onChoice, vari
   const [pick, setPick] = useState<Pick>(null);
   const [loading, setLoading] = useState(false);
   const [nudges, setNudges] = useState(0);
-  const [manage, setManage] = useState<{ server: PrivateServer; owner: AccountSummary } | null>(null);
-  const [buying, setBuying] = useState(false);
   const details = useGameDetails();
   // Another game from outside (Play re-seeding its drawer) starts over: a server picked in one game
   // must not travel to the next.
@@ -111,8 +107,6 @@ export function ServerBrowser({ accounts, asker, place, setPlace, onChoice, vari
   // Recommended and Best ping need an account: without one, nothing is asked for.
   const needsAccount = asker === undefined && signedIn;
   const locked = (o: ServerOrder) => asker === undefined && SIGNED_IN.includes(o);
-  // A private server is yours when a valid vault account owns it; that account manages it.
-  const owners = new Map(valid.map((a) => [a.userId, a]));
 
   // A game without its icon (failed or still being made) is asked for again next time.
   const game = useQuery({
@@ -219,7 +213,6 @@ export function ServerBrowser({ accounts, asker, place, setPlace, onChoice, vari
     );
     void list.refetch();
   };
-  const privChanged = () => void qc.invalidateQueries({ queryKey: [...qk.privateServers, place] });
 
   const pickOrder = (o: ServerOrder) => {
     if (!locked(o)) return setOrder(o);
@@ -286,8 +279,6 @@ export function ServerBrowser({ accounts, asker, place, setPlace, onChoice, vari
           pick={privPick?.vipServerId ?? null}
           radio={radio}
           onPick={(id) => setPick({ kind: "private", id })}
-          owners={owners}
-          onManage={(server, owner) => setManage({ server, owner })}
         />
       </>
     );
@@ -375,7 +366,7 @@ export function ServerBrowser({ accounts, asker, place, setPlace, onChoice, vari
                     setPick(null);
                   }}
                 />
-                {view === "public" ? (
+                {view === "public" && (
                   <>
                     <Sorts value={effOrder} locked={locked} reasonId={reasonId} fastestFor={asking?.username} onPick={pickOrder} />
                     <label className="flex items-center gap-2.5 text-[13px] font-medium text-fg-2">
@@ -383,10 +374,6 @@ export function ServerBrowser({ accounts, asker, place, setPlace, onChoice, vari
                       <span aria-hidden="true">{t("servers.hideFull")}</span>
                     </label>
                   </>
-                ) : (
-                  <Button size="md" icon="plus" disabled={!valid.length} aria-describedby={valid.length ? undefined : noteId} onClick={() => setBuying(true)}>
-                    {t("servers.buy")}
-                  </Button>
                 )}
                 <span className="flex items-center gap-3 ms-auto">
                   <span className="srv-updated meta tabular-nums">
@@ -454,23 +441,6 @@ export function ServerBrowser({ accounts, asker, place, setPlace, onChoice, vari
         )}
         <span role="status" className="sr-only">{status}</span>
       </div>
-      <PrivateServerDialog
-        server={manage?.server ?? null}
-        owner={manage?.owner ?? null}
-        accounts={valid}
-        onClose={() => setManage(null)}
-        onChanged={privChanged}
-      />
-      {g && (
-        <BuyPrivateServerDialog
-          open={buying}
-          onClose={() => setBuying(false)}
-          game={g}
-          accounts={valid}
-          payer={asker}
-          onBought={privChanged}
-        />
-      )}
       {!drawer && details.dialog}
     </>
   );

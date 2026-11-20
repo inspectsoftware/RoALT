@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { LoadFailed, toast, toastError } from "../ui/Toast";
 import { api, events, type Favourite, type SameServer, type Settings, type VaultStatus } from "../api";
-import { qk, useAccounts, useGroups, useInstances } from "../data";
+import { qk, useAccounts, useGroups, useInstances, useSetSettings } from "../data";
 import { t } from "../i18n";
 import { AddAccountDialog, type Tab as AddTab } from "../features/accounts/AddAccountDialog";
 import { AccountRail } from "../features/dashboard/AccountRail";
@@ -17,11 +17,15 @@ import { draftFor, EMPTY_DRAFT, type Draft } from "../features/launch/target";
 import type { SettingsArea } from "../features/settings/areas";
 import { jumpTo } from "../features/settings/jumpTo";
 import { useSplashPhase } from "../features/splash/phase";
+import { Onboarding, useOnboardingOpen } from "../features/onboarding/Onboarding";
+import { markSeenThisRun, onReplay, opensOnItsOwn, QA, seenThisRun } from "../features/onboarding/qa";
+import { Tour } from "../features/onboarding/Tour";
 import { overlayOpen } from "../ui/a11y";
 import { Island } from "../ui/island/Island";
 import type { IslandLeaf, IslandModel } from "../ui/island/model";
 import { markViewEntering } from "../ui/motion";
 import { Divider, usePanelWidth } from "../ui/Resizer";
+import { readStored, writeStored } from "../ui/stored";
 import { LiveActivities } from "./LiveActivities";
 import { MAIN_SECTIONS, requestNavigation, SECTION_ICON, SECTION_VIEW, SHORTCUT_VIEW, shortcutFor, TOOL_SECTIONS, useNavigationRequests, VIEW_NAME, type BrowseRequest, type Request, type Section, type View } from "./navigation";
 
@@ -36,14 +40,9 @@ const BrowseView = lazyView(() => import("../features/browse/BrowseView"), (m) =
 const DebugView = lazyView(() => import("../features/debug/DebugView"), (m) => m.DebugView);
 const DiscordView = lazyView(() => import("../features/discord/DiscordView"), (m) => m.DiscordView);
 const LaunchView = lazyView(() => import("../features/launch/LaunchView"), (m) => m.LaunchView);
-const ClipsView = lazyView(() => import("../features/clips/ClipsView"), (m) => m.ClipsView);
 const ModsView = lazyView(() => import("../features/mods/ModsView"), (m) => m.ModsView);
 const MonitorView = lazyView(() => import("../features/monitor/MonitorView"), (m) => m.MonitorView);
-const OutfitsView = lazyView(() => import("../features/outfits/OutfitsView"), (m) => m.OutfitsView);
 const ServersView = lazyView(() => import("../features/servers/ServersView"), (m) => m.ServersView);
-const TradesView = lazyView(() => import("../features/trades/TradesView"), (m) => m.TradesView);
-const FriendsView = lazyView(() => import("../features/friends/FriendsView"), (m) => m.FriendsView);
-const OwnedServersView = lazyView(() => import("../features/servers/OwnedServersView"), (m) => m.OwnedServersView);
 const CrashesView = lazyView(() => import("../features/crashes/CrashesView"), (m) => m.CrashesView);
 const SettingsView = lazyView(() => import("../features/settings/SettingsView"), (m) => m.SettingsView);
 
@@ -60,6 +59,13 @@ function focusIn(selector: string) {
   el.focus({ preventScroll: true });
   if (el instanceof HTMLInputElement) el.select();
   return true;
+}
+
+const SAME_SERVER_KEY = "roalt.sameServer";
+const SAME_SERVERS: readonly SameServer[] = ["off", "pickFirst", "followFirst", "ownPrivate", "randomPublic", "closest", "mostFull", "mostEmpty"];
+function readSameServer(): SameServer {
+  const raw = readStored(SAME_SERVER_KEY);
+  return SAME_SERVERS.includes(raw as SameServer) ? (raw as SameServer) : "off";
 }
 
 /** What the shell shows once the vault is open: the island (in the title bar), the account rail in the
@@ -82,7 +88,11 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
     const id = lastLaunchAccount();
     return id === null ? [] : [id];
   });
-  const [sameServer, setSameServer] = useState<SameServer>("off");
+  const [sameServer, setSameServerState] = useState<SameServer>(readSameServer);
+  const setSameServer = (next: SameServer) => {
+    setSameServerState(next);
+    writeStored(SAME_SERVER_KEY, next);
+  };
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const homeTabs = useHomeTabs(accounts.data);
   const [sectionOrder, setSectionOrder] = useSectionOrder();
@@ -93,6 +103,13 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
   const [adding, setAdding] = useState(false);
   const [addOn, setAddOn] = useState<AddTab>("login");
   const phase = useSplashPhase();
+  const setSettings = useSetSettings({ quiet: true });
+  const [onboarding, setOnboarding] = useOnboardingOpen(phase === "gone" && !!accounts.data, () => opensOnItsOwn(QA, settings.onboarded, accounts.data?.length ?? 0, seenThisRun()));
+  const [touring, setTouring] = useState(false);
+  useEffect(() => onReplay(() => setOnboarding(true)), [setOnboarding]);
+  useEffect(() => {
+    if (onboarding && QA) markSeenThisRun();
+  }, [onboarding]);
   // What takes the focus once that view is on screen: its <main> (a shortcut), or a field. Tied to
   // the view: a switch still pending when the next one is asked for commits first, and must not use it.
   const focusNext = useRef<{ view: View; to: string } | null>(null);
@@ -120,11 +137,17 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
   }, []);
 
   // A new account needs its headshot; the backend only asks Roblox for the missing ones.
+  // Also pre-pick a sole valid account when nothing valid is picked yet so Play is ready in one click.
   useEffect(() => {
     if (!accounts.data) return;
     const ids = new Set(accounts.data.map((a) => a.id));
     if (known.current && [...ids].some((id) => !known.current?.has(id))) qc.invalidateQueries({ queryKey: qk.headshots });
     known.current = ids;
+    const valid = accounts.data.filter((a) => a.status === "valid");
+    if (valid.length === 1) {
+      const only = valid[0].id;
+      setPicked((prev) => (prev.some((id) => valid.some((a) => a.id === id)) ? prev : [only]));
+    }
   }, [accounts.data, qc]);
 
   /** Switches the view: the content cross-fades (a view transition), the island and rail stay live.
@@ -327,7 +350,7 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
       <div className="stage">
         {/* Outside the keyed transition: a view whose chunk is still on its way never flashes an empty stage. */}
         <Suspense fallback={null}>
-        <ViewTransition key={view} enter="view-in" exit="view-out" update="none" default="none">
+        <ViewTransition key={view} enter={touring ? "none" : "view-in"} exit={touring ? "none" : "view-out"} update="none" default="none">
           {view === "dashboard" ? (
             <DashboardView
               accounts={accounts.data}
@@ -381,18 +404,8 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
             <MonitorView accounts={accounts.data} />
           ) : view === "discord" ? (
             <DiscordView />
-          ) : view === "clips" ? (
-            <ClipsView />
           ) : view === "mods" ? (
             <ModsView />
-          ) : view === "outfits" ? (
-            <OutfitsView />
-          ) : view === "trades" ? (
-            <TradesView />
-          ) : view === "friends" ? (
-            <FriendsView />
-          ) : view === "privates" ? (
-            <OwnedServersView />
           ) : view === "crashes" ? (
             <CrashesView />
           ) : view === "debug" ? (
@@ -404,13 +417,32 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
         </Suspense>
       </div>
 
+      <Onboarding
+        open={onboarding}
+        settings={settings}
+        accounts={accounts.data}
+        onAdd={openAdd}
+        onFinish={(tour) => {
+          setOnboarding(false);
+          if (!settings.onboarded) setSettings.mutate({ onboarded: true });
+          setTouring(tour);
+        }}
+      />
+      {touring && <Tour onClose={() => setTouring(false)} />}
       <AddAccountDialog
         open={adding}
         startOn={addOn}
+        firstRun={accounts.data.length === 0}
         // The group on show in Accounts is where a new account goes, unless another is picked.
         group={view === "accounts" ? group : null}
         onClose={() => setAdding(false)}
         onAdded={(a, into) => {
+          // First account added: pre-pick it for Play and keep the user on Home / onboarding instead
+          // of jumping into the Accounts table.
+          if (accounts.data.length === 0) {
+            setPicked([a.id]);
+            return;
+          }
           // Filed into the group on show: that stays. Else every account, where the new one is.
           if (into !== null && into === group) go("accounts");
           else showAll();

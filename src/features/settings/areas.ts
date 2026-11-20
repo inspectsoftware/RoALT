@@ -51,10 +51,10 @@ export const AREAS: readonly AreaDef[] = [
     id: "security",
     label: "settings.section.security",
     icon: "shield",
-    groups: [{ ids: ["encryption", "masterPassword", "recoveryCode", "autoLock", "clipboard", "signInWatch", "lockPurchases", "publicNetworks"] }],
+    groups: [{ ids: ["encryption", "masterPassword", "recoveryCode", "autoLock", "lockOnSessionLock", "clipboard", "signInWatch", "lockPurchases", "publicNetworks"] }],
   },
   { id: "data", label: "settings.section.data", icon: "database", groups: [{ ids: ["dataFolder", "backup", "cache", "cleanLogs", "browserData"] }] },
-  { id: "about", label: "settings.section.about", icon: "info", groups: [{ ids: ["selfUpdate", "onlineCount", "showSponsor", "rolimons", "version", "support"] }] },
+  { id: "about", label: "settings.section.about", icon: "info", groups: [{ ids: ["selfUpdate", "onlineCount", "news", "showSponsor", "rolimons", "version", "replayTour", "support"] }] },
   {
     id: "shortcuts",
     label: "settings.section.shortcuts",

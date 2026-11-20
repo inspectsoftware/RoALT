@@ -23,7 +23,7 @@ export const screenOf = (p: Place) => (p.view === "settings" ? `settings:${p.are
 export const keyOf = (p: Place) => `${screenOf(p)}|${"group" in p ? (p.group ?? "") : ""}`;
 
 // Island order: Settings' areas, then Discord, then the views links go to.
-const SCREENS = [...AREAS.map((a) => `settings:${a.id}`), "discord", "clips", "mods", "accounts", "launch", "dashboard"];
+const SCREENS = [...AREAS.map((a) => `settings:${a.id}`), "discord", "mods", "accounts", "launch", "dashboard"];
 const ORDER = new Map(ENTRIES.map((e, i) => [e.id, i]));
 const GROUP_ORDER = new Map<string, number>();
 ENTRIES.forEach((e, i) => {

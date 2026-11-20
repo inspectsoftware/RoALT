@@ -209,6 +209,7 @@ function BackupActions() {
         currentLabel={t("settings.masterPassword")}
         next
         nextLabel={t("settings.backupPassword")}
+        minLength={12}
         onSubmit={async ({ current, next }) => {
           const date = new Date().toISOString().slice(0, 10);
           const path = await saveFile({ defaultPath: `RoALT-backup-${date}.roalt`, filters: backupFilter() });

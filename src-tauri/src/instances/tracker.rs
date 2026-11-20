@@ -122,7 +122,7 @@ fn plan_layout(app: &AppHandle, s: &crate::App, v: &crate::model::Settings, arri
         round = s.tracker.layout_gen.fetch_add(1, Ordering::Relaxed) + 1;
         let first = arrived.map(|a| a.0.to_owned());
         // The accounts the user plays keep their window (a slot can come from readopt or Tile).
-        let played = super::limits::played(s, v);
+        let played = super::limits::played(s);
         list.extend(
             s.tracker
                 .slotted()
@@ -296,6 +296,9 @@ struct Entry {
     log_warned: bool,
     /// Its time in a game not yet handed out (`take_playtime`).
     played: Played,
+    /// It ended with the "Closed unexpectedly" note: kept as a flag, since a language switch
+    /// changes what that note reads while the relaunch waits.
+    by_itself: bool,
 }
 
 /// Time in a game, counted at each poll and handed out in pieces (`Tracker::take_playtime`).
@@ -371,6 +374,7 @@ impl Entry {
             window_seen: false,
             log_warned: false,
             played: Played::default(),
+            by_itself: false,
         }
     }
 
@@ -399,7 +403,10 @@ impl Entry {
     }
 
     fn cause(&self) -> Option<CrashKind> {
-        wants_rejoin(&self.inst, &self.facts, self.hung()).or_else(|| {
+        if self.inst.held {
+            return None;
+        }
+        wants_rejoin(&self.inst, &self.facts, self.hung(), self.by_itself).or_else(|| {
             let runs = self.inst.state != InstanceState::Exited && self.inst.note.is_none();
             if runs && self.mem_high() {
                 Some(CrashKind::Mem)
@@ -465,6 +472,7 @@ impl Tracker {
             sign_in_problem: false,
             micro_size: None,
             applied_limits: Limits::default(),
+            held: false,
         };
         let mut entries = self.entries();
         // The account has a new client: nothing is waiting to bring back an older one any more.
@@ -598,6 +606,7 @@ impl Tracker {
         if let Some(e) = self.entries().iter_mut().find(|e| e.inst.id == id) {
             if !e.closing {
                 e.inst.note = Some(note.clone());
+                e.by_itself = false;
             }
             e.gave_up = Some(note);
         }
@@ -708,6 +717,21 @@ impl Tracker {
         Some((prev, client_of(e)))
     }
 
+    /// The user takes control of a running client or gives it back (`Instance::held`); false when
+    /// there is no such client.
+    pub fn set_held(&self, id: &str, on: bool) -> bool {
+        let mut entries = self.entries();
+        let Some(e) = entries.iter_mut().find(|e| e.inst.id == id && e.inst.state != InstanceState::Exited) else { return false };
+        e.inst.held = on;
+        if on {
+            // Taken while loading: the launch steps (tiny, minimize, mute, layout) skip it.
+            e.window_seen = true;
+            e.stop_relaunch();
+            (e.timed, e.mem_strikes) = (false, 0);
+        }
+        true
+    }
+
     /// Opts a running client in or out of anti-AFK; false when there is no such client.
     pub fn set_anti_afk(&self, id: &str, on: bool) -> bool {
         let mut entries = self.entries();
@@ -721,7 +745,7 @@ impl Tracker {
     pub fn afk_clients(&self) -> Vec<super::afk::AfkClient> {
         self.entries()
             .iter()
-            .filter(|e| e.inst.state == InstanceState::InGame && e.inst.anti_afk && !e.closing)
+            .filter(|e| e.inst.state == InstanceState::InGame && e.inst.anti_afk && !e.inst.held && !e.closing)
             .filter_map(|e| {
                 let (pid, _) = client_of(e)?;
                 Some(super::afk::AfkClient { id: e.inst.id.clone(), pid, since: e.inst.afk_at.or(e.in_game_at)? })
@@ -804,7 +828,7 @@ impl Tracker {
         let slots = self.slots().clone();
         self.entries()
             .iter()
-            .filter(|e| matches!(e.inst.state, InstanceState::InGame | InstanceState::Disconnected) && e.window_seen)
+            .filter(|e| matches!(e.inst.state, InstanceState::InGame | InstanceState::Disconnected) && e.window_seen && !e.inst.held)
             .filter_map(|e| Some((e.inst.id.clone(), client_of(e)?.0, slots.iter().position(|&a| a == e.inst.account_id)?, e.inst.account_id)))
             .collect()
     }
@@ -857,12 +881,28 @@ impl Tracker {
             .collect()
     }
 
-    /// The running clients `limits::plan` lifts, besides the one in front: `runs_free` ones and
-    /// those of the `full_quality` accounts.
+    /// Running (non-Exited) clients broken down into (in_game_or_joining, disconnected, given_up)
+    /// for Discord's status summary.
+    pub fn status_counts(&self) -> (usize, usize, usize) {
+        let (mut active, mut disconnected, mut given_up) = (0, 0, 0);
+        for e in self.entries().iter().filter(|e| e.inst.state != InstanceState::Exited) {
+            if e.gave_up.is_some() {
+                given_up += 1;
+            } else if e.inst.state == InstanceState::Disconnected {
+                disconnected += 1;
+            } else {
+                active += 1;
+            }
+        }
+        (active, disconnected, given_up)
+    }
+
+    /// The running clients `limits::plan` lifts, besides the one in front: `runs_free` ones, held
+    /// ones and those of the `full_quality` accounts. The restart and close timers skip them too.
     pub fn free(&self, full_quality: &[i64], now: i64) -> Vec<String> {
         self.entries()
             .iter()
-            .filter(|e| e.inst.state != InstanceState::Exited && (e.runs_free(now) || full_quality.contains(&e.inst.account_id)))
+            .filter(|e| e.inst.state != InstanceState::Exited && (e.runs_free(now) || e.inst.held || full_quality.contains(&e.inst.account_id)))
             .map(|e| e.inst.id.clone())
             .collect()
     }
@@ -943,7 +983,8 @@ impl Tracker {
                 e.rejoin_seen = false;
                 e.gave_up = None;
                 e.inst.relaunch_problem = None;
-            } else if !e.rejoin_seen {
+            } else if !e.rejoin_seen && !e.inst.held {
+                // A held one's trouble isn't marked seen: given back while disconnected, it is rejoined.
                 e.rejoin_seen = true;
                 if let Some(cause) = e.cause() {
                     let i = &e.inst;
@@ -952,12 +993,17 @@ impl Tracker {
                         let last = i.afk_at.map_or_else(|| "never".into(), |t| format!("{} min ago", (crate::commands::now_ms() - t) / 60_000));
                         log::warn!("instance {} kicked for idling (278); anti-AFK on for it: {}, its last press: {last}", i.id, i.anti_afk);
                     }
+                    // A server shutdown (288), a failed join (never reached InGame), or a repeated
+                    // rejoin to a fixed job id falls back to the place instead of looping on a dead server.
+                    let shutdown = e.facts.reason.as_deref().is_some_and(|r| r.ends_with(" 288"));
+                    let fallback_place = shutdown || e.in_game_at.is_none() || i.rejoins > 0;
                     out.push(Rejoin {
                         from: i.id.clone(),
                         account_id: i.account_id,
                         target: i.target.clone(),
                         rejoins: i.rejoins + 1,
                         cause,
+                        fallback_place,
                     });
                 }
             }
@@ -1040,7 +1086,7 @@ impl Tracker {
     pub fn throttle(&self, limit_mb: u32) -> (Vec<String>, bool) {
         let (mut held, mut changed) = (Vec::new(), false);
         for e in self.entries().iter_mut().filter(|e| e.inst.state != InstanceState::Exited) {
-            let t = mem_throttled(e.inst.throttled, e.mem_mb, limit_mb);
+            let t = !e.inst.held && mem_throttled(e.inst.throttled, e.mem_mb, limit_mb);
             changed |= t != e.inst.throttled;
             e.inst.throttled = t;
             if t {
@@ -1140,7 +1186,6 @@ impl Tracker {
                     let plan = if clients.is_empty() { Vec::new() } else { super::limits::plan_now(&s, &v, &clients, &held) };
                     s.limiter.sync(&plan);
                     let throttle_moved = s.tracker.set_in_force(&s.limiter.in_force()) || throttle_moved;
-                    crate::clips::sync(&s, &v);
                     // Once per client, without taking the focus.
                     for pid in s.tracker.first_in_game(&|pid| process::main_window(pid).is_some()) {
                         let id = clients.iter().find(|c| c.1 == pid).map(|c| c.0.clone());
@@ -1149,8 +1194,8 @@ impl Tracker {
                         let own = inst.as_ref().and_then(|i| s.db.account(i.account_id).ok()?.profile);
                         // Only this client's: the layout below places the others too, at Settings' size.
                         let mine = crate::performance::overlay(&v, own.as_ref());
-                        // Full quality, or the account Clips record: its clips mustn't be tiny, minimized or muted.
-                        let full_quality = inst.as_ref().is_some_and(|i| super::limits::played(&s, &v).contains(&i.account_id));
+                        // Full quality: it mustn't be tiny, minimized or muted.
+                        let full_quality = inst.as_ref().is_some_and(|i| super::limits::played(&s).contains(&i.account_id));
                         let size = (mine.micro_width, mine.micro_height);
                         // In the window layout: this client's slot, and every other one's again when a Fit
                         // grid changed size. The accounts the user plays keep their window, as with tiny and minimize.
@@ -1209,7 +1254,7 @@ impl Tracker {
                         // The timers: never the clients the user plays or has in front.
                         if v.restart_every_h > 0 || v.close_after_h > 0 {
                             let now = crate::commands::now_ms();
-                            let mut skip = s.tracker.free(&super::limits::played(&s, &v), now);
+                            let mut skip = s.tracker.free(&super::limits::played(&s), now);
                             let front = process::foreground_pid();
                             skip.extend(clients.iter().filter(|c| Some(c.1) == front).map(|c| c.0.clone()));
                             s.tracker.check_uptime(v.restart_every_h, now, &skip, s.bulk.any_busy());
@@ -1395,7 +1440,7 @@ fn restore(app: &AppHandle) {
     *s.tracker.persisted.lock().unwrap_or_else(|e| e.into_inner()) = saved.clone();
     let total = saved.len();
     let roblox = with_unreadable(&saved, process::roblox_processes(), process::unreadable_client);
-    let found = s.tracker.readopt(saved, &roblox, &super::limits::played(&s, &s.db.settings().unwrap_or_default()));
+    let found = s.tracker.readopt(saved, &roblox, &super::limits::played(&s));
     for &(pid, t0) in &found {
         if super::limits::reset_followed(pid, t0) {
             s.limiter.mark_old_job(pid);
@@ -1455,6 +1500,9 @@ pub struct Rejoin {
     pub rejoins: u32,
     /// Disconnect: an auto-rejoin; crash or hang: an auto-restart.
     pub cause: CrashKind,
+    /// True after a server shutdown (288), failed join, or repeat rejoin: a `Server` target falls
+    /// back to its `Place` so RoALT doesn't loop on a dead job id.
+    pub fallback_place: bool,
 }
 
 /// Why a client is worth launching again, if it is (pure; the settings and the crash breaker
@@ -1465,13 +1513,14 @@ pub struct Rejoin {
 ///   Roblox's window by hand leaves no trace in its log, so that looks the same;
 /// - `Hang`: its window has not responded for `HANG_POLLS` polls (no other problem note).
 ///
-/// Never when the player left (reason 285 / 273) or another client replaced it.
-pub fn wants_rejoin(inst: &Instance, facts: &LogFacts, hung: bool) -> Option<CrashKind> {
+/// Never when the player left (reason 285 / 273) or another client replaced it. `by_itself`: it
+/// ended with the "Closed unexpectedly" note (`Entry::by_itself`).
+pub fn wants_rejoin(inst: &Instance, facts: &LogFacts, hung: bool, by_itself: bool) -> Option<CrashKind> {
     if facts.left || facts.replaced {
         return None;
     }
     match inst.state {
-        InstanceState::Exited if inst.note.as_deref() == Some(&*unexpected()) => {
+        InstanceState::Exited if by_itself => {
             Some(if facts.disconnected { CrashKind::Disconnect } else { CrashKind::Crash })
         }
         InstanceState::Exited => None,
@@ -1737,6 +1786,7 @@ fn settle(e: &mut Entry, now: i64) -> Option<CrashKind> {
     if let Some(g) = e.gave_up.as_ref().filter(|_| !e.closing) {
         note = Some(g.clone());
     }
+    e.by_itself = ended && note.as_deref() == Some(&*unexpected());
     e.inst.state = state;
     e.inst.note = note;
     if matches!(state, InstanceState::Starting | InstanceState::Joining) {
@@ -2543,6 +2593,8 @@ mod tests {
             f
         };
         let (kicked, none) = (facts(true, false), facts(false, false));
+        // What `settle` sets for a client that ended with that note.
+        let wants_rejoin = |i: &Instance, f: &LogFacts, hung| wants_rejoin(i, f, hung, i.state == Exited && i.note.as_deref() == Some(UNEXPECTED));
         assert_eq!(wants_rejoin(&inst(Disconnected, None), &kicked, false), Some(Disconnect));
         assert_eq!(wants_rejoin(&inst(Exited, Some(UNEXPECTED)), &kicked, false), Some(Disconnect), "closed by itself after the kick");
         assert_eq!(wants_rejoin(&inst(Disconnected, None), &facts(true, true), false), None, "the player left");
@@ -2613,8 +2665,8 @@ mod tests {
         poll(start + 2_000);
         assert_eq!(state(&t, &kicked).0, Disconnected);
         assert_eq!(state(&t, &closed), (Exited, note("Closed unexpectedly"), 300));
-        let crash = Rejoin { from: closed.clone(), account_id: 1, target: target(), rejoins: 1, cause: CrashKind::Crash };
-        let kick = Rejoin { from: kicked.clone(), account_id: 7, target: follow.clone(), rejoins: 2, cause: CrashKind::Disconnect };
+        let crash = Rejoin { from: closed.clone(), account_id: 1, target: target(), rejoins: 1, cause: CrashKind::Crash, fallback_place: false };
+        let kick = Rejoin { from: kicked.clone(), account_id: 7, target: follow.clone(), rejoins: 2, cause: CrashKind::Disconnect, fallback_place: true };
         assert_eq!(t.take_rejoins(), vec![kick, crash]);
         assert!(t.take_rejoins().is_empty());
         // The crash went to the history; the disconnect hasn't ended yet.
@@ -2633,6 +2685,35 @@ mod tests {
         poll(start + 5_000);
         assert_eq!(t.take_rejoins().len(), 1);
         assert_eq!(state(&t, &left).0, Disconnected);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_held_client_is_left_alone_until_given_back() {
+        let dir = temp_dir();
+        let t = Tracker::new();
+        let start = now_ms();
+        let secs = (start / 1000) as u64;
+        let id = t.register(&info(100, start, false), target()).id;
+        let log = dir.join("0.744.0.7441080_20261024T1200100Z_Player_R100_last.log");
+        append(&log, &[btid_line(BTID)]);
+        append(&log, &join_lines(USER));
+        append(&log, &[replicator()]);
+        let procs = Fake::new(&[(100, secs)]);
+        let poll = |now: i64| t.poll(Some(&dir), &procs, &user_of, now);
+        poll(start + 1_000);
+        assert_eq!(t.afk_clients().len(), 1);
+
+        assert!(t.set_held(&id, true));
+        assert!(t.first_in_game(&|_| true).is_empty(), "no launch steps");
+        assert!(t.afk_clients().is_empty(), "no anti-AFK");
+        assert_eq!(t.free(&[], start + 1_000), std::slice::from_ref(&id), "no limits, no timers");
+        append(&log, &["[FLog::Network] Sending disconnect with reason: 267".into()]);
+        poll(start + 2_000);
+        assert!(t.take_rejoins().is_empty(), "no rejoin while held");
+        // Given back while still disconnected: rejoined after all.
+        assert!(t.set_held(&id, false));
+        assert_eq!(t.take_rejoins().len(), 1);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -2759,7 +2840,7 @@ mod tests {
         t.set_rejoins(&id, 5);
         append(&log, &["[FLog::Network] Sending disconnect with reason: 267".into()]);
         poll(start + 2_000);
-        assert_eq!(t.take_rejoins(), vec![Rejoin { from: id.clone(), account_id: 1, target: target(), rejoins: 6, cause: CrashKind::Disconnect }]);
+        assert_eq!(t.take_rejoins(), vec![Rejoin { from: id.clone(), account_id: 1, target: target(), rejoins: 6, cause: CrashKind::Disconnect, fallback_place: true }]);
         assert!(t.still_wants_rejoin(&id));
 
         // Closed by the user during the launch delay: no longer wanted at once, then ended as
@@ -2782,6 +2863,9 @@ mod tests {
         poll(start + 4_000);
         procs.set(&[]);
         poll(start + 200_000);
+        assert!(t.still_wants_rejoin(&crashed));
+        // The language changed while it waits: its note reads otherwise, the restart stays.
+        t.entries().iter_mut().find(|e| e.inst.id == crashed).unwrap().inst.note = Some("Unerwartet geschlossen".into());
         assert!(t.still_wants_rejoin(&crashed));
         t.mark_all_closing();
         assert!(!t.still_wants_rejoin(&crashed));

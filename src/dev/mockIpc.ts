@@ -19,26 +19,15 @@ import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type {
   AccountInfo, AccountStatus, AccountSummary, AccountValue, BulkProgress, BulkRequest, BulkStage, Crash, Favourite, GameInfo, GameServer, GameStats, Group, Instance, LimitedItem, PlayerStats, RolimonsItem,
-  JoinCandidate, LaunchTarget, MultiInstanceStatus, ParsedInput, Presence, PrivateServer, PrivateServerBuy, PrivateServerPage, PrivateServerPatch, PrivateServerSettings, ServerOrder, ServerPage,
+  JoinCandidate, LaunchTarget, MultiInstanceStatus, ParsedInput, Presence, PrivateServer, PrivateServerPage, ServerOrder, ServerPage,
   RobloxClient, RobloxLauncher, Settings, VaultMode,
 } from "../api";
 import type { ModItem } from "../bindings/ModItem";
 import type { ModsLast } from "../bindings/ModsLast";
 import type { ModsList } from "../bindings/ModsList";
-import type { ClipItem } from "../bindings/ClipItem";
-import type { ClipsStatus } from "../bindings/ClipsStatus";
-import type { Outfit } from "../bindings/Outfit";
-import type { Outfits } from "../bindings/Outfits";
-import type { FriendRequest } from "../bindings/FriendRequest";
 import type { GroupDefaults } from "../bindings/GroupDefaults";
-import type { OwnedPrivateServer } from "../bindings/OwnedPrivateServer";
 import type { PlaytimeDay } from "../bindings/PlaytimeDay";
 import type { RobuxTransaction } from "../bindings/RobuxTransaction";
-import type { TradeDetail } from "../bindings/TradeDetail";
-import type { TradeItem } from "../bindings/TradeItem";
-import type { TradeKind } from "../bindings/TradeKind";
-import type { TradeOffer } from "../bindings/TradeOffer";
-import type { TradeRow } from "../bindings/TradeRow";
 
 const MIN = 60_000;
 const DAY = 86_400_000;
@@ -93,39 +82,17 @@ let accounts: AccountSummary[] = seed.map(([alias, displayName, username, userId
 }));
 
 let settings: Settings = {
-  theme: "dark", accent: "", look: { base: "dark", colors: {} }, corners: 100, backgroundDim: 60, backgroundMotion: "focused", density: "detailed", autoLockMinutes: 15, clipboardClearSeconds: 30, cacheMinutes: 10,
+  theme: "dark", accent: "", look: { base: "dark", colors: {} }, corners: 100, backgroundDim: 60, backgroundMotion: "focused", density: "detailed", autoLockMinutes: 15, lockOnSessionLock: true, clipboardClearSeconds: 30, cacheMinutes: 10,
   multiInstance: true, protectSharedLogin: true, launchDelayMs: 6000, autoRejoin: false, autoRestartOnCrash: false,
   breakerMax: 3, breakerWindowMin: 10, closeGraceS: 5, launchArgs: "", closeToTray: false,
   memRestartMb: 0, memThrottle: { mb: 0, cpuCap: 10 }, trimEveryMin: 0, autoSpread: false, fairCap: false,
   adaptive: { enabled: false, background: { cpuCap: 25, eco: true, trimEveryMin: null, affinity: null } }, bandwidthKbps: 0,
   antiAfk: { enabled: false, intervalMin: 15 },
-  discord: { crash: true, hang: true, memRestart: true, disconnect: true, restart: true, breaker: true, batchDone: true, launch: false, signIn: true, throttle: false, update: true, trade: false, pc: false, statusEveryMin: 0, ping: "" },
-  autoUpdate: false, selfUpdate: true, tabLayout: "top", discordPresence: true, onlineCount: true, restartEveryH: 0, closeAfterH: 0, showSponsor: true, signInWatch: true, toggleHotkey: "", tileHotkey: "", minimizeHotkey: "", minimizeOnLaunch: false, microWidth: 320, microHeight: 240, tinyOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0, lowGraphics: true, skipSplash: false, protectMain: true, muteOnLaunch: false, windowLayout: "off", lighterRendering: true, renderFlags: { msaa: "x1", texture: "lowest", mode: "default", graySky: false, noGrass: true, lowestFrm: true, pauseVoxelizer: false },
+  discord: { crash: true, hang: true, memRestart: true, disconnect: true, restart: true, breaker: true, batchDone: true, launch: false, signIn: true, throttle: false, update: true, pc: false, statusEveryMin: 0, ping: "", pingLevel: "urgent" },
+  autoUpdate: false, selfUpdate: true, tabLayout: "top", discordPresence: true, discordRpc: { showGame: true, showCount: true, showElapsed: true, showButtons: true, customDetails: "", customState: "" }, onlineCount: true, news: true, restartEveryH: 0, closeAfterH: 0, showSponsor: true, signInWatch: true, toggleHotkey: "", tileHotkey: "", minimizeHotkey: "", minimizeOnLaunch: false, microWidth: 320, microHeight: 240, tinyOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0, lowGraphics: true, skipSplash: false, protectMain: true, muteOnLaunch: false, windowLayout: "off", lighterRendering: true, renderFlags: { msaa: "x1", texture: "lowest", mode: "default", graySky: false, noGrass: true, lowestFrm: true, pauseVoxelizer: false },
   askBrowserLinks: false, customFlags: {}, customFlagsScope: "global", lockPurchases: true, rolimonsValues: false,
-  allowPublicNetworks: true, language: "", modsOn: true, modsAck: false, clipAccount: null, clipHotkey: "Ctrl+Alt+F10", clipSeconds: 30,
+  allowPublicNetworks: true, language: "", modsOn: true, modsAck: false, onboarded: false,
 };
-
-// Clips: two saved ones; the recorder's state follows the picked account (?clips=unavailable).
-let clips: ClipItem[] = [
-  { name: "Sky Islands 2026-11-09 14-03-22.mp4", bytes: 41_943_040, modified: Date.now() - 20 * MIN },
-  { name: "Mega Obby 2026-11-08 21-40-05.mp4", bytes: 30_408_704, modified: Date.now() - DAY },
-];
-let clipsBroken = false;
-
-// Outfits: five on the first account, none on the third, two on the others. The first list of an
-// account lacks a picture (Roblox still makes it); the next one has it. Copying to account 3 skips
-// two items, copying to account 5 fails (?outfits=error: the list fails).
-const outfitsBy = new Map<number, Outfit[]>();
-const outfitsSeen = new Set<number>();
-let outfitsBroken = false;
-let outfitId = 100;
-function outfitsOf(accountId: number) {
-  if (!outfitsBy.has(accountId)) {
-    const names = accountId === 1 ? ["Street", "Winter coat", "Knight", "Beach day", "A very long outfit name"] : accountId === 3 ? [] : ["Default", "Farm fit"];
-    outfitsBy.set(accountId, names.map((name, i) => ({ id: accountId * 1000 + i, name, thumb: headshot(accountId + i + 1) })));
-  }
-  return outfitsBy.get(accountId)!;
-}
 
 // Mods: two packs, the top one on; how the last launch went (null: none since start).
 let mods: ModItem[] = [
@@ -307,7 +274,7 @@ function track(accountId: number, pid: number, target: LaunchTarget, placeId: nu
   const i: Instance = {
     id: crypto.randomUUID(), accountId, pid, state: "starting", target, placeId, jobId: null,
     startedAt: Date.now(), endedAt: null, viaBootstrapper, note: null, rejoins, limits: { cpuCap: null, eco: false, trimEveryMin: null, affinity: null },
-    antiAfk: true, afkAt: null, throttled: false, micro: false, fpsCap, relaunching: false, relaunchProblem: null, signInProblem: false, appliedLimits: { cpuCap: 25, eco: true, affinity: null, trimEveryMin: 15 },
+    antiAfk: true, afkAt: null, throttled: false, micro: false, fpsCap, relaunching: false, relaunchProblem: null, signInProblem: false, appliedLimits: { cpuCap: 25, eco: true, affinity: null, trimEveryMin: 15 }, held: false,
   };
   instances.push(i);
   if (!lockHeld) eventHolder = i.id;
@@ -328,7 +295,7 @@ function kick(i: Instance) {
     reason: "Sending disconnect with reason: 267", placeId: i.placeId, hasLog: true, verdict: "disconnect",
   });
   instancesChanged();
-  if (!settings.autoRejoin || find(i.accountId)?.allowDisconnect) return;
+  if (!settings.autoRejoin || i.held || find(i.accountId)?.allowDisconnect) return;
   setTimeout(() => {
     const a = find(i.accountId);
     if (i.state !== "disconnected") return;
@@ -478,7 +445,8 @@ function parseTarget(raw: string): ParsedInput {
   if (!s) return bad("Paste a game link, an ID or @username.");
   if (idOf(s)) return target({ kind: "place", placeId: Number(s), launchData: null });
   if (UUID.test(s)) return { kind: "jobIdOnly", jobId: s.toLowerCase() };
-  if (/^@?[A-Za-z0-9_]{3,20}$/.test(s)) return { kind: "username", name: s.replace(/^@/, "") };
+  if (/^@[A-Za-z0-9_]{3,20}$/.test(s)) return { kind: "username", name: s.slice(1) };
+  if (!s.includes(".") && !s.includes("/") && !s.includes(":")) return bad("To search for a game by name, use Browse games. To join a player, put @ before their username.");
   if (/^roblox-(player|studio)/i.test(s)) return bad("That launch link carries a sign-in ticket. Paste the game link instead.");
   let u: URL;
   try {
@@ -705,38 +673,6 @@ function valueOf(h: { fetchedAt: number; items: { assetId: number; name: string;
   };
 }
 
-// ---------- Trades ----------
-
-// The first account has two inbound trades, one outbound and one completed; the second has one
-// inbound, whose accept wants a verification; the fifth can't be read. Accept obeys "Lock purchases"
-// (on at start); an accepted trade moves to Completed, a declined one goes.
-// (?trades=error: no list loads; ?trades=none: every list is empty.)
-type MockTrade = { kind: TradeKind; row: TradeRow; give: number[]; get: number[]; giveRobux: number; getRobux: number };
-let tradesMode: string | null = null;
-const tradeRow = (id: string, partnerName: string, hoursAgo: number): TradeRow => ({
-  id, partnerName,
-  created: new Date(now - hoursAgo * 60 * MIN).toISOString(),
-  expires: new Date(now - hoursAgo * 60 * MIN + 4 * DAY).toISOString(),
-});
-const tradesBy = new Map<number, MockTrade[]>([
-  [1, [
-    // An id past 2^53: ids cross as strings.
-    { kind: "inbound", row: tradeRow("9007199254740993", "valk_hunter", 2), give: [1365767], get: [1029025, 20573078], giveRobux: 0, getRobux: 0 },
-    { kind: "inbound", row: tradeRow("771200341", "xX_lowballer_Xx", 30), give: [1125510, 48474313], get: [19027209], giveRobux: 0, getRobux: 1_500 },
-    { kind: "outbound", row: tradeRow("771200100", "DominoDan", 50), give: [1031429], get: [1125510, 1125510, 48474313, 11748356], giveRobux: 0, getRobux: 0 },
-    { kind: "completed", row: tradeRow("770000001", "old_friend", 400), give: [1158416], get: [16630147, 1081300], giveRobux: 2_000, getRobux: 0 },
-  ]],
-  [2, [{ kind: "inbound", row: tradeRow("771200777", "TradeBot9000", 5), give: [20573078], get: [1081300], giveRobux: 0, getRobux: 0 }]],
-]);
-function tradeOffer(ids: number[], robux: number): TradeOffer {
-  const roli = settings.rolimonsValues;
-  const items: TradeItem[] = ids.map((assetId) => {
-    const [, name, rap] = LIMITEDS.find(([id]) => id === assetId)!;
-    return { assetId, name, serial: assetId % 3 === 0 ? assetId % 5000 : null, rap, rolimons: roli ? (ROLI[assetId] ?? null) : null };
-  });
-  return { robux, items, rap: items.reduce((n, i) => n + i.rap, 0), value: roli ? items.reduce((n, i) => n + (i.rolimons?.value ?? i.rap), 0) : null };
-}
-
 let guest = { minute: 0, calls: 0 };
 /** Roblox's guest limit on the server list: 3 a minute, on a window aligned to the clock minute. */
 function guestLimited() {
@@ -744,51 +680,6 @@ function guestLimited() {
   guest = guest.minute === minute ? { minute, calls: guest.calls + 1 } : { minute, calls: 1 };
   return guest.calls > 3 ? Math.ceil(((minute + 1) * MIN - Date.now()) / 1000) : 0;
 }
-// Owner-side state of each private server; servers owned by a vault account get its userId.
-const vips = new Map<number, { ownerId: number | null; ownerName: string | null; settings: PrivateServerSettings }>();
-const bought: { vipServerId: number; ownerName: string }[] = [];
-const boughtKeys = new Set<string>();
-const NOT_OWNER = "Only the owner's account can change this.";
-const NO_NAME = "A private server needs a name.";
-
-function vipFor(vipServerId: number, name: string, ownerName: string | null) {
-  if (!vips.has(vipServerId)) {
-    const owner = accounts.find((x) => x.username === ownerName);
-    vips.set(vipServerId, {
-      ownerId: owner?.userId ?? (ownerName ? 1_000_000 + vipServerId : null),
-      ownerName,
-      settings: {
-        vipServerId, name, active: true, friendsAllowed: true, allowedUsers: [],
-        renews: false, expired: false, expires: new Date(now + 12 * DAY).toISOString(), price: 100,
-      },
-    });
-  }
-  return vips.get(vipServerId)!;
-}
-
-/** The server's settings when `accountId` is its (valid) owner, else the mock's refusal. */
-/** Friend requests by account id; an answer takes its row away. */
-const ask = (userId: number, name: string, displayName: string, hoursAgo: number, mutual: number): FriendRequest => ({
-  userId, name, displayName, avatarUrl: null, sentAt: new Date(now - hoursAgo * 60 * MIN).toISOString(), mutual,
-});
-const friendAsks = new Map<number, FriendRequest[]>([
-  [1, [ask(9001, "nova_builds", "Nova", 2, 3), ask(9002, "pixel_pat", "Pat", 30, 0), ask(9003, "full_list_fred", "Fred", 100, 1)]],
-  [2, [ask(9004, "obby_queen", "Queen", 5, 0)]],
-]);
-/** The private servers two accounts own: one running out, one renewing, one that ran out. */
-const ownedServers = (accountId: number): OwnedPrivateServer[] => {
-  const a = find(accountId);
-  const rows: [owner: number, id: number, name: string, placeId: number, game: string, days: number, renews: boolean][] = [
-    [1, 9001, "Farm room", 4410028153, "Sky Islands", 3, false],
-    [1, 9002, "Trading floor", 7719004215, "Mega Obby", 21, true],
-    [2, 9003, "Old lobby", 4410028153, "Sky Islands", -4, false],
-  ];
-  return rows.filter((r) => r[0] === accountId && a).map(([, id, name, placeId, game, days, renews]) => {
-    // Known to the settings dialog too.
-    vipFor(id, name, a!.username);
-    return { vipServerId: id, name, placeId, universeId: null, game, price: 100, expires: new Date(now + days * DAY).toISOString(), willRenew: renews, active: days > 0 };
-  });
-};
 const robuxLine = (what: string, who: string, amount: number, hoursAgo: number, pending = false): RobuxTransaction => ({
   created: new Date(now - hoursAgo * 60 * MIN).toISOString(), amount, what, who, pending,
 });
@@ -799,19 +690,11 @@ const playtimeDays = (): PlaytimeDay[] =>
     const day = d.getFullYear() * 10_000 + (d.getMonth() + 1) * 100 + d.getDate();
     return back % 6 === 5 ? [] : [{ accountId: 1, day, ms: (40 + ((back * 37) % 150)) * MIN }, ...(back % 2 ? [{ accountId: 2, day, ms: (15 + ((back * 23) % 80)) * MIN }] : [])];
   }).flat();
-function ownedVip(accountId: number, vipServerId: number) {
-  const a = find(accountId);
-  if (!a) return fail("notFound", "Not found.");
-  if (a.status !== "valid") return fail("cookieInvalid", EXPIRED);
-  const v = vips.get(vipServerId);
-  return v && v.ownerId === a.userId ? v.settings : fail("invalid", NOT_OWNER);
-}
-
 function privatePage(placeId: number, a: AccountSummary): PrivateServerPage {
   const s = (vipServerId: number, name: string, ownerName: string | null, playing: number, maxPlayers: number, joinable: boolean): PrivateServer => {
-    const v = vipFor(vipServerId, name, ownerName);
+    const ownerId = accounts.find((x) => x.username === ownerName)?.userId ?? (ownerName ? 1_000_000 + vipServerId : null);
     return {
-      vipServerId, name: v.settings.name, ownerId: v.ownerId, ownerName, playing, maxPlayers,
+      vipServerId, name, ownerId, ownerName, playing, maxPlayers,
       jobId: playing ? crypto.randomUUID() : null, accessCode: joinable ? crypto.randomUUID() : null,
     };
   };
@@ -820,7 +703,6 @@ function privatePage(placeId: number, a: AccountSummary): PrivateServerPage {
     s(70012, "Trade hub", "lunatrades", 0, 12, true),
     s(70013, "Kai's friends only", "skyrunner_k", 11, 12, false),
     s(70014, "", null, 2, 8, false),
-    ...bought.map((b) => s(b.vipServerId, "", b.ownerName, 0, 12, true)),
   ];
   return { servers, nextCursor: null, joinRestricted: a.username === "studio_nova" };
 }
@@ -980,12 +862,12 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       await sleep(400 * found.length);
       const bad = found.filter((c) => /bad/i.test(c)).length;
       found.slice(bad).forEach(() => addFake(`imported_${accounts.length + 1}`));
-      return { added: found.length - bad, updated: 0, skipped: 0, failed: bad };
+      return { added: found.length - bad, updated: 0, skipped: 0, failed: bad, settings: null, failures: bad ? ["Line 1: This cookie is not valid or has expired. Sign in again."] : [] };
     }
     case "accounts_import_ram":
       await sleep(1200);
       ["ram_alt_1", "ram_alt_2", "ram_alt_3"].forEach(addFake);
-      return { added: 3, updated: 1, skipped: 0, failed: 1 };
+      return { added: 3, updated: 1, skipped: 0, failed: 1, settings: null, failures: ["ram_alt_4: This cookie is not valid or has expired. Sign in again."] };
     case "account_add_login": {
       // As the sign-in window: the user signs in, or closes it (account_login_cancel does too).
       const closed = await new Promise<boolean>((done) => {
@@ -1092,86 +974,6 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "market_items":
       await sleep(300);
       return settings.rolimonsValues ? { fetchedAt: Date.now() - 4 * MIN, items: Object.entries(ROLI).map(([id, r]) => [Number(id), r]) } : null;
-    case "clips_status": {
-      const a = settings.clipAccount;
-      if (a == null) return { state: "off", accountId: null, note: null, sound: false } satisfies ClipsStatus;
-      if (clipsBroken) return { state: "unavailable", accountId: a, note: "This PC's graphics can't record video.", sound: false } satisfies ClipsStatus;
-      const running = instances.some((i) => i.accountId === a && i.state !== "exited");
-      return { state: running ? "recording" : "waiting", accountId: a, note: null, sound: running } satisfies ClipsStatus;
-    }
-    case "clips_save": {
-      const name = `Sky Islands ${new Date().toISOString().slice(0, 19).replace("T", " ").replace(/:/g, "-")}.mp4`;
-      clips = [{ name, bytes: 38_000_000, modified: Date.now() }, ...clips];
-      setTimeout(() => {
-        void emit("app://notice", { error: false, message: `Clip saved: ${name}` });
-        void emit("clips://changed");
-      }, 600);
-      return null;
-    }
-    case "clips_list":
-      await sleep(120);
-      return clips;
-    case "clips_rename": {
-      const to = `${String(args.to).trim().replace(/\.mp4$/, "")}.mp4`;
-      if (/[\\/:*?"<>|]/.test(to)) return fail("invalid", "That name can't be a file name: leave out symbols like / : * ? < > |.");
-      if (clips.some((c) => c.name === to)) return fail("invalid", "A clip with that name already exists.");
-      clips = clips.map((c) => (c.name === args.name ? { ...c, name: to } : c));
-      return to;
-    }
-    case "clips_delete":
-      clips = clips.filter((c) => c.name !== args.name);
-      return null;
-    case "clips_reveal":
-      return null;
-    case "outfits_list": {
-      await sleep(300);
-      if (outfitsBroken) return fail("roblox", "Roblox didn't answer. Try again.");
-      const first = !outfitsSeen.has(args.accountId);
-      outfitsSeen.add(args.accountId);
-      const items = outfitsOf(args.accountId).map((o, i) => (first && i === 1 ? { ...o, thumb: null } : o));
-      return { current: headshot(args.accountId), items, complete: !first || items.length < 2 } satisfies Outfits;
-    }
-    case "outfit_wear":
-      await sleep(700);
-      if (args.to === 5) return fail("invalid", "Roblox wants a verification for this: do it on roblox.com, then try again.");
-      return args.to === 3 ? ["Neon Jacket", "Star Cape"] : [];
-    case "outfit_save":
-    case "outfit_rename": {
-      await sleep(300);
-      const name = String(args.name).trim();
-      if (/[<>]/.test(name)) return fail("invalid", "Roblox refused this: Invalid outfit name.");
-      const list = outfitsOf(args.accountId);
-      if (cmd === "outfit_save") list.push({ id: ++outfitId, name, thumb: null });
-      else outfitsBy.set(args.accountId, list.map((o) => (o.id === args.outfitId ? { ...o, name } : o)));
-      return null;
-    }
-    case "outfit_delete":
-      outfitsBy.set(args.accountId, outfitsOf(args.accountId).filter((o) => o.id !== args.outfitId));
-      return null;
-    case "trades_list":
-      await sleep(300 + 150 * args.accountId);
-      if (tradesMode === "error" || args.accountId === 5) return fail("roblox", "Roblox didn't answer. Try again.");
-      if (tradesMode === "none") return [];
-      return (tradesBy.get(args.accountId) ?? []).filter((x) => x.kind === args.kind).map((x) => x.row);
-    case "trade_details": {
-      await sleep(400);
-      const trade = (tradesBy.get(args.accountId) ?? []).find((x) => x.row.id === args.tradeId);
-      if (!trade) return fail("invalid", "Roblox refused this: Invalid trade.");
-      return { give: tradeOffer(trade.give, trade.giveRobux), get: tradeOffer(trade.get, trade.getRobux) } satisfies TradeDetail;
-    }
-    case "trade_accept":
-    case "trade_decline": {
-      await sleep(600);
-      const list = tradesBy.get(args.accountId) ?? [];
-      const trade = list.find((x) => x.row.id === args.tradeId);
-      if (cmd === "trade_decline") tradesBy.set(args.accountId, list.filter((x) => x !== trade));
-      else if (settings.lockPurchases) return fail("invalid", "Purchases are locked. Turn off Lock purchases in Settings, under Security, to accept a trade.");
-      else if (args.accountId === 2) return fail("invalid", "Roblox wants a verification for this: do it on roblox.com, then try again.");
-      else if (trade) trade.kind = "completed";
-      return null;
-    }
-    case "clips_folder":
-      return "C:\\Users\\you\\Videos\\RoALT";
     case "mods_list":
       await sleep(150);
       return { mods, last: modsLast } satisfies ModsList;
@@ -1350,51 +1152,6 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       if (args.placeId === 1) return fail("notFound", "Not found.");
       return privatePage(args.placeId, a);
     }
-    case "private_server_get": {
-      await sleep(400);
-      const s = ownedVip(args.accountId, args.vipServerId);
-      return s instanceof Promise ? s : structuredClone(s);
-    }
-    case "private_server_update": {
-      await sleep(500);
-      const s = ownedVip(args.accountId, args.vipServerId);
-      if (s instanceof Promise) return s;
-      const p: PrivateServerPatch = args.patch;
-      if (p.name != null && !p.name.trim()) return fail("invalid", NO_NAME);
-      if (p.name != null) s.name = p.name.trim();
-      if (p.active != null) s.active = p.active;
-      if (p.friendsAllowed != null) s.friendsAllowed = p.friendsAllowed;
-      const allowed = new Set(s.allowedUsers.map((u) => u.userId));
-      for (const userId of p.usersToAdd ?? []) {
-        const known = accounts.find((x) => x.userId === userId);
-        if (known && !allowed.has(userId)) s.allowedUsers.push({ userId, username: known.username, displayName: known.displayName });
-      }
-      s.allowedUsers = s.allowedUsers.filter((u) => !p.usersToRemove?.includes(u.userId));
-      return structuredClone(s);
-    }
-    case "private_server_renew": {
-      await sleep(500);
-      const s = ownedVip(args.accountId, args.vipServerId);
-      if (s instanceof Promise) return s;
-      s.renews = args.on;
-      return structuredClone(s);
-    }
-    case "private_server_buy": {
-      await sleep(800);
-      const b: PrivateServerBuy = args.buy;
-      const a = find(b.accountId);
-      if (!a) return fail("notFound", "Not found.");
-      if (a.status !== "valid") return fail("cookieInvalid", EXPIRED);
-      if (!b.name.trim()) return fail("invalid", NO_NAME);
-      // The real API refuses a wrong price and charges nothing; the mock's servers cost 100.
-      if (b.expectedPrice !== 100) return fail("invalid", "Roblox refused the purchase and charged nothing: check the price on the game's page.");
-      if (boughtKeys.has(b.idempotencyKey)) return null;
-      boughtKeys.add(b.idempotencyKey);
-      const vipServerId = 80000 + bought.length;
-      vipFor(vipServerId, b.name.trim(), a.username).settings.renews = true;
-      bought.push({ vipServerId, ownerName: a.username });
-      return null;
-    }
 
     case "groups_list":
       return structuredClone(groups);
@@ -1414,6 +1171,16 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       favourites.forEach((f) => (f.options.groupIds = f.options.groupIds.filter((g) => g !== args.id)));
       changed();
       return null;
+    case "group_clear_overrides": {
+      const members = accounts.filter((a) => a.groupIds.includes(args.id));
+      members.forEach((a) => {
+        a.fpsCap = null;
+        a.launchArgs = null;
+        a.clientLimits = null;
+      });
+      changed();
+      return members.length;
+    }
 
     case "backup_export":
       await sleep(600);
@@ -1421,7 +1188,7 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "backup_import":
       await sleep(800);
       if (args.password !== "password") return fail("wrongPassword", "Wrong password.");
-      return { added: 2, updated: args.onConflict === "replace" ? 7 : 0, skipped: args.onConflict === "skip" ? 7 : 0, failed: 0, settings: args.settings ? true : null };
+      return { added: 2, updated: args.onConflict === "replace" ? 7 : 0, skipped: args.onConflict === "skip" ? 7 : 0, failed: 0, settings: args.settings ? true : null, failures: [] };
 
     case "instances_list":
       // ?instances=slow (Home's loading state) or =fail (its error state).
@@ -1453,11 +1220,26 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       instancesChanged();
       return null;
     }
+    case "instances_apply_limits": {
+      if (args.limits.affinity === 0) return fail("invalid", "Pick at least one CPU core.");
+      const live = instances.filter((x) => x.state !== "exited");
+      live.forEach((i) => (i.limits = args.limits));
+      instancesChanged();
+      return live.length;
+    }
     case "instance_set_anti_afk": {
       const i = instances.find((x) => x.id === args.id && x.state !== "exited");
       if (!i) return fail("notFound", "Not found.");
       i.antiAfk = args.enabled;
       remember(i);
+      instancesChanged();
+      return null;
+    }
+    case "instance_take_control": {
+      const i = instances.find((x) => x.id === args.id && x.state !== "exited");
+      if (!i) return fail("notFound", "Not found.");
+      i.held = args.on;
+      if (args.on) i.micro = false;
       instancesChanged();
       return null;
     }
@@ -1474,7 +1256,8 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       const forced = previewForced.get(i.id);
       if (forced === "pending" || forced === "unsupported") return thumbReply(i, forced === "pending" ? 3 : 4, args.known);
       if (forced === "minimized") return thumbReply(i, 1, args.known, shots.get(i.id));
-      if (forced !== "stale") shots.set(i.id, fakeShot(i, Math.min(args.maxW, i.micro ? 320 : 800)));
+      // maxW 0: the status only (previews Off, between stills).
+      if (forced !== "stale" && args.maxW > 0) shots.set(i.id, fakeShot(i, Math.min(args.maxW, i.micro ? 320 : 800)));
       return thumbReply(i, 0, args.known, shots.get(i.id));
     }
     case "instance_show": {
@@ -1615,20 +1398,6 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "playtime_days":
       return DEMO ? [] : playtimeDays();
 
-    case "friend_requests_list":
-      await sleep(300 + 100 * args.accountId);
-      if (args.accountId === 5) return fail("roblox", "Roblox didn't answer. Try again.");
-      return structuredClone(friendAsks.get(args.accountId) ?? []);
-    case "friend_request_answer": {
-      await sleep(500);
-      if (args.accept && args.userId === 9003) return fail("invalid", "Roblox refused this: The target user's friends list is full.");
-      friendAsks.set(args.accountId, (friendAsks.get(args.accountId) ?? []).filter((r) => r.userId !== args.userId));
-      return null;
-    }
-    case "friend_requests_decline_all":
-      await sleep(500);
-      friendAsks.set(args.accountId, []);
-      return null;
     case "robux_totals":
       await sleep(350);
       return args.accountId === 5 ? fail("roblox", "Roblox didn't answer. Try again.") : { incoming: 1250, outgoing: -430, pending: 75 };
@@ -1639,10 +1408,6 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
         : args.kind === "sale"
           ? [robuxLine("Donation pass", "nova_builds", 70, 3, true), robuxLine("Donation pass", "pixel_pat", 35, 50)]
           : [];
-    case "private_servers_owned":
-      await sleep(300 + 100 * args.accountId);
-      if (args.accountId === 5) return fail("roblox", "Roblox didn't answer. Try again.");
-      return ownedServers(args.accountId);
 
     case "discord_get":
       return discordStatus();
@@ -1664,6 +1429,7 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       if (webhook.token.includes("deleted")) return fail("invalid", "Discord refused the webhook; it may have been deleted. Paste a new one.");
       return null;
     case "news": {
+      if (!settings.news) return { items: [], failed: [] };
       await sleep(700);
       const at = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
       const release = (v: string, hours: number, notes: string) => ({ id: `roalt:${v}`, source: "roalt", title: `RoALT ${v}`, summary: notes, url: `https://github.com/inspectsoftware/RoALT/releases/tag/v${v}`, published: at(hours), version: v });
@@ -1732,7 +1498,8 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "data_dir_info":
       return { path: "C:\\Users\\you\\AppData\\Local\\RoALT", overridden: false };
     case "data_dir_open":
-    case "clips_open_folder":
+    case "window_to_tray":
+    case "app_quit":
     case "logs_open":
       return null;
     case "debug_tail":
@@ -1808,8 +1575,6 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
         return fail("invalid", "Anti-AFK must press a key every 1 to 19 minutes.");
       if (args.patch.discord && args.patch.discord.statusEveryMin !== 0 && (args.patch.discord.statusEveryMin < 5 || args.patch.discord.statusEveryMin > 1440))
         return fail("invalid", "The status summary must be off (0) or every 5 minutes to 24 hours.");
-      // As settings_set: 0 turns Clips off.
-      if (args.patch.clipAccount === 0) args.patch.clipAccount = null;
       if (args.patch.panicHotkey && !/^((ctrl|shift|alt|super)\+)*[^+]+$/i.test(args.patch.panicHotkey))
         return fail("invalid", `"${args.patch.panicHotkey}" isn't a key combination, like Ctrl+Shift+F12.`);
       if (args.patch.selfUpdate === false && settings.selfUpdate) {
@@ -1882,14 +1647,20 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
 //   ?instances=slow  Home's client list comes late   ?instances=fail  it can't be read
 //   ?link=roalt://play?place%3D1818  opened by a RoALT link (encode its ? and &)
 //   ?rolimons=1  Rolimons values on (Browse › Limiteds lists)
-//   ?clips=recording  Clips record the first account (a client of it runs)   ?clips=unavailable  no video encoder
-//   ?outfits=error  the outfit list fails
-//   ?trades=error  no account's trades load   ?trades=none  no account has a trade
+//   ?fresh  a first start: no accounts, groups or favourites, Windows protection (the setup opens)
+//   ?closeask=1  the window's close asks (as with clients RoALT looks after)   ?news=off  News is off
 //   ?mods=none  no mods yet  ?mods=bootstrapper  the last launch skipped them (a bootstrapper)
 //   (?splash=1 replays the splash: Splash.tsx; ?rm=1 reduces motion: ui/motion/reduced.ts)
 const preview = new URLSearchParams(location.search);
 let publicNetwork = false;
 if (preview.has("locked")) vault.locked = true;
+// A first start: nothing saved yet, Windows protection; the setup opens after the splash.
+if (preview.has("fresh")) {
+  accounts = [];
+  groups.length = 0;
+  favourites = [];
+  vault.mode = "dpapi";
+}
 if (preview.has("norecovery")) vault.recovery = "";
 if (preview.has("public")) {
   publicNetwork = true;
@@ -1903,10 +1674,8 @@ if (accentArg && /^[0-9a-f]{6}$/i.test(accentArg)) settings.accent = `#${accentA
 if (preview.get("layout") === "side") settings.tabLayout = "side";
 if (preview.has("rolimons")) settings.rolimonsValues = true;
 if (preview.get("mods") === "none") mods = [];
-if (preview.has("clips")) settings.clipAccount = accounts[0]?.id ?? null;
-if (preview.get("clips") === "unavailable") clipsBroken = true;
-if (preview.get("outfits") === "error") outfitsBroken = true;
-tradesMode = preview.get("trades");
+if (preview.has("closeask")) setTimeout(() => void emit("app://close-ask"), 1500);
+if (preview.get("news") === "off") settings.news = false;
 if (preview.get("mods") === "bootstrapper") modsLast = { applied: false, note: "Roblox runs through a bootstrapper, which has its own mods." };
 // As commands::open_link: a public game or server only.
 let pendingLink: LaunchTarget | null = null;

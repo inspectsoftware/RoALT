@@ -46,18 +46,12 @@ import type { Limits } from "./bindings/Limits";
 import type { LogsCleaned } from "./bindings/LogsCleaned";
 import type { Market } from "./bindings/Market";
 import type { ModsList } from "./bindings/ModsList";
-import type { ClipItem } from "./bindings/ClipItem";
-import type { ClipsStatus } from "./bindings/ClipsStatus";
 import type { ModImported } from "./bindings/ModImported";
 import type { MultiInstanceStatus } from "./bindings/MultiInstanceStatus";
 import type { Notice } from "./bindings/Notice";
 import type { Online } from "./bindings/Online";
-import type { Outfits } from "./bindings/Outfits";
 import type { ParsedInput } from "./bindings/ParsedInput";
 import type { PrivateServerPage } from "./bindings/PrivateServerPage";
-import type { PrivateServerBuy } from "./bindings/PrivateServerBuy";
-import type { PrivateServerPatch } from "./bindings/PrivateServerPatch";
-import type { PrivateServerSettings } from "./bindings/PrivateServerSettings";
 import type { NetworkStatus } from "./bindings/NetworkStatus";
 import type { Extras } from "./bindings/Extras";
 import type { News } from "./bindings/News";
@@ -67,15 +61,10 @@ import type { ServerOrder } from "./bindings/ServerOrder";
 import type { ServerPage } from "./bindings/ServerPage";
 import type { Settings } from "./bindings/Settings";
 import type { SettingsPatch } from "./bindings/SettingsPatch";
-import type { FriendRequest } from "./bindings/FriendRequest";
-import type { OwnedPrivateServer } from "./bindings/OwnedPrivateServer";
 import type { PlaytimeDay } from "./bindings/PlaytimeDay";
 import type { RobuxKind } from "./bindings/RobuxKind";
 import type { RobuxTotals } from "./bindings/RobuxTotals";
 import type { RobuxTransaction } from "./bindings/RobuxTransaction";
-import type { TradeDetail } from "./bindings/TradeDetail";
-import type { TradeKind } from "./bindings/TradeKind";
-import type { TradeRow } from "./bindings/TradeRow";
 import type { UserRef } from "./bindings/UserRef";
 import type { VaultMode } from "./bindings/VaultMode";
 import type { VaultStatus } from "./bindings/VaultStatus";
@@ -98,9 +87,9 @@ export type { BulkStage } from "./bindings/BulkStage";
 export type { CrashKind } from "./bindings/CrashKind";
 export type { Density } from "./bindings/Density";
 export type { DiscordEvents } from "./bindings/DiscordEvents";
+export type { DiscordRpc } from "./bindings/DiscordRpc";
 export type { GameServer } from "./bindings/GameServer";
 export type { PrivateServer } from "./bindings/PrivateServer";
-export type { PrivateServerBuy, PrivateServerPatch, PrivateServerSettings };
 export type { SameServer } from "./bindings/SameServer";
 export type { InstanceState } from "./bindings/InstanceState";
 export type { Limits } from "./bindings/Limits";
@@ -202,19 +191,6 @@ export const api = {
   marketItems: () => invoke<Market | null>("market_items"),
   /** Item pictures (asset id, image URL), at most 200 ids a call. */
   assetThumbnails: (ids: number[]) => invoke<[number, string][]>("asset_thumbnails", { ids }),
-  /** Whether Clips record, whom, and why not. */
-  clipsStatus: () => invoke<ClipsStatus>("clips_status"),
-  /** Saves the last seconds now; how it went comes as a notice (and `clips://changed`). */
-  clipsSave: () => invoke<void>("clips_save"),
-  /** Saved clips, newest first. */
-  clipsList: () => invoke<ClipItem[]>("clips_list"),
-  /** Its new file name. */
-  clipsRename: (name: string, to: string) => invoke<string>("clips_rename", { name, to }),
-  /** To the Recycle Bin. */
-  clipsDelete: (name: string) => invoke<void>("clips_delete", { name }),
-  clipsReveal: (name: string) => invoke<void>("clips_reveal", { name }),
-  clipsOpenFolder: () => invoke<void>("clips_open_folder"),
-  clipsFolder: () => invoke<string>("clips_folder"),
   /** Every mod (top first) and how the last launch with mods on went. */
   modsList: () => invoke<ModsList>("mods_list"),
   /** Imports the zip at `path` as a new mod, on and at the top. */
@@ -260,10 +236,13 @@ export const api = {
   instancesClearEnded: () => invoke<void>("instances_clear_ended"),
   /** CPU cap, efficiency mode, trim interval and cores for one running client (they win over adaptive ones). */
   instanceSetLimits: (id: string, limits: Limits) => invoke<void>("instance_set_limits", { id, limits }),
+  instancesApplyLimits: (limits: Limits) => invoke<number>("instances_apply_limits", { limits }),
   /** Trims the client: its Memory column before and after, in MB. */
   instanceTrim: (id: string) => invoke<[number, number]>("instance_trim", { id }),
   /** Opts one running client in or out of anti-AFK. */
   instanceSetAntiAfk: (id: string, enabled: boolean) => invoke<void>("instance_set_anti_afk", { id, enabled }),
+  /** Takes control of one running client (RoALT leaves it alone, its window comes to the front) or gives it back. */
+  instanceTakeControl: (id: string, on: boolean) => invoke<void>("instance_take_control", { id, on }),
   /** The client's preview at most maxW wide: always a 24-byte header, then RGBA unless its picture number is `known` or it has no picture (`window::Preview::to_bytes`). */
   instanceThumbnail: (id: string, maxW: number, known: number) => invoke<ArrayBuffer>("instance_thumbnail", { id, maxW, known }),
   /** Where live pictures would get Windows' yellow frame: Windows draws each client in `places` over its card, the rest go. */
@@ -300,6 +279,9 @@ export const api = {
   robloxCloseAll: () => invoke<MultiInstanceStatus>("roblox_close_all"),
   /** Panic button: cancels the batch, no rejoins or restarts, terminates every Roblox client. */
   panicKill: () => invoke<MultiInstanceStatus>("panic_kill"),
+  /** The close question's answers (`events.onCloseAsk`). */
+  windowToTray: () => invoke<void>("window_to_tray"),
+  appQuit: () => invoke<void>("app_quit"),
   /** Clients that crashed, were disconnected or hung, newest first (the last 200). */
   crashesList: () => invoke<Crash[]>("crashes_list"),
   /** A cleaned report to send when something goes wrong (`diagnostics`). */
@@ -336,40 +318,9 @@ export const api = {
   targetPlace: (target: LaunchTarget, accountId?: number) => invoke<number>("target_place", { target, accountId }),
   privateServersList: (placeId: number, accountId: number, cursor?: string) =>
     invoke<PrivateServerPage>("private_servers_list", { placeId, accountId, cursor }),
-  /** As the owner's account (`accountId`); another account gets "Only the owner's account can change this". */
-  privateServerGet: (accountId: number, vipServerId: number) =>
-    invoke<PrivateServerSettings>("private_server_get", { accountId, vipServerId }),
-  privateServerUpdate: (accountId: number, vipServerId: number, patch: PrivateServerPatch) =>
-    invoke<PrivateServerSettings>("private_server_update", { accountId, vipServerId, patch }),
-  /** Auto-renew on spends `price` Robux a month: confirm first. `price` comes from privateServerGet. */
-  privateServerRenew: (accountId: number, vipServerId: number, on: boolean, price: number) =>
-    invoke<PrivateServerSettings>("private_server_renew", { accountId, vipServerId, on, price }),
-  /** Spends Robux: confirm first. One idempotencyKey per buy dialog. */
-  privateServerBuy: (buy: PrivateServerBuy) => invoke<void>("private_server_buy", { buy }),
 
-  /** The account's saved outfits and a picture of what it wears now. */
-  outfitsList: (accountId: number) => invoke<Outfits>("outfits_list", { accountId }),
-  /** `to` wears `from`'s outfit (the same account to wear its own). Answers the names of the items `to` could not wear. */
-  outfitWear: (from: number, outfitId: number, to: number) => invoke<string[]>("outfit_wear", { from, outfitId, to }),
-  /** Saves what the account wears now as a new outfit. */
-  outfitSave: (accountId: number, name: string) => invoke<void>("outfit_save", { accountId, name }),
-  outfitRename: (accountId: number, outfitId: number, name: string) => invoke<void>("outfit_rename", { accountId, outfitId, name }),
-  outfitDelete: (accountId: number, outfitId: number) => invoke<void>("outfit_delete", { accountId, outfitId }),
-
-  /** The account's newest 100 trades of one kind. */
-  tradesList: (accountId: number, kind: TradeKind) => invoke<TradeRow[]>("trades_list", { accountId, kind }),
-  /** Both sides of a trade, as the account sees them. Trade ids are strings: they can pass 2^53. */
-  tradeDetails: (accountId: number, tradeId: string) => invoke<TradeDetail>("trade_details", { accountId, tradeId }),
-  /** Can't be undone: confirm first. Refused while purchases are locked. */
-  tradeAccept: (accountId: number, tradeId: string) => invoke<void>("trade_accept", { accountId, tradeId }),
-  /** Declines an inbound trade, or takes back an outbound one. */
-  tradeDecline: (accountId: number, tradeId: string) => invoke<void>("trade_decline", { accountId, tradeId }),
-  friendRequestsList: (accountId: number) => invoke<FriendRequest[]>("friend_requests_list", { accountId }),
-  friendRequestAnswer: (accountId: number, userId: number, accept: boolean) => invoke<void>("friend_request_answer", { accountId, userId, accept }),
-  friendRequestsDeclineAll: (accountId: number) => invoke<void>("friend_requests_decline_all", { accountId }),
   robuxTransactions: (accountId: number, kind: RobuxKind) => invoke<RobuxTransaction[]>("robux_transactions", { accountId, kind }),
   robuxTotals: (accountId: number) => invoke<RobuxTotals>("robux_totals", { accountId }),
-  privateServersOwned: (accountId: number) => invoke<OwnedPrivateServer[]>("private_servers_owned", { accountId }),
   playtimeDays: () => invoke<PlaytimeDay[]>("playtime_days"),
   crashesExport: (path: string) => invoke<void>("crashes_export", { path }),
   playtimeExport: (path: string) => invoke<void>("playtime_export", { path }),
@@ -377,6 +328,7 @@ export const api = {
   groupsList: () => invoke<Group[]>("groups_list"),
   groupSave: (input: GroupInput) => invoke<Group>("group_save", { input }),
   groupRemove: (id: number) => invoke<void>("group_remove", { id }),
+  groupClearOverrides: (id: number) => invoke<number>("group_clear_overrides", { id }),
 
   /** The current performance settings as a profile (JSON text). */
   performanceProfile: (previewFps: number) => invoke<string>("performance_profile", { previewFps }),
@@ -449,8 +401,8 @@ export const events = {
   onSettingsChanged: (f: () => void): Promise<UnlistenFn> => listen("settings://changed", f),
   /** The tray's Play all again was picked. */
   onPlayAgain: (f: () => void): Promise<UnlistenFn> => listen("app://play-again", f),
-  /** A clip was saved. */
-  onClipsChanged: (f: () => void): Promise<UnlistenFn> => listen("clips://changed", f),
+  /** The window was closed while RoALT looks after running clients: ask whether to quit. */
+  onCloseAsk: (f: () => void): Promise<UnlistenFn> => listen("app://close-ask", f),
   /** RoALT was opened with a `roalt://` link: `api.takePendingLink` has it. */
   onOpenLink: (f: () => void): Promise<UnlistenFn> => listen("app://open-link", f),
   onLog: (f: (r: LogRecord) => void): Promise<UnlistenFn> => listen<LogRecord>("log://log", (e) => f(e.payload)),

@@ -40,12 +40,6 @@ pub const ACCEPT_FRIEND: &str = "https://friends.roblox.com/v1/users/{}/accept-f
 // Servers (query string appended by the caller).
 pub const SERVERS_PUBLIC: &str = "https://games.roblox.com/v2/games/{}/servers/Public";
 pub const SERVERS_PRIVATE: &str = "https://games.roblox.com/v1/games/{}/private-servers";
-// Private servers, as their owner (cookie + CSRF). Shapes from the public spec, unrecorded signed in.
-pub const VIP_SERVER: &str = "https://games.roblox.com/v1/vip-servers/{}";
-pub const VIP_SERVER_PERMISSIONS: &str = "https://games.roblox.com/v1/vip-servers/{}/permissions";
-pub const VIP_SERVER_SUBSCRIPTION: &str = "https://games.roblox.com/v1/vip-servers/{}/subscription";
-/// Buys a private server of a universe: spends Robux.
-pub const VIP_SERVER_CREATE: &str = "https://games.roblox.com/v1/games/vip-servers/{}";
 pub const PLACE_UNIVERSE: &str = "https://apis.roblox.com/universes/v1/places/{}/universe";
 pub const PLACE_ICONS: &str =
     "https://thumbnails.roblox.com/v1/places/gameicons?placeIds={}&returnPolicy=PlaceHolder&size=150x150&format=Png&isCircular=false";
@@ -81,52 +75,12 @@ pub const ROBLOX_BADGES: &str = "https://accountinformation.roblox.com/v1/users/
 /// `limit` must be 10, 25 or 50.
 pub const USER_GAMES: &str = "https://games.roblox.com/v2/users/{}/games?accessFilter=Public&limit=50&sortOrder=Desc";
 
-// Outfits (the account's cookie; writes need CSRF). The spec marks these v1–v3 calls deprecated,
-// but all answered on 2026-11-09; v4's one write call takes `updateTypes` numbers the spec doesn't explain.
-/// An account's own outfits. The caller appends `&paginationToken=`.
-pub const OUTFITS: &str = "https://avatar.roblox.com/v2/avatar/users/{}/outfits?isEditable=true&itemsPerPage=50";
-/// As its owner: another account can get a 403.
-pub const OUTFIT_DETAILS: &str = "https://avatar.roblox.com/v3/outfits/{}/details";
-/// What the account wears now.
-pub const AVATAR: &str = "https://avatar.roblox.com/v2/avatar/avatar";
-pub const SET_AVATAR_TYPE: &str = "https://avatar.roblox.com/v1/avatar/set-player-avatar-type";
-pub const SET_BODY_COLORS: &str = "https://avatar.roblox.com/v2/avatar/set-body-colors";
-pub const SET_SCALES: &str = "https://avatar.roblox.com/v1/avatar/set-scales";
-pub const SET_WEARING_ASSETS: &str = "https://avatar.roblox.com/v2/avatar/set-wearing-assets";
-pub const OUTFIT_CREATE: &str = "https://avatar.roblox.com/v3/outfits/create";
-/// PATCH: a partial update (only `name` is sent).
-pub const OUTFIT: &str = "https://avatar.roblox.com/v3/outfits/{}";
-pub const OUTFIT_DELETE: &str = "https://avatar.roblox.com/v1/outfits/{}/delete";
-/// Pictures of outfits and of whole avatars (no cookie, verified 2026-11-09).
-pub const OUTFIT_THUMBS: &str = "https://thumbnails.roblox.com/v1/users/outfits?userOutfitIds={}&size=150x150&format=Png&isCircular=false";
-pub const AVATAR_THUMBS: &str = "https://thumbnails.roblox.com/v1/users/avatar?userIds={}&size=150x150&format=Png&isCircular=false";
-
-// Trades (the account's cookie; accept and decline need CSRF). Trades API v1, not deprecated.
-/// `{}`: Inbound, Outbound or Completed. One page: the newest 100.
-pub const TRADES: &str = "https://trades.roblox.com/v1/trades/{}?limit=100&sortOrder=Desc";
-pub const TRADE: &str = "https://trades.roblox.com/v1/trades/{}";
-pub const TRADE_ACCEPT: &str = "https://trades.roblox.com/v1/trades/{}/accept";
-/// Also cancels a trade the account sent.
-pub const TRADE_DECLINE: &str = "https://trades.roblox.com/v1/trades/{}/decline";
-
-// Friend requests an account got (its cookie; the POSTs need CSRF). All answered signed out on
-// 2026-11-11 (401, the POSTs 403; a made-up path 404). Shapes from the public spec, unrecorded signed in.
-/// The newest 100.
-pub const FRIEND_REQUESTS: &str = "https://friends.roblox.com/v1/my/friends/requests?limit=100&sortOrder=Desc";
-pub const DECLINE_FRIEND: &str = "https://friends.roblox.com/v1/users/{}/decline-friend-request";
-pub const DECLINE_ALL_FRIENDS: &str = "https://friends.roblox.com/v1/user/friend-requests/decline-all";
-/// Names by id: POST `{userIds, excludeBannedUsers}`, no cookie, 100 ids at most (verified 2026-11-11).
-pub const USERS_BY_ID: &str = "https://users.roblox.com/v1/users";
-
 // An account's Robux history (its cookie), as the website's Transactions page reads it. Answered
 // signed out on 2026-11-11 (401; a made-up path 404); shapes unrecorded signed in, so read leniently.
 /// The newest 25 of one kind: the caller appends the kind (`RobuxKind::path`).
 pub const TRANSACTIONS: &str = "https://apis.roblox.com/transaction-records/v1/users/{}/transactions?limit=25&itemPricingType=All&transactionType=";
 /// The last month's totals.
 pub const TRANSACTION_TOTALS: &str = "https://apis.roblox.com/transaction-records/v1/users/{}/transaction-totals?timeFrame=Month&transactionType=summary";
-
-/// The private servers an account owns (its cookie; 401 signed out on 2026-11-11). The caller appends `&cursor=`.
-pub const MY_PRIVATE_SERVERS: &str = "https://games.roblox.com/v1/private-servers/my-private-servers?privateServerResultsFilter=MyPrivateServers&itemsPerPage=100";
 
 /// `template` with its `{}` replaced by `value`.
 pub fn fill(template: &str, value: impl std::fmt::Display) -> String {

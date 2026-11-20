@@ -179,20 +179,49 @@ fn names_tracker(path: &Path, browser_tracker_id: i64) -> bool {
     String::from_utf8_lossy(&head).lines().any(|l| tracker_id(l) == Some(browser_tracker_id))
 }
 
+/// Maximum unread bytes processed in a single `read_new` pass (16 MiB).
+const MAX_READ_BYTES: u64 = 16 << 20;
+
 /// Reads lines appended since `offset` (opened shared, so Roblox keeps writing), updates
 /// `facts`, returns the new offset. A partial last line is left for the next read. The client's
 /// own errors and warnings (`problem_of`) go to `on_problem`, repeats within one read counted.
-pub fn read_new(path: &Path, offset: u64, facts: &mut LogFacts, mut on_problem: impl FnMut(&str, usize)) -> std::io::Result<u64> {
+pub fn read_new(path: &Path, offset: u64, facts: &mut LogFacts, on_problem: impl FnMut(&str, usize)) -> std::io::Result<u64> {
+    read_new_capped(path, offset, MAX_READ_BYTES, facts, on_problem)
+}
+
+fn read_new_capped(
+    path: &Path,
+    offset: u64,
+    max_bytes: u64,
+    facts: &mut LogFacts,
+    mut on_problem: impl FnMut(&str, usize),
+) -> std::io::Result<u64> {
     let mut f = open_shared(path)?;
+    let len = f.metadata()?.len();
     // Shorter than what was read: a new file under the same name, start over.
-    let offset = if f.metadata()?.len() < offset { 0 } else { offset };
+    let mut offset = if len < offset { 0 } else { offset };
+    // A runaway log (e.g. a script spamming errors) could grow gigabytes between polls: skip
+    // ahead to the last `max_bytes` so reading stays bounded in memory and time.
+    let skipped = len.saturating_sub(offset) > max_bytes;
+    if skipped {
+        offset = len.saturating_sub(max_bytes);
+    }
     f.seek(SeekFrom::Start(offset))?;
     let mut buf = Vec::new();
-    f.read_to_end(&mut buf)?;
+    (&f).take(max_bytes).read_to_end(&mut buf)?;
     let Some(end) = buf.iter().rposition(|&b| b == b'\n') else { return Ok(offset) };
+    // When we jumped into the middle of the file, drop the leading partial line.
+    let start = if skipped {
+        match buf[..end].iter().position(|&b| b == b'\n') {
+            Some(first) => first + 1,
+            None => return Ok(offset + end as u64 + 1),
+        }
+    } else {
+        0
+    };
     let mut problems: Vec<(String, usize)> = Vec::new();
     let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    for line in buf[..end].split(|&b| b == b'\n') {
+    for line in buf[start..end].split(|&b| b == b'\n') {
         let line = String::from_utf8_lossy(line);
         if let Some(p) = problem_of(&line).or_else(|| update_line(&line)) {
             match seen.get(p) {
@@ -687,6 +716,27 @@ mod tests {
         let mut f = parsed(&[&line("[FLog::Network] Sending disconnect with reason: 267")]);
         parse_line(&line(&format!("[FLog::Output] ! Joining game '{JOB}' place {PLACE} at 10.9.2.90")), &mut f);
         assert_eq!(f.reason, None);
+    }
+
+    #[test]
+    fn capped_read_skips_oversized_middle_and_parses_tail() {
+        let dir = std::env::temp_dir().join(format!("roalt-logwatch-cap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("big.log");
+        let mut content = String::new();
+        for _ in 0..40 {
+            content.push_str(&line("[FLog::Output] filler noise line to push past the read cap"));
+        }
+        content.push_str(&line(&format!("[FLog::Output] ! Joining game '{JOB}' place {PLACE} at 10.9.2.90")));
+        content.push_str(&line("[FLog::Network] Replicator created: 000000007A26CF00"));
+        std::fs::write(&p, &content).unwrap();
+
+        let mut f = LogFacts::default();
+        let o = read_new_capped(&p, 0, 512, &mut f, |_, _| {}).unwrap();
+        assert_eq!(o, content.len() as u64);
+        assert_eq!((f.job_id.as_deref(), f.place_id, f.in_game), (Some(JOB), Some(PLACE), true));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
 

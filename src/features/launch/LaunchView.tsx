@@ -146,8 +146,10 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
   // Who asks Roblox (friends to join, the signed-in sorts, private servers): the first one picked, else any signed in.
   const asker = account ?? accounts.find((a) => a.status === "valid") ?? null;
   const bulk = chosen.length > 1;
-  // With multi-instance off, one more client ends the one that runs.
-  const replaces = !bulk && !!account && instances.some((i) => isRunning(i) && i.accountId !== account.id);
+  // An untracked Roblox already running (e.g. started from the browser) holds Roblox's singleton lock.
+  const untracked = !!multi && !multi.active && multi.blockedBy.length > 0;
+  // Without multi-instance active, one more client ends either a tracked running client or an untracked Roblox.
+  const replaces = !bulk && !!account && (instances.some((i) => isRunning(i) && i.accountId !== account.id) || untracked);
   // Stacked, a Who with picks folds into one line until opened, so Where and Play are in reach.
   const [whoOpen, setWhoOpen] = useState(() => chosen.length === 0);
   const folded = !wide && !whoOpen && chosen.length > 0;

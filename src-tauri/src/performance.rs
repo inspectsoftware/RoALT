@@ -15,8 +15,8 @@ const FORMAT: &str = "roalt-performance";
 const VERSION: u32 = 1;
 /// A profile is a few hundred bytes; anything bigger isn't one.
 pub const MAX_BYTES: usize = 64 * 1024;
-/// The Dashboard's preview frame rates (`src/features/dashboard/previewFps.ts`).
-const PREVIEW_FPS: [u32; 4] = [5, 15, 30, 60];
+/// The Dashboard's preview frame rates, 0 for Off (`src/features/dashboard/previewFps.ts`).
+const PREVIEW_FPS: [u32; 6] = [0, 1, 5, 15, 30, 60];
 
 /// The settings a profile carries; None: not in it (left as it is).
 #[derive(Serialize, Deserialize, TS, Clone, Debug, Default, PartialEq)]
@@ -549,7 +549,8 @@ pub fn suggest(b: &Bench, v: &Settings, target: Option<u32>) -> Advice {
         add(SuggestionId::MemRestart, &[&[("mb", f64::from(mb))], why].concat(), Profile { mem_restart_mb: Some(mb), ..Profile::default() });
     }
     if busy {
-        let fps = if over { 5 } else { 15 };
+        // Over its limits: Off (a still picture now and then), live pictures cost the GPU a copy of each window.
+        let fps = if over { 0 } else { 5 };
         add(SuggestionId::PreviewFps, &[("fps", f64::from(fps))], Profile { preview_fps: Some(fps), ..Profile::default() });
     }
     Advice { n, tier, ram_ratio, cpu_ratio, room, suggestions: out }
@@ -683,7 +684,7 @@ mod tests {
         assert_eq!(find(&a, SuggestionId::TrimEveryMin).unwrap().trim_every_min, Some(15));
         assert!(find(&a, SuggestionId::MemThrottle).unwrap().mem_throttle.unwrap().mb >= 512);
         assert!(find(&a, SuggestionId::MemRestart).is_none(), "under all the RAM, no long-run crashes");
-        assert_eq!(find(&a, SuggestionId::PreviewFps).unwrap().preview_fps, Some(5));
+        assert_eq!(find(&a, SuggestionId::PreviewFps).unwrap().preview_fps, Some(0), "previews Off");
         assert!(find(&a, SuggestionId::AutoSpread).is_none(), "4 cores can't give 6 clients two each");
     }
 

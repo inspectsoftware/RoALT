@@ -182,8 +182,7 @@ pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget, fps_cap: Op
     // The account's own cap, then its own profile's, then its groups': what is set on the account wins.
     let own_cap = s.db.account(account_id)?.fps_cap;
     let fps = fps_cap.or(own_cap).or(account.profile.as_ref().and_then(|p| p.fps_cap)).or(account.fps_cap).unwrap_or(global.fps_cap);
-    // The account Clips record counts as full quality: its clips shouldn't be at the lowest graphics.
-    let full_quality = account.full_quality || settings.clip_account == Some(account_id);
+    let full_quality = account.full_quality;
     let undo = client_settings::apply(&s.db, fps, settings.low_graphics && !full_quality);
     let lighter = (settings.lighter_rendering && !full_quality).then_some(&settings.render_flags);
     let custom = match settings.custom_flags_scope {

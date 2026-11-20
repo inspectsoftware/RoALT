@@ -1,7 +1,8 @@
 //! "Export cookies": every chosen account's cookie as `username:cookie` lines in a plain-text file
 //! in `<data dir>\exports`, selected in Explorer. Anyone with the file can sign into those
-//! accounts, so it goes after `DELETE_AFTER`, at the next start if RoALT closed first, or when the
-//! user says. Only files RoALT wrote are ever deleted; neither cookies nor names reach the log.
+//! accounts, so it goes after `DELETE_AFTER`, when RoALT quits (`exit_cleanup`), at the next start
+//! if RoALT was killed or crashed, or when the user says. Only files RoALT wrote are ever deleted;
+//! neither cookies nor names reach the log.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -61,7 +62,11 @@ fn is_export(path: &Path) -> bool {
 /// Writes `text` to a new export file and remembers it; returns its path.
 pub fn write(data_dir: &Path, text: &str) -> Result<PathBuf> {
     let dir = data_dir.join(DIR);
-    std::fs::create_dir_all(&dir)?;
+    // For this Windows user only: a data folder moved elsewhere may let others read what it holds.
+    if !dir.is_dir() {
+        std::fs::create_dir_all(&dir)?;
+        crate::restrict_to_user(&dir);
+    }
     let mut path = dir.join(file_name(local_now()));
     // Two exports within a second: the second gets its own file.
     for n in 2.. {

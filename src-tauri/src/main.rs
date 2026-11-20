@@ -3,7 +3,6 @@
 #[macro_use]
 mod i18n;
 mod browse;
-mod clips;
 mod commands;
 mod cookie_export;
 mod diagnostics;
@@ -19,6 +18,7 @@ mod network;
 mod performance;
 mod roblox_api;
 mod rpc;
+mod session;
 mod news;
 mod online;
 mod rolimons;
@@ -39,7 +39,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::window::Color;
-use tauri::{App as TauriApp, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{App as TauriApp, AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_global_shortcut::ShortcutState;
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind};
 
@@ -235,12 +235,10 @@ fn remove_old_db(data_dir: &Path, old: &Path) -> bool {
 
 /// `hidden`: built in the tray (RoALT started by a Play click on roblox.com).
 fn main_window(app: &AppHandle, data_dir: &Path, skip_splash: bool, hidden: bool) -> std::result::Result<(), String> {
-    let failed = |e: tauri::Error| {
-        tr!(
-            "RoALT can't open its window ({why}).\n\nIf this PC was very busy, start RoALT again. Otherwise it needs the Microsoft Edge WebView2 Runtime: \
-             https://go.microsoft.com/fwlink/p/?LinkId=2124703",
-            why = e
-        )
+    let failed = |e: tauri::Error| -> ! {
+        log::error!("main window failed: {e}");
+        // Keep the raw Tauri error in roalt.log and offer a direct WebView2 download prompt.
+        fatal_webview2()
     };
     // The dark theme's --ground (src/styles/tokens.css) in either theme: the splash is dark, and
     // this is what shows before the UI paints and while the window grows.
@@ -263,9 +261,14 @@ fn main_window(app: &AppHandle, data_dir: &Path, skip_splash: bool, hidden: bool
     if let Some(args) = cdp_args() {
         builder = builder.additional_browser_args(&args);
     }
-    let w = builder.build().map_err(failed)?;
+    let w = match builder.build() {
+        Ok(w) => w,
+        Err(e) => failed(e),
+    };
     webview::log_process_failures(&w);
-    splash::start(app, &w, skip_splash, hidden).map_err(failed)?;
+    if let Err(e) = splash::start(app, &w, skip_splash, hidden) {
+        failed(e);
+    }
     if hidden {
         set_main_shown(app, false);
     }
@@ -307,19 +310,44 @@ fn in_app(url: &url::Url) -> bool {
 /// Keeps a folder RoALT creates from being writable by other users of the PC: what lands in it
 /// includes the UI's WebView2 profile. A drive without permissions (exFAT) can't, and is left so.
 pub fn restrict_to_user(dir: &Path) {
+    restrict_path(dir, true);
+}
+
+/// Same as `restrict_to_user` for a single file (no `(OI)(CI)` inheritance flags), used when
+/// RoALT writes its database into a non-empty folder whose own ACLs shouldn't be stripped.
+pub fn restrict_file_to_user(file: &Path) {
+    restrict_path(file, false);
+}
+
+fn restrict_path(path: &Path, is_dir: bool) {
     use std::os::windows::process::CommandExt;
     let root = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| r"C:\Windows".into());
     let user = std::env::var("USERNAME").unwrap_or_default();
+    let flags = if is_dir { "(OI)(CI)F" } else { "F" };
     let done = std::process::Command::new(root.join(r"System32\icacls.exe"))
-        .arg(dir)
-        .args(["/inheritance:r", "/grant:r", &format!("{user}:(OI)(CI)F"), "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"])
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r", &format!("{user}:{flags}"), &format!("*S-1-5-18:{flags}"), &format!("*S-1-5-32-544:{flags}")])
         .creation_flags(0x0800_0000)
         .output();
     match done {
         Ok(o) if o.status.success() => {}
-        Ok(o) => log::warn!("could not restrict the data folder: icacls exit {:?}", o.status.code()),
-        Err(e) => log::warn!("could not restrict the data folder: {e}"),
+        Ok(o) => log::warn!("could not restrict {}: icacls exit {:?}", path.display(), o.status.code()),
+        Err(e) => log::warn!("could not restrict {}: {e}", path.display()),
     }
+}
+
+/// The vault must stay open (no idle lock, no lock when Windows locks): a sign-in is under way (its
+/// cookie is encrypted when the window closes), or clients run that auto-rejoin, auto-restart,
+/// memory/timed restarts, anti-AFK, or Discord alerts look after.
+pub(crate) fn vault_held_open(app: &AppHandle) -> bool {
+    let s = app.state::<App>();
+    crate::webview::signing_in(app)
+        || (s.tracker.any_running()
+            && (crate::discord::configured(&s)
+                || s.db
+                    .settings()
+                    .inspect_err(|e| log::debug!("vault: could not read settings: {e}"))
+                    .is_ok_and(|v| v.auto_rejoin || v.auto_restart_on_crash || v.anti_afk.enabled || v.mem_restart_mb > 0 || v.restart_every_h > 0)))
 }
 
 /// Master-password mode: lock after the configured idle time.
@@ -331,17 +359,9 @@ fn spawn_auto_lock(handle: AppHandle) {
             if s.vault.mode() != VaultMode::Master || s.vault.is_locked() {
                 continue;
             }
-            // Signing in is activity too: its cookie is encrypted when the window closes, which
-            // needs the vault open. So is a client auto-rejoin or auto-restart follows: relaunching
-            // needs its cookie. Browse isn't, by being open: its page loads count as use
-            // (`browse`), and a lock closes it first, keeping its cookie.
-            if crate::webview::signing_in(&handle)
-                || (s.tracker.any_running()
-                    && s.db
-                        .settings()
-                        .inspect_err(|e| log::debug!("auto-lock: could not read settings: {e}"))
-                        .is_ok_and(|v| v.auto_rejoin || v.auto_restart_on_crash))
-            {
+            // Browse isn't held open by being open: its page loads count as use (`browse`), and a
+            // lock closes it first, keeping its cookie.
+            if vault_held_open(&handle) {
                 s.vault.touch();
                 continue;
             }
@@ -375,7 +395,31 @@ fn fatal(message: &str) -> ! {
     std::process::exit(1)
 }
 
-/// Panics go to the log (release has no console and aborts on panic, so nothing else sees them).
+/// Offers to open Microsoft's WebView2 download page when the main window cannot be created.
+fn fatal_webview2() -> ! {
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::{IDYES, MB_ICONERROR, MB_YESNO, MessageBoxW, SW_SHOWNORMAL};
+    let text = tr!(
+        "RoALT couldn't open its window. If this PC was very busy, try starting RoALT again.\n\n\
+         Otherwise, RoALT needs the Microsoft Edge WebView2 Runtime. Open Microsoft's download page in your browser now?"
+    );
+    // SAFETY: plain modal message box; opens Microsoft's WebView2 download link if the user clicks Yes.
+    unsafe {
+        if MessageBoxW(None, &windows::core::HSTRING::from(text), windows::core::w!("RoALT"), MB_ICONERROR | MB_YESNO) == IDYES {
+            let _ = ShellExecuteW(
+                None,
+                windows::core::w!("open"),
+                windows::core::w!("https://go.microsoft.com/fwlink/p/?LinkId=2124703"),
+                None,
+                None,
+                SW_SHOWNORMAL,
+            );
+        }
+    }
+    std::process::exit(1)
+}
+
+/// Panics go to the log (release has no console, so nothing else sees them).
 fn panic_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -422,19 +466,12 @@ fn set_aside_unreadable(data_dir: &Path) -> bool {
 }
 
 fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::result::Result<(), String> {
-    webview::sweep_temp_profiles(data_dir);
-    webview::sweep_dirty_profiles(data_dir);
-    cookie_export::sweep(data_dir);
     let db_path = data_dir.join(DB_FILE);
     let db = match storage::Db::open(&db_path) {
         Err(AppError::Crypto) if set_aside_unreadable(data_dir) => storage::Db::open(&db_path),
         r => r,
     }
     .map_err(|e| tr!("RoALT can't open its database {path}: {why}", path = db_path.display(), why = e.message()))?;
-    // Not on a read error: every profile would look orphaned.
-    if let Ok(accounts) = db.accounts() {
-        webview::sweep_orphan_profiles(data_dir, &accounts.iter().map(|a| a.id).collect::<Vec<_>>());
-    }
     let record = db.vault_record().map_err(|e| e.message())?;
     // Only a database with a vault is the copy that replaces the old one.
     let moved_from = moved_from.filter(|_| record.is_some());
@@ -493,24 +530,32 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
     });
     // Before any client starts: what a launch cut short by a quit or crash left behind goes.
     launcher::flags::restore();
-    mods::library::sweep(&app.state::<App>().db);
     // Opened by a `roalt://` link: Play takes it once the UI is up. A Play click on roblox.com
     // starts its client now, ahead of the rest.
-    // Restarted by the watchdog: back in the tray, as it was.
-    let quiet = !commands::open_link(app.handle(), std::env::args().skip(1)) || std::env::args().any(|a| a == watchdog::TRAY_ARG);
+    // Restarted by the watchdog: back in the tray, except in master-password mode where the vault
+    // comes back locked (hiding it would leave auto-rejoin and Discord alerts silently stalled).
+    let watchdog_restart = std::env::args().any(|a| a == watchdog::TRAY_ARG);
+    let locked_restart = watchdog_restart && app.state::<App>().vault.is_locked();
+    let quiet = !locked_restart && (!commands::open_link(app.handle(), std::env::args().skip(1)) || watchdog_restart);
+    if locked_restart {
+        let handle = app.handle().clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            commands::notice(&handle, true, tr!("RoALT restarted after it stopped responding. Unlock the vault so auto-rejoin and Discord alerts can keep running."));
+        });
+    } else if watchdog_restart {
+        let handle = app.handle().clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            commands::notice(&handle, false, tr!("RoALT restarted in the tray after it stopped responding. Your running clients weren't closed."));
+        });
+    }
     if let Err(e) = commands::set_panic_hotkey(app.handle(), "", &settings.panic_hotkey) {
         let handle = app.handle().clone();
         // Said once the window is up.
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(Duration::from_secs(5)).await;
             commands::notice(&handle, true, tr!("{why} The panic hotkey is off; change it in Settings, Automation.", why = e.message()));
-        });
-    }
-    if let Err(e) = commands::set_clip_hotkey(app.handle(), "", commands::clip_key(&settings)) {
-        let handle = app.handle().clone();
-        tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            commands::notice(&handle, true, tr!("{why} The clip key is off; change it in Clips.", why = e.message()));
         });
     }
     // A global key that can't be had is off and said (the first one); the others work.
@@ -521,9 +566,6 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
             commands::notice(&handle, true, e.message());
         });
     }
-    clips::library::sweep();
-    // AutoHotkey's work folder from the removed Macros feature; a crash could leave scripts in it.
-    let _ = std::fs::remove_dir_all(data_dir.join("macros"));
     if let Err(e) = tray::setup(app.handle()) {
         log::warn!("no tray icon: {e}");
     }
@@ -545,12 +587,8 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
     spawn_auto_lock(app.handle().clone());
     instances::Tracker::spawn(app.handle().clone());
     instances::afk::spawn(app.handle().clone());
+    session::spawn(app.handle().clone());
     network::spawn(app.handle().clone());
-    match app.state::<App>().db.prune_cache(commands::now_ms()) {
-        Ok(0) => {}
-        Ok(n) => log::info!("cache: {n} old rows dropped"),
-        Err(e) => log::warn!("cache: old rows not dropped: {e}"),
-    }
     launcher::client_settings::spawn(app.handle().clone());
     discord::spawn(app.handle().clone());
     watch::spawn(app.handle().clone());
@@ -558,6 +596,27 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
     launcher::update::spawn(app.handle().clone());
     remind_bandwidth(app.handle().clone());
     watchdog::spawn(app.handle().clone());
+    // Non-blocking startup sweeps: keep the main thread free so the window opens immediately.
+    let sweep_app = app.handle().clone();
+    let sweep_dir = data_dir.to_owned();
+    let _ = std::thread::Builder::new().name("startup-sweep".into()).spawn(move || {
+        webview::sweep_temp_profiles(&sweep_dir);
+        webview::sweep_dirty_profiles(&sweep_dir);
+        cookie_export::sweep(&sweep_dir);
+        let _ = std::fs::remove_dir_all(sweep_dir.join("macros"));
+        if let Some(s) = sweep_app.try_state::<App>() {
+            // Not on a read error: every profile would look orphaned.
+            if let Ok(accounts) = s.db.accounts() {
+                webview::sweep_orphan_profiles(&sweep_dir, &accounts.iter().map(|a| a.id).collect::<Vec<_>>());
+            }
+            mods::library::sweep(&s.db);
+            match s.db.prune_cache(commands::now_ms()) {
+                Ok(0) => {}
+                Ok(n) => log::info!("cache: {n} old rows dropped"),
+                Err(e) => log::warn!("cache: old rows not dropped: {e}"),
+            }
+        }
+    });
     Ok(())
 }
 
@@ -572,6 +631,8 @@ pub(crate) fn exit_cleanup(app: &AppHandle) {
         log::warn!("could not record playtime at exit: {e}");
     }
     s.limiter.release_all();
+    // Cookie exports don't outlive RoALT (the next start's sweep covers a kill or a crash).
+    cookie_export::delete_all();
     launcher::client_settings::restore(&s.db);
     launcher::flags::restore();
     // Profiles left marked go at the next start (`init`): their browsers may still be exiting now,
@@ -619,7 +680,41 @@ pub(crate) fn set_main_shown(app: &AppHandle, shown: bool) {
     browse::window_shown(app, shown);
 }
 
-/// Closing the main window hides it while `settings.close_to_tray` is on.
+/// What closing the main window does.
+#[derive(Debug, PartialEq)]
+enum Close {
+    /// To the tray (`settings.close_to_tray`).
+    Hide,
+    /// Clients run that RoALT looks after: the page asks whether to quit (`app://close-ask`).
+    Ask,
+    /// Browse closes first, then the window.
+    BrowseFirst,
+    Exit,
+}
+
+fn close_action(to_tray: bool, supervising: bool, browse_open: bool) -> Close {
+    match (to_tray, supervising, browse_open) {
+        (true, ..) => Close::Hide,
+        (_, true, _) => Close::Ask,
+        (_, _, true) => Close::BrowseFirst,
+        _ => Close::Exit,
+    }
+}
+
+/// Quitting would stop something RoALT does for running clients: rejoin, restart, anti-AFK or
+/// Discord alerts (and their CPU caps are lifted).
+fn supervising(s: &App, v: &model::Settings) -> bool {
+    s.tracker.any_running() && (v.auto_rejoin || v.auto_restart_on_crash || !s.tracker.afk_clients().is_empty() || discord::configured(s))
+}
+
+/// The main window to the tray, as closing it does with `settings.close_to_tray` on.
+pub(crate) fn hide_main(window: &tauri::Window) {
+    if let Err(e) = window.hide() {
+        log::warn!("could not hide the main window to the tray: {e}");
+    }
+    set_main_shown(window.app_handle(), false);
+}
+
 fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
     // Minimizing and restoring send a resize. Its size can't tell: Tauri reports the page's, not 0 × 0.
     if let WindowEvent::Resized(_) = event
@@ -637,16 +732,21 @@ fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
     if let WindowEvent::CloseRequested { api, .. } = event
         && window.label() == "main"
     {
-        let to_tray = window.try_state::<App>().is_some_and(|s| {
-            s.db.settings().inspect_err(|e| log::debug!("close: could not read settings, exiting: {e}")).is_ok_and(|v| v.close_to_tray)
-        });
-        if to_tray {
-            api.prevent_close();
-            if let Err(e) = window.hide() {
-                log::warn!("could not hide the main window to the tray: {e}");
+        let (to_tray, watching) = window.try_state::<App>().map_or((false, false), |s| {
+            match s.db.settings().inspect_err(|e| log::debug!("close: could not read settings, exiting: {e}")) {
+                Ok(v) => (v.close_to_tray, supervising(&s, &v)),
+                Err(_) => (false, false),
             }
-            set_main_shown(window.app_handle(), false);
-        } else if browse::is_open() {
+        });
+        let action = close_action(to_tray, watching, browse::is_open());
+        if action == Close::Hide {
+            api.prevent_close();
+            hide_main(window);
+        } else if action == Close::Ask {
+            api.prevent_close();
+            tray::show_main(window.app_handle());
+            let _ = window.emit("app://close-ask", ());
+        } else if action == Close::BrowseFirst {
             // Browse is a child of this window: closing it would take Browse's page (and the newest
             // cookie in it) along before it could be kept. Browse closes first, then the window.
             api.prevent_close();
@@ -695,17 +795,14 @@ fn main() {
                 .rotation_strategy(RotationStrategy::KeepSome(5))
                 .build(),
         )
-        // The global shortcuts RoALT registers: the clip key (`settings.clip_hotkey`, while an
-        // account is picked) saves a clip; the panic hotkey (`settings.panic_hotkey`) kills all.
+        // The global shortcuts RoALT registers: the panic hotkey (`settings.panic_hotkey`) kills all.
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, key, e| {
                     if e.state != ShortcutState::Pressed {
                         return;
                     }
-                    if clips::is_key(key) {
-                        clips::save(app);
-                    } else if commands::is_panic_key(key) {
+                    if commands::is_panic_key(key) {
                         tray::kill_all(app);
                     } else if let Some(id) = hotkeys::id_of(key) {
                         tray::on_menu(app, &id);
@@ -713,13 +810,6 @@ fn main() {
                 })
                 .build(),
         )
-        // Clips for the Clips view's player: only the main window, only files in Videos\RoALT.
-        .register_asynchronous_uri_scheme_protocol("clip", |ctx, request, responder| {
-            if ctx.webview_label() != "main" {
-                return responder.respond(clips::serve::refuse(403));
-            }
-            std::thread::spawn(move || responder.respond(clips::serve::clip(&request)));
-        })
         // "main" is restored by `splash::start`, which shows it small first.
         .plugin(tauri_plugin_window_state::Builder::new().with_filter(|label| label == "main").skip_initial_state("main").build())
         .plugin(tauri_plugin_opener::init())
@@ -774,14 +864,6 @@ fn main() {
             commands::take_pending_link,
             commands::market_items,
             commands::asset_thumbnails,
-            commands::clips_status,
-            commands::clips_save,
-            commands::clips_list,
-            commands::clips_rename,
-            commands::clips_delete,
-            commands::clips_reveal,
-            commands::clips_open_folder,
-            commands::clips_folder,
             commands::mods_list,
             commands::mods_import,
             commands::mods_export,
@@ -803,8 +885,10 @@ fn main() {
             commands::instances_close_all,
             commands::instances_clear_ended,
             commands::instance_set_limits,
+            commands::instances_apply_limits,
             commands::instance_trim,
             commands::instance_set_anti_afk,
+            commands::instance_take_control,
             commands::instances_metrics,
             commands::system_usage,
             commands::instance_stop_relaunch,
@@ -823,6 +907,8 @@ fn main() {
             commands::multi_instance_set,
             commands::multi_instance_take_over,
             commands::roblox_close_all,
+            commands::window_to_tray,
+            commands::app_quit,
             commands::panic_kill,
             commands::crashes_list,
             commands::diagnostics_text,
@@ -868,31 +954,15 @@ fn main() {
             commands::shutdown_cancel,
             commands::shutdown_status,
             commands::private_servers_list,
-            commands::private_server_get,
-            commands::private_server_update,
-            commands::private_server_renew,
-            commands::private_server_buy,
-            commands::outfits_list,
-            commands::outfit_wear,
-            commands::outfit_save,
-            commands::outfit_rename,
-            commands::outfit_delete,
-            commands::trades_list,
-            commands::trade_details,
-            commands::trade_accept,
-            commands::trade_decline,
-            commands::friend_requests_list,
-            commands::friend_request_answer,
-            commands::friend_requests_decline_all,
             commands::robux_transactions,
             commands::robux_totals,
-            commands::private_servers_owned,
             commands::playtime_days,
             commands::crashes_export,
             commands::playtime_export,
             commands::groups_list,
             commands::group_save,
             commands::group_remove,
+            commands::group_clear_overrides,
             commands::backup_export,
             commands::backup_import,
             commands::performance_profile,
@@ -944,6 +1014,14 @@ mod tests {
     fn touch(path: &Path) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, b"x").unwrap();
+    }
+
+    #[test]
+    fn closing_asks_only_while_clients_are_looked_after() {
+        assert_eq!(close_action(true, true, true), Close::Hide, "the tray setting wins");
+        assert_eq!(close_action(false, true, true), Close::Ask);
+        assert_eq!(close_action(false, false, true), Close::BrowseFirst);
+        assert_eq!(close_action(false, false, false), Close::Exit);
     }
 
     fn json(data_dir: &Path, moved_from: Option<&Path>) -> String {

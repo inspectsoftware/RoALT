@@ -58,10 +58,12 @@ export function Step({ className = "", children }: { className?: string; childre
 }
 
 /** `group`: the group open in Accounts, offered as the one new accounts go into. `onAdded` is told
- * the group the account was put in (null: none). */
-export function AddAccountDialog({ open, startOn = "login", group = null, onClose, onAdded }: {
+ * the group the account was put in (null: none). `firstRun`: hides the advanced cookie/bulk tabs
+ * behind a toggle when opened on the default Sign-in tab so new users aren't met with cookie jargon. */
+export function AddAccountDialog({ open, startOn = "login", firstRun = false, group = null, onClose, onAdded }: {
   open: boolean;
   startOn?: Tab;
+  firstRun?: boolean;
   group?: number | null;
   onClose: () => void;
   onAdded: (a: AccountSummary, group: number | null) => void;
@@ -85,15 +87,19 @@ export function AddAccountDialog({ open, startOn = "login", group = null, onClos
     for (const a of await api.accountsList()) if (!had.has(a.id)) await file(a);
   };
   const [tab, setTab] = useState<Tab>(startOn);
+  const [showAdvanced, setShowAdvanced] = useState(!firstRun || startOn !== "login");
   const [direction, setDirection] = useState<1 | -1>(1);
   const [error, setError] = useState<string | null>(null);
+  const [failures, setFailures] = useState<string[]>([]);
   // While rendering, not in an effect: Dialog focuses a field of the panel that shows when it opens.
   const [wasOpen, setWasOpen] = useState(open);
   if (open !== wasOpen) {
     setWasOpen(open);
     if (open) {
       setTab(startOn);
+      setShowAdvanced(!firstRun || startOn !== "login");
       setError(null);
+      setFailures([]);
       setInto(group === null ? "" : String(group));
     }
   }
@@ -113,6 +119,7 @@ export function AddAccountDialog({ open, startOn = "login", group = null, onClos
     setCookie("");
     setMany("");
     setError(null);
+    setFailures([]);
     // Closed mid-import: no more sign-in windows, and the open one goes.
     if (!stop.current) {
       stop.current = true;
@@ -124,6 +131,7 @@ export function AddAccountDialog({ open, startOn = "login", group = null, onClos
     setDirection(TABS.indexOf(next) > TABS.indexOf(tab) ? 1 : -1);
     setTab(next);
     setError(null);
+    setFailures([]);
   };
 
   const added = async (a: AccountSummary) => {
@@ -176,18 +184,21 @@ export function AddAccountDialog({ open, startOn = "login", group = null, onClos
       r.failed && t("accounts.add.importFailed", { count: r.failed }),
     ].filter((p): p is string => !!p);
     const text = t("accounts.add.importResult", { list: fmtList(parts) });
-    if (r.added + r.updated > 0) {
+    if (r.added + r.updated > 0 && r.failed === 0) {
       toast(text);
       onClose();
     } else {
-      // The dialog stays: the outcome shows in it, as a toast would sit under its backdrop.
+      // Keep the dialog open whenever any entry failed so the user can see which lines failed.
+      if (r.added + r.updated > 0) toast(text);
       setError(text);
+      setFailures(r.failures ?? []);
     }
   };
 
   /** Pasted lists and Roblox Account Manager files both go one cookie at a time. */
   async function runImport(run: () => Promise<ImportReport>) {
     setError(null);
+    setFailures([]);
     setBusy(true);
     try {
       const had = await known();
@@ -209,7 +220,7 @@ export function AddAccountDialog({ open, startOn = "login", group = null, onClos
     const logins = parseLogins(value);
     runImport(async () => {
       // Cookies first (also what says "nothing found" when there is neither), then the sign-ins.
-      const r = value.includes(COOKIE_MARK) || !logins.length ? await api.accountsImportCookies(value) : { added: 0, updated: 0, skipped: 0, failed: 0, settings: null };
+      const r = value.includes(COOKIE_MARK) || !logins.length ? await api.accountsImportCookies(value) : { added: 0, updated: 0, skipped: 0, failed: 0, settings: null, failures: [] };
       return logins.length ? signInEach(logins, r) : r;
     });
   }
@@ -218,7 +229,7 @@ export function AddAccountDialog({ open, startOn = "login", group = null, onClos
    * (captcha, Log In) or closes it to skip. Stop ends it after the open one. */
   async function signInEach(logins: Login[], r: ImportReport) {
     const had = new Set((qc.getQueryData<AccountSummary[]>(qk.accounts) ?? []).map((a) => a.id));
-    let refused: string | null = null;
+    const list = [...(r.failures ?? [])];
     stop.current = false;
     try {
       for (const [i, fill] of logins.entries()) {
@@ -233,7 +244,7 @@ export function AddAccountDialog({ open, startOn = "login", group = null, onClos
           if (err.kind === "locked") throw e;
           if (err.kind !== "cancelled") {
             r.failed++;
-            refused = friendly(err);
+            list.push(`${fill.username}: ${friendly(err)}`);
           }
         }
       }
@@ -241,8 +252,7 @@ export function AddAccountDialog({ open, startOn = "login", group = null, onClos
       stop.current = true;
       setQueue(null);
     }
-    if (refused) toast(refused, "error");
-    return r;
+    return { ...r, failures: list };
   }
 
   const stopQueue = () => {
@@ -260,9 +270,16 @@ export function AddAccountDialog({ open, startOn = "login", group = null, onClos
   }
 
   const alert = error && (
-    <p role="alert" className="alert">
-      {error}
-    </p>
+    <div role="alert" className="flex flex-col gap-1.5">
+      <p className="alert">{error}</p>
+      {failures.length > 0 && (
+        <ul className="well p-2.5 max-h-32 overflow-auto scroll text-[12px] text-fg-2 flex flex-col gap-1">
+          {failures.map((f, i) => (
+            <li key={i} className="break-words">{f}</li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
   const secret = { autoComplete: "off", autoCorrect: "off", autoCapitalize: "off", spellCheck: false } as const;
 
@@ -270,16 +287,18 @@ export function AddAccountDialog({ open, startOn = "login", group = null, onClos
     <Dialog open={open} onClose={onClose} title={t("accounts.add.dialogTitle")} width={520}>
       <div className="dlg-body flex flex-col items-start gap-3 pb-1">
         <p className="-mt-1 text-[13px] text-fg-3">{t("accounts.add.staysHere")}</p>
-        <Segmented
-          label={t("accounts.add.how")}
-          value={tab}
-          onChange={pick}
-          options={[
-            { value: "login", label: t("accounts.add.tabLogin") },
-            { value: "cookie", label: t("accounts.add.tabCookie") },
-            { value: "many", label: t("accounts.add.tabMany") },
-          ]}
-        />
+        {showAdvanced && (
+          <Segmented
+            label={t("accounts.add.how")}
+            value={tab}
+            onChange={pick}
+            options={[
+              { value: "login", label: t("accounts.add.tabLogin") },
+              { value: "cookie", label: t("accounts.add.tabCookie") },
+              { value: "many", label: t("accounts.add.tabMany") },
+            ]}
+          />
+        )}
         {groups.length > 0 && (
           <label className="flex items-center gap-2 text-[13px] text-fg-2">
             {t("accounts.addToGroup")}
@@ -309,6 +328,13 @@ export function AddAccountDialog({ open, startOn = "login", group = null, onClos
                 </Button>
               )}
             </Morph>
+            {!showAdvanced && !waiting && (
+              <div className="flex justify-start">
+                <Button size="sm" variant="ghost" onClick={() => setShowAdvanced(true)}>
+                  {t("accounts.add.moreWays")}
+                </Button>
+              </div>
+            )}
             {alert}
           </Step>
         ) : tab === "cookie" ? (

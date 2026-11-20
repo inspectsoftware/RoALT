@@ -9,6 +9,7 @@ import { Icon } from "../../ui/Icon";
 import { toastError } from "../../ui/Toast";
 import { ago } from "../accounts/shared";
 import { SPONSOR_LINK } from "../donate/links";
+import { jumpTo } from "../settings/jumpTo";
 import { useUpdateInstall, useUpdateOffer } from "../settings/UpdateBanner";
 import { markRead, useNewsFeed, type FeedItem } from "./news";
 import { releaseNotes } from "./notes";
@@ -134,7 +135,7 @@ function Row({ item, now }: { item: FeedItem; now: number }) {
 /** Home's News tab: RoALT's newest release up front, then everything, newest first, by source.
  * Leaving it marks what it showed as read. */
 export function NewsView() {
-  const { items, unread, failed, query } = useNewsFeed();
+  const { items, unread, failed, query, off } = useNewsFeed();
   // Asked for only while the switch is on; no sponsor (or none read) shows nothing. Off hides one
   // already read too: Settings › About asks for the supporters' names with the same answer.
   const showSponsor = useSettings().data?.showSponsor ?? false;
@@ -152,6 +153,19 @@ export function NewsView() {
       leaving = window.setTimeout(() => markRead(ids));
     };
   }, []);
+
+  if (off) {
+    return (
+      <section aria-labelledby="news-title" className="flex flex-col gap-5 min-w-0">
+        <h1 id="news-title" className="page-title">{t("news.tab")}</h1>
+        <div className="panel empty">
+          <Icon name="info" size={22} className="text-fg-3" />
+          <p>{t("news.off")}</p>
+          <Button size="md" onClick={() => jumpTo("news")}>{t("news.turnOn")}</Button>
+        </div>
+      </section>
+    );
+  }
 
   const lead = items.find((i) => i.source === "roalt");
   const feed = items.filter((i) => i !== lead && (filter === "all" || i.source === filter));

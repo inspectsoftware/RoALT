@@ -4,6 +4,7 @@ import type { AntiAfk } from "./AntiAfk";
 import type { BackgroundMotion } from "./BackgroundMotion";
 import type { Density } from "./Density";
 import type { DiscordEvents } from "./DiscordEvents";
+import type { DiscordRpc } from "./DiscordRpc";
 import type { FlagScope } from "./FlagScope";
 import type { Look } from "./Look";
 import type { MemThrottle } from "./MemThrottle";
@@ -36,7 +37,12 @@ backgroundDim: number, backgroundMotion: BackgroundMotion, density: Density,
 /**
  * Master-password mode only.
  */
-autoLockMinutes: number, clipboardClearSeconds: number, 
+autoLockMinutes: number, 
+/**
+ * Master-password mode only: lock when Windows locks or goes to sleep (`session`), unless
+ * running clients hold the vault open (`vault_held_open`).
+ */
+lockOnSessionLock: boolean, clipboardClearSeconds: number, 
 /**
  * How long account info is reused before Roblox is asked again.
  */
@@ -152,6 +158,11 @@ selfUpdate: boolean,
  */
 discordPresence: boolean, 
 /**
+ * What Discord rich presence shows (`rpc`): game name, alt count, elapsed timer, buttons,
+ * and optional custom lines.
+ */
+discordRpc: DiscordRpc, 
+/**
  * Ping RoALT's online counter every few minutes (it says how often) with a random id made once per launch, and
  * show how many people use RoALT beside the Discord button (`online`). Off: nothing is sent.
  */
@@ -167,7 +178,13 @@ restartEveryH: number,
  */
 closeAfterH: number, 
 /**
- * Show the sponsor's card in Home's News (`extras`, read from roalt.dev). Off: News asks for nothing.
+ * Home's News tab: RoALT's releases on GitHub, the Roblox DevForum and Roblox's newsroom, every
+ * 30 minutes while shown (`news`). Off: none of them is asked.
+ */
+news: boolean, 
+/**
+ * Show the sponsor's card in Home's News (`extras`, read from roalt.dev). Off: roalt.dev isn't
+ * asked for it (Settings › About still reads the supporters' names).
  */
 showSponsor: boolean, 
 /**
@@ -225,7 +242,7 @@ customFlags: { [key in string]: string },
 customFlagsScope: FlagScope, 
 /**
  * Browse refuses anything that spends Robux (free items still work) and the Robux, Premium and
- * billing pages (`browse`); RoALT's own private server purchase is refused too. On by default.
+ * billing pages (`browse`). On by default.
  */
 lockPurchases: boolean, 
 /**
@@ -254,15 +271,7 @@ modsOn: boolean,
  */
 modsAck: boolean, 
 /**
- * The account whose client Clips record (`clips`); None: Clips are off. It counts as Full
- * quality, so its clips aren't tiny, minimized, muted or capped.
+ * The first-run setup was finished or skipped (the UI shows it while this is off and there
+ * are no accounts).
  */
-clipAccount: number | null, 
-/**
- * Saves the last `clip_seconds` as a clip; registered only while an account is picked.
- */
-clipHotkey: string, 
-/**
- * 15, 30, 60 or 120.
- */
-clipSeconds: number, };
+onboarded: boolean, };

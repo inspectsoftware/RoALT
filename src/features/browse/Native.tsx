@@ -201,7 +201,7 @@ function PlaytimeDays({ accounts }: { accounts: AccountSummary[] }) {
               aria-label={t("monitor.account")}
               value={picked}
               onChange={setOnly}
-              options={[{ value: "", label: t("trades.allAccounts") }, ...had.map((a) => ({ value: String(a.id), label: accountName(a) }))]}
+              options={[{ value: "", label: t("common.allAccounts") }, ...had.map((a) => ({ value: String(a.id), label: accountName(a) }))]}
             />
           )}
           <Button size="sm" variant="ghost" icon="download" onClick={() => void exportCsv("RoALT-playtime", api.playtimeExport)}>

@@ -75,8 +75,21 @@ pub fn prepare(s: &App, exe: ClientExe, self_updates: bool) -> (ClientExe, Optio
         return (exe, skip(tr!("RoALT can't tell which Roblox version this is.")));
     };
     match copy_for(&runtime, &exe.path, &version, &mods, &running()) {
-        Ok(path) => {
-            set_last(ModsLast { applied: true, note: version });
+        Ok((path, stats)) => {
+            if stats.matched == 0 && stats.unmatched > 0 {
+                let why = tr!("{version} — no mod files matched this Roblox version", version = version);
+                set_last(ModsLast { applied: false, note: why });
+            } else if stats.unmatched > 0 {
+                let note = trn!(
+                    stats.unmatched,
+                    "{version} ({n} file didn't match this Roblox version)",
+                    "{version} ({n} files didn't match this Roblox version)",
+                    version = version
+                );
+                set_last(ModsLast { applied: true, note });
+            } else {
+                set_last(ModsLast { applied: true, note: version });
+            }
             (ClientExe { path, bootstrapper: false }, None)
         }
         Err(e) => {
@@ -86,49 +99,66 @@ pub fn prepare(s: &App, exe: ClientExe, self_updates: bool) -> (ClientExe, Optio
     }
 }
 
-#[derive(Serialize)]
-struct Marker<'a> {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct MatchStats {
+    matched: usize,
+    unmatched: usize,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Marker {
     source: String,
-    version: &'a str,
-    mods: Vec<&'a str>,
+    version: String,
+    mods: Vec<String>,
+    #[serde(default)]
+    stats: MatchStats,
 }
 
 /// The exe in a copy under `runtime` of `source_exe`'s folder with `mods` (top first) laid over:
 /// one that matches, else a new one. Then the user's own flag file goes in, and every other copy
 /// no `running` client started from is deleted.
-fn copy_for(runtime: &Path, source_exe: &Path, version: &str, mods: &[(String, PathBuf)], running: &[PathBuf]) -> Result<PathBuf> {
+fn copy_for(runtime: &Path, source_exe: &Path, version: &str, mods: &[(String, PathBuf)], running: &[PathBuf]) -> Result<(PathBuf, MatchStats)> {
     let source = source_exe.parent().ok_or_else(|| AppError::Internal("no folder".into()))?;
-    let marker = serde_json::to_string(&Marker { source: source.display().to_string(), version, mods: mods.iter().map(|(id, _)| id.as_str()).collect() })
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let source_str = source.display().to_string();
+    let mod_ids: Vec<String> = mods.iter().map(|(id, _)| id.clone()).collect();
     std::fs::create_dir_all(runtime)?;
-    let reuse = std::fs::read_dir(runtime)?.flatten().map(|e| e.path()).find(|d| {
-        !d.to_string_lossy().ends_with(".partial")
-            && std::fs::read_to_string(d.join(MARKER)).is_ok_and(|m| m == marker)
-            && d.join("Versions").join(version).join(PLAYER).is_file()
-    });
-    let copy = match reuse {
-        Some(d) => {
-            log::info!("mods: reusing the copy {}", d.display());
-            d
+    let reuse = std::fs::read_dir(runtime)?.flatten().map(|e| e.path()).find_map(|d| {
+        if d.to_string_lossy().ends_with(".partial") || !d.join("Versions").join(version).join(PLAYER).is_file() {
+            return None;
         }
-        None => build(runtime, source, version, mods, &marker)?,
+        let m: Marker = serde_json::from_str(&std::fs::read_to_string(d.join(MARKER)).ok()?).ok()?;
+        (m.source == source_str && m.version == version && m.mods == mod_ids).then_some((d, m.stats))
+    });
+    let (copy, stats) = match reuse {
+        Some((d, stats)) => {
+            log::info!("mods: reusing the copy {}", d.display());
+            (d, stats)
+        }
+        None => build(runtime, source, version, mods, &source_str, &mod_ids)?,
     };
     let vdir = copy.join("Versions").join(version);
     fresh_client_settings(source, &vdir)?;
     prune(runtime, &copy, running);
-    Ok(vdir.join(PLAYER))
+    Ok((vdir.join(PLAYER), stats))
 }
 
-fn build(runtime: &Path, source: &Path, version: &str, mods: &[(String, PathBuf)], marker: &str) -> Result<PathBuf> {
+fn build(runtime: &Path, source: &Path, version: &str, mods: &[(String, PathBuf)], source_str: &str, mod_ids: &[String]) -> Result<(PathBuf, MatchStats)> {
     let id = uuid::Uuid::new_v4().to_string();
     let partial = runtime.join(format!("{id}.partial"));
     let done = (|| {
-        let (linked, copied, modded) = lay(source, mods, &partial.join("Versions").join(version))?;
+        let (linked, copied, modded, stats) = lay(source, mods, &partial.join("Versions").join(version))?;
+        let marker = serde_json::to_string(&Marker { source: source_str.to_owned(), version: version.to_owned(), mods: mod_ids.to_vec(), stats })
+            .map_err(|e| AppError::Internal(e.to_string()))?;
         std::fs::write(partial.join(MARKER), marker)?;
         let copy = runtime.join(&id);
         crate::launcher::client_settings::retry(|| std::fs::rename(&partial, &copy))?;
-        log::info!("mods: built {} ({linked} linked, {copied} copied, {modded} from mods)", copy.display());
-        Ok(copy)
+        log::info!(
+            "mods: built {} ({linked} linked, {copied} copied, {modded} from mods: {} matched, {} unmatched)",
+            copy.display(),
+            stats.matched,
+            stats.unmatched
+        );
+        Ok((copy, stats))
     })();
     if done.is_err() {
         let _ = std::fs::remove_dir_all(&partial);
@@ -144,14 +174,19 @@ enum From {
 
 /// Fills the empty `dest` with `source`'s files and the mods' (bottom mod first, so the top one
 /// wins). Every path is decided before anything is written, and each file is written once to a
-/// new path: a mod's file is never written over a link to Roblox's. (linked, copied, modded).
-fn lay(source: &Path, mods: &[(String, PathBuf)], dest: &Path) -> Result<(usize, usize, usize)> {
+/// new path: a mod's file is never written over a link to Roblox's. (linked, copied, modded, stats).
+fn lay(source: &Path, mods: &[(String, PathBuf)], dest: &Path) -> Result<(usize, usize, usize, MatchStats)> {
     let mut map: std::collections::BTreeMap<String, (String, From)> = std::collections::BTreeMap::new();
+    let mut roblox_keys = std::collections::HashSet::new();
     for rel in pack::files_in(source, MAX_SOURCE_FILES)? {
         if !rel.to_ascii_lowercase().starts_with("clientsettings/") {
-            map.insert(rel.to_ascii_lowercase(), (rel, From::Roblox));
+            let key = rel.to_ascii_lowercase();
+            roblox_keys.insert(key.clone());
+            map.insert(key, (rel, From::Roblox));
         }
     }
+    let mut matched_keys = std::collections::HashSet::new();
+    let mut unmatched_keys = std::collections::HashSet::new();
     for (i, (id, dir)) in mods.iter().enumerate().rev() {
         for rel in pack::files_in(dir, pack::MAX_FILES + 1)? {
             if rel.eq_ignore_ascii_case(META_FILE) {
@@ -162,10 +197,16 @@ fn lay(source: &Path, mods: &[(String, PathBuf)], dest: &Path) -> Result<(usize,
                 continue;
             }
             let key = rel.to_ascii_lowercase();
+            if roblox_keys.contains(&key) {
+                matched_keys.insert(key.clone());
+            } else {
+                unmatched_keys.insert(key.clone());
+            }
             let path = map.get(&key).map_or(rel, |(roblox, _)| roblox.clone());
             map.insert(key, (path, From::Mod(i)));
         }
     }
+    let stats = MatchStats { matched: matched_keys.len(), unmatched: unmatched_keys.len() };
     let (mut linked, mut copied, mut modded) = (0, 0, 0);
     let mut why_copied = None;
     for (rel, from) in map.values() {
@@ -195,7 +236,7 @@ fn lay(source: &Path, mods: &[(String, PathBuf)], dest: &Path) -> Result<(usize,
         log::info!("mods: {copied} of Roblox's files copied instead of linked ({e})");
     }
     std::fs::create_dir_all(dest.join("ClientSettings"))?;
-    Ok((linked, copied, modded))
+    Ok((linked, copied, modded, stats))
 }
 
 /// Copies to a path nothing is at (never through a link).
@@ -294,7 +335,8 @@ mod tests {
         ro.set_readonly(true);
         std::fs::set_permissions(&sky, ro).unwrap();
 
-        let exe = copy_for(&f.runtime, &f.exe, V, &f.mods, &[]).unwrap();
+        let (exe, stats) = copy_for(&f.runtime, &f.exe, V, &f.mods, &[]).unwrap();
+        assert_eq!(stats, MatchStats { matched: 1, unmatched: 1 }, "sky matched Roblox, textures/new.png did not");
         let vdir = exe.parent().unwrap();
         assert_eq!(crate::launcher::update::installed_version(&exe).as_deref(), Some(V));
         assert_eq!(std::fs::read(vdir.join("content/sky/sky512_bk.tex")).unwrap(), b"DDS top sky", "top mod wins");
@@ -309,13 +351,13 @@ mod tests {
         std::fs::write(vdir.join("ClientSettings/ClientAppSettings.json"), b"{}").unwrap();
         assert_eq!(std::fs::read(f.exe.with_file_name("ClientSettings").join("ClientAppSettings.json")).unwrap(), br#"{"DFIntUser":"1"}"#);
 
-        // Same mods: the same copy, its flag file fresh again.
-        assert_eq!(copy_for(&f.runtime, &f.exe, V, &f.mods, &[]).unwrap(), exe);
+        // Same mods: the same copy, its flag file fresh again, and match stats preserved.
+        assert_eq!(copy_for(&f.runtime, &f.exe, V, &f.mods, &[]).unwrap(), (exe.clone(), stats));
         assert_eq!(std::fs::read(vdir.join("ClientSettings/ClientAppSettings.json")).unwrap(), br#"{"DFIntUser":"1"}"#);
 
         // Other mods while a client runs from the first copy: a new copy, the first one kept.
         let one = f.mods[1..].to_vec();
-        let second = copy_for(&f.runtime, &f.exe, V, &one, std::slice::from_ref(&exe)).unwrap();
+        let (second, _) = copy_for(&f.runtime, &f.exe, V, &one, std::slice::from_ref(&exe)).unwrap();
         assert_ne!(second, exe);
         assert!(exe.is_file(), "a copy a running client started from is kept");
         assert_eq!(std::fs::read(second.with_file_name("content").join("sky").join("sky512_bk.tex")).unwrap(), b"DDS low sky");
@@ -337,14 +379,15 @@ mod tests {
         let partial = f.runtime.join("dead.partial");
         let marker = serde_json::to_string(&Marker {
             source: f.exe.parent().unwrap().display().to_string(),
-            version: V,
-            mods: f.mods.iter().map(|(id, _)| id.as_str()).collect(),
+            version: V.into(),
+            mods: f.mods.iter().map(|(id, _)| id.clone()).collect(),
+            stats: MatchStats::default(),
         })
         .unwrap();
         write(&partial.join(MARKER), marker.as_bytes());
         write(&partial.join("Versions").join(V).join(PLAYER), b"MZ half");
         write(&f.runtime.join("cut").join("Versions").join(V).join(PLAYER), b"MZ cut");
-        let exe = copy_for(&f.runtime, &f.exe, V, &f.mods, &[]).unwrap();
+        let (exe, _) = copy_for(&f.runtime, &f.exe, V, &f.mods, &[]).unwrap();
         assert!(!super::super::inside(&exe, &partial) && !super::super::inside(&exe, &f.runtime.join("cut")));
         assert!(!partial.exists() && !f.runtime.join("cut").exists(), "left-overs are swept");
         std::fs::remove_dir_all(&f.base).unwrap();

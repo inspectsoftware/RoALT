@@ -8,4 +8,8 @@ failed: number,
 /**
  * A backup's settings were asked for and it had some: whether they were applied.
  */
-settings: boolean | null, };
+settings: boolean | null, 
+/**
+ * Secret-free description of each failed entry (e.g. `"Cookie #3: ..."` or `"user: ..."`).
+ */
+failures: Array<string>, };

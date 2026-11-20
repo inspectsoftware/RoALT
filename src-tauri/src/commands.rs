@@ -41,7 +41,8 @@ pub fn vault_status(s: State<'_, App>) -> Result<VaultStatus> {
 #[tauri::command]
 pub async fn vault_unlock(app: AppHandle, s: State<'_, App>, password: String) -> Result<()> {
     let rec = s.db.vault_record()?.ok_or(AppError::Internal("vault record missing".into()))?;
-    s.vault.unlock(&rec, &password)?;
+    let handle = app.clone();
+    blocking(move || handle.state::<App>().vault.unlock(&rec, &password)).await??;
     after_unlock(&app, &s);
     Ok(())
 }
@@ -57,24 +58,35 @@ fn after_unlock(app: &AppHandle, s: &App) {
 #[tauri::command]
 pub async fn vault_recover(app: AppHandle, s: State<'_, App>, code: String, new_password: String) -> Result<String> {
     let recovery = s.db.recovery_record()?.ok_or(AppError::WrongPassword)?;
-    let (rec, new_code, new_recovery) = crate::vault::recover(&recovery, &code, &new_password)?;
-    s.db.save_vault_and_recovery(&rec, &new_recovery)?;
-    s.vault.unlock(&rec, &new_password)?;
+    let handle = app.clone();
+    let new_code = blocking(move || -> Result<String> {
+        let s = handle.state::<App>();
+        let (rec, new_code, new_recovery) = crate::vault::recover(&recovery, &code, &new_password)?;
+        s.db.save_vault_and_recovery(&rec, &new_recovery)?;
+        s.vault.unlock(&rec, &new_password)?;
+        Ok(new_code.expose().to_owned())
+    })
+    .await??;
     after_unlock(&app, &s);
-    Ok(new_code.expose().to_owned())
+    Ok(new_code)
 }
 
 /// A new recovery code, shown once by the UI. Replaces (revokes) the one before.
 #[tauri::command]
-pub async fn vault_recovery_create(s: State<'_, App>, current_password: String) -> Result<String> {
+pub async fn vault_recovery_create(app: AppHandle, s: State<'_, App>, current_password: String) -> Result<String> {
     let rec = s.db.vault_record()?.ok_or(AppError::Internal("vault record missing".into()))?;
     if rec.mode != VaultMode::Master {
         return Err(AppError::Invalid(tr!("No master password is set.")));
     }
-    s.vault.check_password(&rec, &current_password)?;
-    let (code, recovery) = s.vault.seal_recovery()?;
-    s.db.save_recovery_record(&recovery)?;
-    Ok(code.expose().to_owned())
+    let handle = app.clone();
+    blocking(move || -> Result<String> {
+        let s = handle.state::<App>();
+        s.vault.check_password(&rec, &current_password)?;
+        let (code, recovery) = s.vault.seal_recovery()?;
+        s.db.save_recovery_record(&recovery)?;
+        Ok(code.expose().to_owned())
+    })
+    .await?
 }
 
 /// What a saved code file says. Refuses anything but a code, so the command that writes it can't
@@ -128,9 +140,36 @@ pub async fn vault_set_mode(
     if rec.mode == VaultMode::Dpapi && mode == VaultMode::Master && crate::vault::hello_available().await {
         reauth(&app, &s, None, &tr!("Confirm it's you to set a master password.")).await?;
     }
-    let new_rec = s.vault.rewrap(&rec, mode, current_password.as_deref(), new_password.as_deref())?;
-    s.db.save_vault_record(&new_rec)?;
-    s.vault.set_mode(mode);
+    let handle = app.clone();
+    blocking(move || -> Result<()> {
+        let s = handle.state::<App>();
+        if rec.mode == VaultMode::Dpapi && mode == VaultMode::Master {
+            // Rotate the 256-bit data key when upgrading from DPAPI to Master so a previously
+            // captured DPAPI wrap can no longer decrypt secrets after the switch.
+            let (new_key, new_rec) = s.vault.prepare_master_rotation(new_password.as_deref())?;
+            let cookies: Vec<(i64, Vec<u8>)> = s
+                .db
+                .all_account_cookies()?
+                .into_iter()
+                .map(|(id, user_id, blob)| Ok((id, s.vault.reencrypt_with_key(&new_key, &cookie_aad(user_id), &blob)?)))
+                .collect::<Result<_>>()?;
+            let favourites: Vec<(i64, Vec<u8>)> = s
+                .db
+                .favourites()?
+                .into_iter()
+                .map(|row| Ok((row.id, s.vault.reencrypt_with_key(&new_key, FAVOURITE_AAD, &row.target)?)))
+                .collect::<Result<_>>()?;
+            let webhook_hex = crate::discord::reencrypt_webhook(&s, &new_key)?;
+            s.db.commit_key_rotation(&new_rec, &cookies, &favourites, webhook_hex.as_deref())?;
+            s.vault.commit_rotation(new_key, VaultMode::Master);
+        } else {
+            let new_rec = s.vault.rewrap(&rec, mode, current_password.as_deref(), new_password.as_deref())?;
+            s.db.save_vault_record(&new_rec)?;
+            s.vault.set_mode(mode);
+        }
+        Ok(())
+    })
+    .await??;
     crate::tray::refresh(&app);
     Ok(())
 }
@@ -277,8 +316,14 @@ async fn import_cookies(app: &AppHandle, s: &App, cookies: Vec<(Secret, ImportEx
             }
             Err(AppError::Locked) => return Err(AppError::Locked),
             Err(e) => {
-                log::info!("import: a cookie was refused: {e}");
+                log::info!("import: entry #{} was refused: {e}", i + 1);
                 report.failed += 1;
+                let who = if !extras.alias.trim().is_empty() {
+                    extras.alias.trim().to_owned()
+                } else {
+                    tr!("Line {n}", n = i + 1)
+                };
+                report.failures.push(format!("{who}: {}", e.message()));
             }
         }
     }
@@ -440,16 +485,6 @@ pub fn accounts_remove(app: AppHandle, s: State<'_, App>, ids: Vec<i64>) -> Resu
     unlocked(&s)?;
     not_too_many(&ids)?;
     s.db.remove_accounts(&ids)?;
-    // The picked Clips account gone: Clips off, and its key freed.
-    let mut v = s.db.settings()?;
-    if v.clip_account.is_some_and(|a| ids.contains(&a)) {
-        let had = clip_key(&v).to_owned();
-        v.clip_account = None;
-        s.db.save_settings(&v)?;
-        if let Err(e) = set_clip_hotkey(&app, &had, "") {
-            log::warn!("could not free the clip key: {e}");
-        }
-    }
     accounts_changed(&app);
     // Off this thread: Browse, open as one of them, closes first, and removal retries for seconds.
     let dir = s.data_dir.clone();
@@ -524,7 +559,9 @@ async fn reauth(app: &AppHandle, s: &App, password: Option<String>, prompt: &str
     match s.vault.mode() {
         VaultMode::Master => {
             let rec = s.db.vault_record()?.ok_or(AppError::Internal("vault record missing".into()))?;
-            s.vault.check_password(&rec, password.as_deref().ok_or(AppError::WrongPassword)?)
+            let pw = password.ok_or(AppError::WrongPassword)?;
+            let handle = app.clone();
+            blocking(move || handle.state::<App>().vault.check_password(&rec, &pw)).await?
         }
         VaultMode::Dpapi => {
             let window = app.get_webview_window("main").ok_or(AppError::Internal("no main window".into()))?;
@@ -1286,10 +1323,14 @@ pub fn self_update_status(s: State<'_, App>) -> AppUpdate {
     crate::self_update::status(&s)
 }
 
-/// Home's News tab: RoALT's releases, the DevForum and Roblox's newsroom (`news`).
+/// Home's News tab: RoALT's releases, the DevForum and Roblox's newsroom (`news`). Nothing is asked
+/// while `settings.news` is off or the settings can't be read.
 #[tauri::command]
-pub async fn news() -> crate::model::News {
-    crate::news::fetch().await
+pub async fn news(s: State<'_, App>) -> Result<crate::model::News> {
+    if !s.db.settings().is_ok_and(|v| v.news) {
+        return Ok(crate::model::News::default());
+    }
+    Ok(crate::news::fetch().await)
 }
 
 /// RoALT's sponsor and its supporters' names, from roalt.dev; empty when it can't be read. The UI
@@ -1585,38 +1626,50 @@ pub async fn data_dir_move(app: AppHandle, s: State<'_, App>, path: String) -> R
         return Err(AppError::Invalid(tr!("Close the sign-in and Roblox browser windows first, then move the data folder.")));
     }
     let target = crate::move_target(&s.data_dir, &path)?;
-    // Only a folder that holds nothing of anyone's: this removes what it inherits for all inside.
-    let empty = std::fs::read_dir(&target).map_or(true, |mut d| d.next().is_none());
-    std::fs::create_dir_all(&target)?;
-    if empty {
-        crate::restrict_to_user(&target);
-    }
-    // In the copy: the exit handler still writes, but to the old database, the next start deletes.
-    s.tracker.persist(&s.db, true);
-    let now = now_ms();
-    if let Err(e) = s.db.add_playtime(&s.tracker.take_playtime(now, true), now) {
-        log::warn!("could not record playtime before the move: {e}");
-    }
-    let location = crate::Location { data_dir: target.clone(), moved_from: Some(s.data_dir.clone()) };
-    let failed = s.db.copy_to(&target.join(crate::DB_FILE), || crate::write_location(&location).map_err(AppError::from));
-    if failed.is_ok() {
-        // An export's 10-minute timer dies with the restart, and the next start sweeps only the new
-        // folder: a cookie file left in the old one would stay there for good.
-        crate::cookie_export::sweep(&s.data_dir);
-        // Not inside copy_to: a restart waits for the exit handler, which needs the database's lock.
-        log::info!("database copied to {}; restarting to use it", target.display());
-        app.request_restart();
-        return Ok(());
-    }
-    // A half-written copy would make a retry to the same folder refused.
-    for f in crate::DB_FILES {
-        if let Err(e) = std::fs::remove_file(target.join(f))
-            && e.kind() != std::io::ErrorKind::NotFound
-        {
-            log::debug!("could not delete the half-written {f}: {e}");
+    let handle = app.clone();
+    let target_for_log = target.clone();
+    blocking(move || -> Result<()> {
+        let s = handle.state::<App>();
+        // Only a folder that holds nothing of anyone's: this removes what it inherits for all inside.
+        let empty = std::fs::read_dir(&target).map_or(true, |mut d| d.next().is_none());
+        std::fs::create_dir_all(&target)?;
+        if empty {
+            crate::restrict_to_user(&target);
         }
-    }
-    failed
+        // In the copy: the exit handler still writes, but to the old database, the next start deletes.
+        s.tracker.persist(&s.db, true);
+        let now = now_ms();
+        if let Err(e) = s.db.add_playtime(&s.tracker.take_playtime(now, true), now) {
+            log::warn!("could not record playtime before the move: {e}");
+        }
+        let location = crate::Location { data_dir: target.clone(), moved_from: Some(s.data_dir.clone()) };
+        let db_dst = target.join(crate::DB_FILE);
+        let failed = s.db.copy_to(&db_dst, || crate::write_location(&location).map_err(AppError::from));
+        if failed.is_ok() {
+            // When moving into a non-empty folder, still restrict RoALT's own database file.
+            if !empty {
+                crate::restrict_file_to_user(&db_dst);
+            }
+            // An export's 10-minute timer dies with the restart, and the next start sweeps only the new
+            // folder: a cookie file left in the old one would stay there for good.
+            crate::cookie_export::sweep(&s.data_dir);
+            return Ok(());
+        }
+        // A half-written copy would make a retry to the same folder refused.
+        for f in crate::DB_FILES {
+            if let Err(e) = std::fs::remove_file(target.join(f))
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                log::debug!("could not delete the half-written {f}: {e}");
+            }
+        }
+        failed
+    })
+    .await??;
+    // Not inside copy_to: a restart waits for the exit handler, which needs the database's lock.
+    log::info!("database copied to {}; restarting to use it", target_for_log.display());
+    app.request_restart();
+    Ok(())
 }
 
 // ---------- bulk ----------
@@ -2035,56 +2088,6 @@ pub fn mods_reorder(s: State<'_, App>, ids: Vec<String>) -> Result<()> {
     crate::mods::library::reorder(&s.db, &ids)
 }
 
-// ---------- clips ----------
-
-#[tauri::command(async)]
-pub fn clips_status(s: State<'_, App>) -> Result<crate::clips::ClipsStatus> {
-    Ok(crate::clips::status(&s.db.settings()?))
-}
-
-/// Saves the last seconds now (as the clip key does); how it went comes as a notice.
-#[tauri::command(async)]
-pub fn clips_save(app: AppHandle) {
-    crate::clips::save(&app);
-}
-
-#[tauri::command(async)]
-pub fn clips_list() -> Result<Vec<crate::clips::library::ClipItem>> {
-    crate::clips::library::list()
-}
-
-/// Its new file name.
-#[tauri::command(async)]
-pub fn clips_rename(name: String, to: String) -> Result<String> {
-    crate::clips::library::rename(&name, &to)
-}
-
-/// To the Recycle Bin.
-#[tauri::command(async)]
-pub fn clips_delete(name: String) -> Result<()> {
-    crate::clips::library::delete(&name)
-}
-
-#[tauri::command(async)]
-pub fn clips_reveal(app: AppHandle, name: String) -> Result<()> {
-    reveal(&app, &crate::clips::library::path_of(&name).ok_or(AppError::NotFound)?);
-    Ok(())
-}
-
-#[tauri::command(async)]
-pub fn clips_open_folder(app: AppHandle) -> Result<()> {
-    use tauri_plugin_opener::OpenerExt;
-    let dir = crate::clips::library::dir()?;
-    std::fs::create_dir_all(&dir)?;
-    app.opener().open_path(dir.display().to_string(), None::<&str>).map_err(|e| AppError::Internal(e.to_string()))
-}
-
-/// Where clips go, for the view's footer.
-#[tauri::command(async)]
-pub fn clips_folder() -> Result<String> {
-    Ok(crate::clips::library::dir()?.display().to_string())
-}
-
 /// Limiteds shown at most (`AccountValue::top`).
 const TOP_ITEMS: usize = 10;
 
@@ -2195,15 +2198,6 @@ pub async fn servers_list(
     page
 }
 
-/// A failed call on `account_id`'s private server: a dead cookie is recorded on the account, and
-/// a plain 403 means the account isn't the server's owner.
-fn owner_error(app: &AppHandle, s: &App, account_id: i64, e: AppError) -> AppError {
-    if e.is_forbidden() {
-        return AppError::Invalid(tr!("Only the owner's account can change this."));
-    }
-    action_error(app, s, account_id, e)
-}
-
 /// A failed Roblox action of `account_id`, for the UI: a dead cookie is recorded on the account.
 /// A challenge on one Robux, settings or avatar action is that action's (like befriending's), so
 /// the account isn't marked Challenged and stays usable.
@@ -2215,253 +2209,6 @@ fn action_error(app: &AppHandle, s: &App, account_id: i64, e: AppError) -> AppEr
         Err(stored) => stored,
         Ok(_) => e,
     }
-}
-
-/// A private server's settings, read as its owner `account_id`.
-#[tauri::command]
-pub async fn private_server_get(app: AppHandle, s: State<'_, App>, account_id: i64, vip_server_id: i64) -> Result<PrivateServerSettings> {
-    unlocked(&s)?;
-    let cookie = stored_cookie(&s, account_id)?;
-    s.api.vip_server(account_id, &cookie, vip_server_id).await.map_err(|e| owner_error(&app, &s, account_id, e))
-}
-
-/// Changes the set parts of `patch` as the owner `account_id`, then returns the settings anew.
-#[tauri::command]
-pub async fn private_server_update(
-    app: AppHandle,
-    s: State<'_, App>,
-    account_id: i64,
-    vip_server_id: i64,
-    patch: PrivateServerPatch,
-) -> Result<PrivateServerSettings> {
-    unlocked(&s)?;
-    let cookie = stored_cookie(&s, account_id)?;
-    let r = async {
-        s.api.vip_server_update(account_id, &cookie, vip_server_id, &patch).await?;
-        s.api.vip_server(account_id, &cookie, vip_server_id).await
-    };
-    r.await.map_err(|e| owner_error(&app, &s, account_id, e))
-}
-
-/// Turns auto-renew on (spends `price` Robux a month, paid by `account_id`) or off. `price` is
-/// the one the owner confirmed, from `private_server_get`.
-#[tauri::command]
-pub async fn private_server_renew(
-    app: AppHandle,
-    s: State<'_, App>,
-    account_id: i64,
-    vip_server_id: i64,
-    on: bool,
-    price: i64,
-) -> Result<PrivateServerSettings> {
-    unlocked(&s)?;
-    // Renewing spends every month; turning it off is always allowed.
-    if on && s.db.settings()?.lock_purchases {
-        return Err(AppError::Invalid(tr!("Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.")));
-    }
-    let cookie = stored_cookie(&s, account_id)?;
-    let r = async {
-        s.api.vip_server_subscription(account_id, &cookie, vip_server_id, on, price).await?;
-        s.api.vip_server(account_id, &cookie, vip_server_id).await
-    };
-    r.await.map_err(|e| owner_error(&app, &s, account_id, e))
-}
-
-/// Buys a private server (spends Robux, paid by `buy.account_id`). The new server shows up in the
-/// place's private server list.
-#[tauri::command]
-pub async fn private_server_buy(app: AppHandle, s: State<'_, App>, buy: PrivateServerBuy) -> Result<()> {
-    unlocked(&s)?;
-    if s.db.settings()?.lock_purchases {
-        return Err(AppError::Invalid(tr!("Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.")));
-    }
-    let id = buy.account_id;
-    let cookie = stored_cookie(&s, id)?;
-    let r = s.api.vip_server_buy(id, &cookie, buy.universe_id, &buy.name, buy.expected_price, &buy.idempotency_key).await;
-    // Not `owner_error`: there is no owner yet, so a 403 here is some other refusal.
-    r.map_err(|e| action_error(&app, &s, id, e))
-}
-
-// ---------- outfits ----------
-
-/// The account's saved outfits with their pictures, and a picture of what it wears now.
-#[tauri::command]
-pub async fn outfits_list(app: AppHandle, s: State<'_, App>, account_id: i64) -> Result<Outfits> {
-    unlocked(&s)?;
-    let user_id = s.db.account(account_id)?.user_id;
-    let cookie = stored_cookie(&s, account_id)?;
-    let rows = s.api.outfits(account_id, &cookie, user_id).await.map_err(|e| action_error(&app, &s, account_id, e))?;
-    let ids: Vec<i64> = rows.iter().map(|r| r.0).collect();
-    let ((mut thumbs, complete), current) = tokio::join!(s.api.outfit_thumbnails(&ids), s.api.avatar_thumbnail(user_id));
-    Ok(Outfits {
-        complete: complete && current.is_some(),
-        current,
-        items: rows.into_iter().map(|(id, name)| Outfit { id, name, thumb: thumbs.remove(&id) }).collect(),
-    })
-}
-
-/// Puts the outfit `outfit_id` of the account `from` on the account `to` (the same account: wears
-/// its own). Returns the names of the items `to` doesn't own, which were left out.
-#[tauri::command]
-pub async fn outfit_wear(app: AppHandle, s: State<'_, App>, from: i64, outfit_id: i64, to: i64) -> Result<Vec<String>> {
-    unlocked(&s)?;
-    // shortcut: a copy to many accounts reads the outfit once per account, pass the look in if that gets slow.
-    let look = s.api.outfit_look(from, &stored_cookie(&s, from)?, outfit_id).await.map_err(|e| action_error(&app, &s, from, e))?;
-    s.api.wear(to, &stored_cookie(&s, to)?, &look).await.map_err(|e| action_error(&app, &s, to, e))
-}
-
-/// Saves what the account wears now as a new outfit.
-#[tauri::command]
-pub async fn outfit_save(app: AppHandle, s: State<'_, App>, account_id: i64, name: String) -> Result<()> {
-    unlocked(&s)?;
-    let cookie = stored_cookie(&s, account_id)?;
-    let r = async {
-        let look = s.api.worn_look(account_id, &cookie).await?;
-        s.api.outfit_create(account_id, &cookie, &name, &look).await
-    };
-    r.await.map_err(|e| action_error(&app, &s, account_id, e))
-}
-
-#[tauri::command]
-pub async fn outfit_rename(app: AppHandle, s: State<'_, App>, account_id: i64, outfit_id: i64, name: String) -> Result<()> {
-    unlocked(&s)?;
-    let cookie = stored_cookie(&s, account_id)?;
-    s.api.outfit_rename(account_id, &cookie, outfit_id, &name).await.map_err(|e| action_error(&app, &s, account_id, e))
-}
-
-#[tauri::command]
-pub async fn outfit_delete(app: AppHandle, s: State<'_, App>, account_id: i64, outfit_id: i64) -> Result<()> {
-    unlocked(&s)?;
-    let cookie = stored_cookie(&s, account_id)?;
-    s.api.outfit_delete(account_id, &cookie, outfit_id).await.map_err(|e| action_error(&app, &s, account_id, e))
-}
-
-// ---------- trades ----------
-
-/// One trades call at a time: an inbox over many accounts never hits Roblox with all at once.
-static TRADING: std::sync::LazyLock<tokio::sync::Mutex<()>> = std::sync::LazyLock::new(Default::default);
-
-/// A trade's two sides for the account with `user_id` (pure): "give" is that user's offer (the
-/// first when neither is theirs), "get" the other. Each side's items are summed in RAP and, with
-/// Rolimons' list, at their value (its RAP for an item Rolimons doesn't value), as `value_of` does.
-fn trade_sides(body: crate::roblox_api::types::TradeBody, user_id: i64, rolimons: Option<&crate::rolimons::Items>) -> Result<TradeDetail> {
-    use crate::roblox_api::types::{TradeAsset, TradeSide};
-    let Ok([first, second]) = <[TradeSide; 2]>::try_from(body.offers.unwrap_or_default()) else {
-        return Err(AppError::Roblox("a trade without two offers".into()));
-    };
-    let side = |o: TradeSide| {
-        let item = |a: TradeAsset| {
-            let asset_id = a.asset_id.unwrap_or(0);
-            TradeItem {
-                asset_id,
-                name: a.name.unwrap_or_default(),
-                serial: a.serial_number,
-                rap: a.recent_average_price.unwrap_or(0),
-                rolimons: rolimons.and_then(|r| r.get(&asset_id)).cloned(),
-            }
-        };
-        let items: Vec<TradeItem> = o.user_assets.unwrap_or_default().into_iter().map(item).collect();
-        let total = |each: &dyn Fn(&TradeItem) -> i64| items.iter().map(each).fold(0i64, i64::saturating_add);
-        let (rap, value) = (total(&|i| i.rap), rolimons.map(|_| total(&|i| i.rolimons.as_ref().and_then(|r| r.value).unwrap_or(i.rap))));
-        TradeOffer { robux: o.robux.unwrap_or(0), items, rap, value }
-    };
-    let (give, get) = if second.user.as_ref().and_then(|u| u.id) == Some(user_id) { (second, first) } else { (first, second) };
-    Ok(TradeDetail { give: side(give), get: side(get) })
-}
-
-/// A trade id from the UI (a string, see `TradeRow::id`).
-fn trade_id_of(id: &str) -> Result<i64> {
-    id.parse().map_err(|_| AppError::NotFound)
-}
-
-/// The account's newest trades of one kind (100 at most).
-#[tauri::command]
-pub async fn trades_list(app: AppHandle, s: State<'_, App>, account_id: i64, kind: TradeKind) -> Result<Vec<TradeRow>> {
-    unlocked(&s)?;
-    let cookie = stored_cookie(&s, account_id)?;
-    let _one = TRADING.lock().await;
-    s.api.trades(account_id, &cookie, kind).await.map_err(|e| action_error(&app, &s, account_id, e))
-}
-
-/// One account's incoming trades, for the trade watch (`watch`): as `trades_list` reads them.
-pub(crate) async fn inbound_trades(app: &AppHandle, s: &App, account_id: i64) -> Result<Vec<TradeRow>> {
-    unlocked(s)?;
-    let cookie = stored_cookie(s, account_id)?;
-    let _one = TRADING.lock().await;
-    s.api.trades(account_id, &cookie, TradeKind::Inbound).await.map_err(|e| action_error(app, s, account_id, e))
-}
-
-/// What the account gives and gets in a trade. With `settings.rolimons_values` on, Rolimons'
-/// values are added (their list is downloaded when older than 30 minutes, `rolimons::items`).
-#[tauri::command]
-pub async fn trade_details(app: AppHandle, s: State<'_, App>, account_id: i64, trade_id: String) -> Result<TradeDetail> {
-    unlocked(&s)?;
-    let id = trade_id_of(&trade_id)?;
-    let user_id = s.db.account(account_id)?.user_id;
-    let cookie = stored_cookie(&s, account_id)?;
-    let body = {
-        let _one = TRADING.lock().await;
-        s.api.trade(account_id, &cookie, id).await.map_err(|e| action_error(&app, &s, account_id, e))?
-    };
-    let rolimons = if s.db.settings()?.rolimons_values { crate::rolimons::items(&s.db, now_ms(), true).await } else { None };
-    trade_sides(body, user_id, rolimons.as_deref())
-}
-
-/// Accepts a trade sent to the account. Like a purchase it gives away what the account owns, so
-/// "Lock purchases" refuses it (as Browse does).
-#[tauri::command]
-pub async fn trade_accept(app: AppHandle, s: State<'_, App>, account_id: i64, trade_id: String) -> Result<()> {
-    unlocked(&s)?;
-    if s.db.settings()?.lock_purchases {
-        return Err(AppError::Invalid(tr!("Purchases are locked. Turn off Lock purchases in Settings, under Security, to accept a trade.")));
-    }
-    trade_answer(&app, &s, account_id, &trade_id, true).await
-}
-
-/// Declines a trade sent to the account, or cancels one it sent.
-#[tauri::command]
-pub async fn trade_decline(app: AppHandle, s: State<'_, App>, account_id: i64, trade_id: String) -> Result<()> {
-    unlocked(&s)?;
-    trade_answer(&app, &s, account_id, &trade_id, false).await
-}
-
-async fn trade_answer(app: &AppHandle, s: &App, account_id: i64, trade_id: &str, accept: bool) -> Result<()> {
-    let id = trade_id_of(trade_id)?;
-    let cookie = stored_cookie(s, account_id)?;
-    let _one = TRADING.lock().await;
-    s.api.trade_answer(account_id, &cookie, id, accept).await.map_err(|e| action_error(app, s, account_id, e))
-}
-/// The newest friend requests the account got (100 at most), with pictures where Roblox has them.
-#[tauri::command]
-pub async fn friend_requests_list(app: AppHandle, s: State<'_, App>, account_id: i64) -> Result<Vec<FriendRequest>> {
-    unlocked(&s)?;
-    let cookie = stored_cookie(&s, account_id)?;
-    let mut rows = s.api.friend_requests(account_id, &cookie).await.map_err(|e| action_error(&app, &s, account_id, e))?;
-    let ids: Vec<i64> = rows.iter().map(|r| r.user_id).collect();
-    // Without pictures the rows still show: Roblox can take seconds to draw new ones, so not waited for long.
-    let pics = tokio::time::timeout(Duration::from_secs(2), s.api.headshots(&ids)).await.ok().and_then(|r| r.ok()).unwrap_or_default();
-    for r in &mut rows {
-        r.avatar_url = pics.get(&r.user_id).cloned();
-    }
-    Ok(rows)
-}
-
-/// Accepts or declines one friend request sent to the account. There is no "accept all": adding
-/// friends in bulk is what Roblox's rules are wary of.
-#[tauri::command]
-pub async fn friend_request_answer(app: AppHandle, s: State<'_, App>, account_id: i64, user_id: i64, accept: bool) -> Result<()> {
-    unlocked(&s)?;
-    let cookie = stored_cookie(&s, account_id)?;
-    let done = if accept { s.api.accept_friend(account_id, &cookie, user_id).await } else { s.api.decline_friend(account_id, &cookie, Some(user_id)).await };
-    done.map_err(|e| action_error(&app, &s, account_id, e))
-}
-
-/// Declines every friend request the account has.
-#[tauri::command]
-pub async fn friend_requests_decline_all(app: AppHandle, s: State<'_, App>, account_id: i64) -> Result<()> {
-    unlocked(&s)?;
-    let cookie = stored_cookie(&s, account_id)?;
-    s.api.decline_friend(account_id, &cookie, None).await.map_err(|e| action_error(&app, &s, account_id, e))
 }
 
 /// The account's newest 25 Robux transactions of one kind.
@@ -2480,14 +2227,6 @@ pub async fn robux_totals(app: AppHandle, s: State<'_, App>, account_id: i64) ->
     let user_id = s.db.account(account_id)?.user_id;
     let cookie = stored_cookie(&s, account_id)?;
     s.api.transaction_totals(account_id, &cookie, user_id).await.map_err(|e| action_error(&app, &s, account_id, e))
-}
-
-/// The private servers the account owns, with when each runs out or renews.
-#[tauri::command]
-pub async fn private_servers_owned(app: AppHandle, s: State<'_, App>, account_id: i64) -> Result<Vec<OwnedPrivateServer>> {
-    unlocked(&s)?;
-    let cookie = stored_cookie(&s, account_id)?;
-    s.api.my_private_servers(account_id, &cookie).await.map_err(|e| action_error(&app, &s, account_id, e))
 }
 
 // ---------- instances ----------
@@ -2715,6 +2454,41 @@ pub async fn instance_set_limits(app: AppHandle, s: State<'_, App>, id: String, 
     Ok(())
 }
 
+/// Applies `limits` to every currently running client without overwriting each account's saved
+/// `client_limits`. Returns how many running clients were updated.
+#[tauri::command]
+pub async fn instances_apply_limits(app: AppHandle, s: State<'_, App>, limits: Limits) -> Result<u32> {
+    check_limits(&limits)?;
+    let ids: Vec<String> = s
+        .tracker
+        .list()
+        .into_iter()
+        .filter(|i| i.state != InstanceState::Exited)
+        .map(|i| i.id)
+        .collect();
+    let mut updated = 0u32;
+    for id in &ids {
+        if s.tracker.set_limits(id, limits).is_some() {
+            updated += 1;
+        }
+    }
+    instances_changed(&app);
+    let app2 = app.clone();
+    blocking(move || {
+        let s = app2.state::<App>();
+        let v = s.db.settings().unwrap_or_default();
+        let held = s.tracker.throttle(v.mem_throttle.mb).0;
+        let plan = crate::instances::limits::plan_now(&s, &v, &s.tracker.clients(), &held);
+        for (id, pid, t0, l) in plan {
+            if let Err(e) = s.limiter.apply(&id, pid, t0, l) {
+                log::warn!("bulk limits: could not apply to {id}: {e}");
+            }
+        }
+    })
+    .await?;
+    Ok(updated)
+}
+
 /// Keeps what client `id` has now (its limits, its anti-AFK) for its account's next client.
 fn remember_client(app: &AppHandle, s: &App, id: &str) {
     let Some(i) = s.tracker.get(id) else { return };
@@ -2745,6 +2519,29 @@ pub fn instance_set_anti_afk(app: AppHandle, s: State<'_, App>, id: String, enab
     Ok(())
 }
 
+/// Takes control of one running client ("Take control") or gives it back: RoALT leaves a held
+/// client alone (`Instance::held`). Taking it also puts its window back to its size, unmutes it and
+/// brings it to the front.
+#[tauri::command]
+pub async fn instance_take_control(app: AppHandle, s: State<'_, App>, id: String, on: bool) -> Result<()> {
+    if !s.tracker.set_held(&id, on) {
+        return Err(AppError::NotFound);
+    }
+    // A relaunch waiting for it ends now.
+    crate::instances::rejoin::retry_now();
+    instances_changed(&app);
+    let Some(pid) = client_pid(&s, &id)?.filter(|_| on) else { return Ok(()) };
+    if s.tracker.get(&id).is_some_and(|i| i.micro) {
+        let id2 = id.clone();
+        blocking(move || crate::instances::window::micro(&id2, pid, false, (0, 0))).await??;
+        s.tracker.set_micro(&id, None);
+        instances_changed(&app);
+    }
+    // Not awaited: it may wait seconds for the client's audio.
+    tauri::async_runtime::spawn_blocking(move || crate::instances::audio::set_mute(pid, false));
+    blocking(move || crate::instances::window::show(pid, crate::instances::window::Show::Focus)).await?
+}
+
 /// Pages one client's working set out now ("Trim now").
 #[tauri::command]
 pub async fn instance_trim(app: AppHandle, s: State<'_, App>, id: String) -> Result<(u64, u64)> {
@@ -2773,13 +2570,14 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
     tauri::async_runtime::spawn_blocking(f).await.map_err(|e| AppError::Internal(e.to_string()))
 }
 
-/// One client's preview as raw bytes, at most `max_w` (16..=1280) pixels wide: a 24-byte header
-/// (`window::Preview::to_bytes`), then the picture's RGBA unless `known` is its number already.
-/// Answers at once with the newest picture there is.
+/// One client's preview as raw bytes, a newer picture asked at most `max_w` (16..=1280) pixels wide,
+/// none for 0 (previews Off, between stills): a 24-byte header (`window::Preview::to_bytes`), then
+/// the picture's RGBA unless `known` is its number already. Answers at once with the newest picture there is.
 #[tauri::command]
 pub async fn instance_thumbnail(s: State<'_, App>, id: String, max_w: u32, known: u32) -> Result<tauri::ipc::Response> {
     let pid = client_pid(&s, &id)?;
-    let preview = blocking(move || crate::instances::window::preview(pid, max_w.clamp(16, 1280))).await?;
+    let max_w = (max_w > 0).then(|| max_w.clamp(16, 1280));
+    let preview = blocking(move || crate::instances::window::preview(pid, max_w)).await?;
     Ok(tauri::ipc::Response::new(preview.to_bytes(known)))
 }
 
@@ -2849,10 +2647,11 @@ pub async fn instances_tile(app: AppHandle, s: State<'_, App>, micro: bool) -> R
     let v = s.db.settings()?;
     let layout_on = v.window_layout != WindowLayout::Off;
     // With a window layout on, the accounts the user plays stay out of it here too: they take no cell.
-    let played = if layout_on { crate::instances::limits::played(&s, &v) } else { Vec::new() };
+    let played = if layout_on { crate::instances::limits::played(&s) } else { Vec::new() };
     let account_of = |id: &str| s.tracker.get(id).map(|i| i.account_id);
-    let clients: Vec<(String, u32)> =
-        s.tracker.clients().into_iter().filter(|c| !account_of(&c.0).is_some_and(|a| played.contains(&a))).map(|c| (c.0, c.1)).collect();
+    // Held ones (Take control) stay where the user has them, layout or not.
+    let left_alone = |id: &str| s.tracker.get(id).is_some_and(|i| i.held || played.contains(&i.account_id));
+    let clients: Vec<(String, u32)> = s.tracker.clients().into_iter().filter(|c| !left_alone(&c.0)).map(|c| (c.0, c.1)).collect();
     // As a number: a window handle can't cross threads.
     let near = app.get_webview_window("main").and_then(|w| w.hwnd().ok()).map_or(0, |h| h.0 as isize);
     let size = micro.then_some((v.micro_width, v.micro_height));
@@ -2912,7 +2711,7 @@ pub async fn layout_preview(app: AppHandle, s: State<'_, App>, account_ids: Vec<
     }
     // As in a launch: the accounts the user plays keep their window (but still launch in their turn).
     let accounts = s.db.accounts()?;
-    let played = crate::instances::limits::played(&s, &v);
+    let played = crate::instances::limits::played(&s);
     let ids: Vec<i64> = account_ids.iter().copied().filter(|id| accounts.iter().any(|a| a.id == *id) && !played.contains(id)).collect();
     let main = app.get_webview_window("main").ok_or(AppError::Internal("no main window".into()))?;
     let area = crate::instances::window::work_area(main.hwnd()?).ok_or(AppError::Internal("monitor unreadable".into()))?;
@@ -3034,9 +2833,12 @@ pub fn bandwidth_status(s: State<'_, App>) -> Result<BandwidthStatus> {
 pub async fn bandwidth_apply(s: State<'_, App>, kbps: u32) -> Result<BandwidthStatus> {
     crate::instances::qos::script(kbps)?;
     blocking(move || crate::instances::qos::apply(kbps)).await??;
-    let mut v = s.db.settings()?;
-    v.bandwidth_kbps = kbps;
-    s.db.save_settings(&v)?;
+    {
+        let _change = s.db.settings_change();
+        let mut v = s.db.settings()?;
+        v.bandwidth_kbps = kbps;
+        s.db.save_settings(&v)?;
+    }
     s.db.cache_put(QOS_KEY, "", crate::instances::qos::boot_ms(now_ms()))?;
     bandwidth(&s)
 }
@@ -3103,9 +2905,11 @@ pub async fn multi_instance_set(app: AppHandle, enabled: bool) -> Result<MultiIn
     // Off the main thread, as `multi_instance_status`.
     blocking(move || {
         let s = app.state::<App>();
+        let change = s.db.settings_change();
         let mut v = s.db.settings()?;
         v.multi_instance = enabled;
         s.db.save_settings(&v)?;
+        drop(change);
         if enabled {
             match s.multi.enable() {
                 Ok(()) => protect_running(&s, &v),
@@ -3189,6 +2993,18 @@ pub async fn roblox_close_all(s: State<'_, App>) -> Result<MultiInstanceStatus> 
 /// Panic button (sidebar, tray "Kill all Roblox"): the running batch stops after its current
 /// step, every client counts as closed by the user (no rejoin or restart follows, also for ones
 /// waiting their turn), and every Roblox process is terminated at once, tracked or not.
+/// The close question's "Keep running in the tray" (`app://close-ask`).
+#[tauri::command]
+pub fn window_to_tray(window: tauri::Window) {
+    crate::hide_main(&window);
+}
+
+/// The close question's "Quit": as the tray's Quit.
+#[tauri::command]
+pub fn app_quit(app: AppHandle) {
+    app.exit(0);
+}
+
 #[tauri::command]
 pub async fn panic_kill(s: State<'_, App>) -> Result<MultiInstanceStatus> {
     kill_all(&s).await
@@ -3204,25 +3020,13 @@ pub fn set_panic_hotkey(app: &AppHandle, old: &str, key: &str) -> Result<()> {
 }
 
 /// The panic key, as registered. The shortcut handler kills all only for this one: a key
-/// pressed while it is being swapped in is neither this nor the clip key, and does nothing.
+/// pressed while it is being swapped in isn't this one, and does nothing.
 static PANIC_KEY: std::sync::Mutex<Option<tauri_plugin_global_shortcut::Shortcut>> = std::sync::Mutex::new(None);
 
 pub fn is_panic_key(key: &tauri_plugin_global_shortcut::Shortcut) -> bool {
     PANIC_KEY.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() == Some(key)
 }
 
-/// The clip key in place of `old` ("" for none), and which key the shortcut handler reads as it.
-pub fn set_clip_hotkey(app: &AppHandle, old: &str, key: &str) -> Result<()> {
-    swap_hotkey(app, old, key, "clip")?;
-    crate::clips::set_key(if key.is_empty() { None } else { parse_hotkey(key).ok() });
-    Ok(())
-}
-
-/// The clip key while an account is picked; "" otherwise (then it isn't registered: it would
-/// take the key from other apps for nothing).
-pub fn clip_key(v: &Settings) -> &str {
-    if v.clip_account.is_some() { v.clip_hotkey.trim() } else { "" }
-}
 
 fn swap_hotkey(app: &AppHandle, old: &str, key: &str, what: &str) -> Result<()> {
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -3312,7 +3116,12 @@ fn diagnostics_sources(s: &App) -> Result<crate::diagnostics::Sources> {
         multi.message.map(|m| format!(" ({m}; blocked by {:?})", multi.blocked_by)).unwrap_or_default(),
         crate::performance::of(&v, None, now_ms()),
     );
-    let mut names: Vec<String> = s.db.accounts()?.into_iter().flat_map(|a| [a.username, a.display_name, a.alias]).collect();
+    let mut names: Vec<String> = s
+        .db
+        .accounts()?
+        .into_iter()
+        .flat_map(|a| [a.username, a.display_name, a.alias, a.user_id.to_string()])
+        .collect();
     names.extend(s.db.favourites()?.into_iter().map(|f| f.name));
     let mut roblox_logs = s.tracker.live_logs();
     for crash in s.db.crashes()?.iter().filter(|c| c.has_log).take(5) {
@@ -3582,8 +3391,14 @@ pub fn lock_vault(app: &AppHandle) {
 
 /// `lock_vault`, blocking until locked (never on the main thread or a runtime worker). The vault
 /// locks before Browse can open again: a `browse_open` waiting meanwhile then finds it locked.
-fn lock_vault_now(app: &AppHandle) {
-    crate::browse::close_then(app, || app.state::<App>().vault.lock());
+/// Clears any copied cookie and unencrypted rotated cookies still held in memory.
+pub(crate) fn lock_vault_now(app: &AppHandle) {
+    clear_copied_cookie(app);
+    crate::browse::close_then(app, || {
+        let s = app.state::<App>();
+        s.rotated_later.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        s.vault.lock();
+    });
     let _ = app.emit("vault://locked", ());
     crate::tray::refresh(app);
 }
@@ -3648,9 +3463,17 @@ pub fn group_remove(app: AppHandle, s: State<'_, App>, id: i64) -> Result<()> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn group_clear_overrides(app: AppHandle, s: State<'_, App>, id: i64) -> Result<u32> {
+    unlocked(&s)?;
+    let n = s.db.clear_group_overrides(id)?;
+    accounts_changed(&app);
+    Ok(n)
+}
+
 // ---------- backup ----------
 
-const MIN_BACKUP_PASSWORD: usize = 8;
+const MIN_BACKUP_PASSWORD: usize = 12;
 
 #[tauri::command]
 pub async fn backup_export(
@@ -3728,7 +3551,7 @@ pub async fn backup_export(
         settings: Some(serde_json::to_value(s.db.settings()?).map_err(|e| AppError::Internal(e.to_string()))?),
         discord_webhook: crate::discord::stored_url(&s),
     };
-    backup::write(Path::new(&path), &password, &payload)?;
+    blocking(move || backup::write(Path::new(&path), &password, &payload)).await??;
     Ok(count)
 }
 
@@ -3760,19 +3583,16 @@ fn check_backup(p: &backup::BackupPayload) -> Result<()> {
 }
 
 /// The backup's settings and Discord webhook onto this PC, through the checks a change in the UI
-/// gets (`set_settings`, `discord::set`): the file may be anyone's. Left out: what only means
-/// something on the PC it came from (the clip account's id). False when they couldn't be applied.
+/// gets (`set_settings`, `discord::set`): the file may be anyone's. False when they couldn't be
+/// applied.
 fn restore_settings(app: &AppHandle, s: &App, payload: &BackupPayload) -> bool {
     let Some(mut json) = payload.settings.clone() else { return false };
-    if let Some(o) = json.as_object_mut() {
-        o.remove("clipAccount");
-    }
-    let apply = |json: serde_json::Value| serde_json::from_value::<SettingsPatch>(json).map_err(|e| AppError::Internal(e.to_string())).and_then(|p| set_settings(app, s, p));
+    let apply = |json: serde_json::Value| serde_json::from_value::<SettingsPatch>(json).map_err(|e| AppError::Internal(e.to_string())).and_then(|p| set_settings_on_main(app, p));
     // A global key another program holds on this PC must not cost every other setting.
     let done = apply(json.clone()).or_else(|e| {
         log::info!("backup settings refused ({e}); trying without its global keys");
         if let Some(o) = json.as_object_mut() {
-            for key in ["panicHotkey", "clipHotkey", "toggleHotkey", "tileHotkey", "minimizeHotkey"] {
+            for key in ["panicHotkey", "toggleHotkey", "tileHotkey", "minimizeHotkey"] {
                 o.remove(key);
             }
         }
@@ -3789,11 +3609,22 @@ fn restore_settings(app: &AppHandle, s: &App, payload: &BackupPayload) -> bool {
     done.is_ok()
 }
 
+/// `set_settings` on the main thread, where `settings_set` and the tray run it. Off it, it would hold
+/// the settings lock while waiting for the main thread to register a global key, and a change made
+/// there meanwhile would wait for that lock: both stuck.
+fn set_settings_on_main(app: &AppHandle, patch: SettingsPatch) -> Result<Settings> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = app.clone();
+    app.run_on_main_thread(move || _ = tx.send(set_settings(&handle, &handle.state::<App>(), patch)))
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    rx.recv().map_err(|e| AppError::Internal(e.to_string()))?
+}
+
 /// `settings`: also restore the backup's settings and Discord webhook over this PC's.
 #[tauri::command]
 pub async fn backup_import(app: AppHandle, s: State<'_, App>, path: String, password: String, on_conflict: ConflictPolicy, settings: bool) -> Result<ImportReport> {
     unlocked(&s)?;
-    let payload = backup::read(Path::new(&path), &password)?;
+    let payload = blocking(move || backup::read(Path::new(&path), &password)).await??;
     // The file comes from anyone, and its password with it: all of it is checked before anything
     // is written, so a bad entry leaves nothing half done.
     check_backup(&payload)?;
@@ -4105,9 +3936,10 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
 /// Checks `patch`, saves it and makes it take effect (`settings_set`; also a backup's settings and
 /// the tray's Anti-AFK tick).
 pub(crate) fn set_settings(app: &AppHandle, s: &App, patch: SettingsPatch) -> Result<Settings> {
-    if patch.auto_lock_minutes.is_some() {
+    if patch.auto_lock_minutes.is_some() || patch.lock_on_session_lock.is_some() {
         unlocked(s)?;
     }
+    let change = s.db.settings_change();
     let mut v = s.db.settings()?;
     apply_performance(&mut v, &patch)?;
     if let Some(t) = patch.theme { v.theme = t }
@@ -4144,6 +3976,7 @@ pub(crate) fn set_settings(app: &AppHandle, s: &App, patch: SettingsPatch) -> Re
         }
         v.auto_lock_minutes = m;
     }
+    if let Some(l) = patch.lock_on_session_lock { v.lock_on_session_lock = l }
     if let Some(c) = patch.clipboard_clear_seconds {
         if !(5..=300).contains(&c) {
             return Err(AppError::Invalid(tr!("Clipboard clearing must be between 5 and 300 seconds.")));
@@ -4188,6 +4021,7 @@ pub(crate) fn set_settings(app: &AppHandle, s: &App, patch: SettingsPatch) -> Re
     if let Some(l) = patch.lock_purchases { v.lock_purchases = l }
     if let Some(m) = patch.mods_on { v.mods_on = m }
     if let Some(m) = patch.mods_ack { v.mods_ack = m }
+    if let Some(o) = patch.onboarded { v.onboarded = o }
     if let Some(l) = patch.tab_layout { v.tab_layout = l }
     if let Some(c) = patch.close_to_tray { v.close_to_tray = c }
     if let Some(s) = patch.skip_splash { v.skip_splash = s }
@@ -4213,7 +4047,13 @@ pub(crate) fn set_settings(app: &AppHandle, s: &App, patch: SettingsPatch) -> Re
     let self_update = patch.self_update.filter(|&u| u != v.self_update);
     if let Some(u) = self_update { v.self_update = u }
     if let Some(p) = patch.discord_presence { v.discord_presence = p }
+    if let Some(mut r) = patch.discord_rpc {
+        r.custom_details = r.custom_details.trim().chars().take(128).collect();
+        r.custom_state = r.custom_state.trim().chars().take(128).collect();
+        v.discord_rpc = r;
+    }
     if let Some(o) = patch.online_count { v.online_count = o }
+    if let Some(o) = patch.news { v.news = o }
     if let Some(o) = patch.show_sponsor { v.show_sponsor = o }
     if let Some(o) = patch.sign_in_watch { v.sign_in_watch = o }
     for (hours, to) in [(patch.restart_every_h, &mut v.restart_every_h), (patch.close_after_h, &mut v.close_after_h)] {
@@ -4236,46 +4076,17 @@ pub(crate) fn set_settings(app: &AppHandle, s: &App, patch: SettingsPatch) -> Re
     let protect = patch.protect_shared_login.filter(|&p| p != v.protect_shared_login);
     if let Some(p) = protect { v.protect_shared_login = p }
     let had = v.panic_hotkey.clone();
-    let had_clip = clip_key(&v).to_owned();
-    if let Some(a) = patch.clip_account {
-        v.clip_account = (a != 0).then(|| s.db.account(a).map(|_| a)).transpose()?;
+    // Not a key one of RoALT's other things has (`hotkeys`): each key does one thing.
+    if let Some(k) = patch.panic_hotkey.as_deref()
+        && parse_hotkey(k.trim()).is_ok_and(|p| crate::hotkeys::id_of(&p).is_some())
+    {
+        return Err(AppError::Invalid(tr!("{key} is set for two things. Give each its own key.", key = k.trim())));
     }
-    if let Some(sec) = patch.clip_seconds {
-        if ![15, 30, 60, 120].contains(&sec) {
-            return Err(AppError::Invalid(tr!("A clip is 15, 30, 60 or 120 seconds.")));
-        }
-        v.clip_seconds = sec;
-    }
-    if let Some(k) = &patch.clip_hotkey {
-        // Empty: no key (Save clip in the Clips view still works).
-        if !k.trim().is_empty() {
-            parse_hotkey(k.trim())?;
-        }
-        v.clip_hotkey = k.trim().to_owned();
-    }
-    let new_panic = patch.panic_hotkey.as_deref().map_or(had.as_str(), str::trim).to_owned();
-    let new_clip = clip_key(&v).to_owned();
-    if !new_clip.is_empty() && parse_hotkey(&new_clip).ok() == parse_hotkey(&new_panic).ok() {
-        return Err(AppError::Invalid(tr!("The clip key and the panic key can't be the same key.")));
-    }
-    // Nor a key one of RoALT's other things has (`hotkeys`): each key does one thing.
-    for k in [patch.panic_hotkey.as_deref(), patch.clip_hotkey.as_deref()].into_iter().flatten() {
-        if parse_hotkey(k.trim()).is_ok_and(|p| crate::hotkeys::id_of(&p).is_some()) {
-            return Err(AppError::Invalid(tr!("{key} is set for two things. Give each its own key.", key = k.trim())));
-        }
-    }
-    // Last: they take effect at once, so only once everything else is valid; put back if
-    // anything after fails, so Windows and the settings agree. The panic key first: a swap
-    // (clip key := old panic key) frees it before the clip key takes it.
+    // Last: it takes effect at once, so only once everything else is valid; put back if
+    // anything after fails, so Windows and the settings agree.
     if let Some(k) = patch.panic_hotkey {
         set_panic_hotkey(app, &had, k.trim())?;
         v.panic_hotkey = k.trim().to_owned();
-    }
-    if let Err(e) = set_clip_hotkey(app, &had_clip, &new_clip) {
-        if let Err(e) = set_panic_hotkey(app, &v.panic_hotkey, &had) {
-            log::warn!("could not roll back the panic hotkey: {e}");
-        }
-        return Err(e);
     }
     if let Some(a) = patch.allow_public_networks { v.allow_public_networks = a }
     // The other global keys, tried before the save: one Windows won't give is refused, and the ones
@@ -4292,9 +4103,6 @@ pub(crate) fn set_settings(app: &AppHandle, s: &App, patch: SettingsPatch) -> Re
         }
     }
     if rekey && let Err(e) = crate::hotkeys::try_change(app, Some(&v), None, &changed) {
-        if let Err(e) = set_clip_hotkey(app, &new_clip, &had_clip) {
-            log::warn!("could not roll back the clip hotkey: {e}");
-        }
         if v.panic_hotkey != had
             && let Err(e) = set_panic_hotkey(app, &v.panic_hotkey, &had)
         {
@@ -4308,27 +4116,19 @@ pub(crate) fn set_settings(app: &AppHandle, s: &App, patch: SettingsPatch) -> Re
         if rekey {
             crate::hotkeys::sync(app);
         }
-        if let Err(e) = set_clip_hotkey(app, &new_clip, &had_clip) {
-            log::warn!("could not roll back the clip hotkey after a failed save: {e}");
-        }
         if v.panic_hotkey != had
             && let Err(e) = set_panic_hotkey(app, &v.panic_hotkey, &had)
         {
             log::warn!("could not roll back the panic hotkey after a failed save: {e}");
         }
     }
+    drop(change);
     rest?;
     // Once saved: a refused change never drops the shared-login lock.
     match protect {
         Some(false) => s.multi.release_shared(),
         Some(true) if v.multi_instance => protect_running(s, &v),
         _ => {}
-    }
-    // A picked client that is already running and muted: it records silence otherwise.
-    if let Some(a) = patch.clip_account.filter(|&a| a != 0)
-        && let Some(i) = s.tracker.list().into_iter().find(|i| i.account_id == a && i.state != InstanceState::Exited && i.pid != 0)
-    {
-        std::thread::spawn(move || crate::instances::audio::set_mute(i.pid, false));
     }
     // Once saved: a refused change never loosens the lock Browse is under.
     crate::browse::set_lock(v.lock_purchases);
@@ -4397,34 +4197,6 @@ mod tests {
             rare: false,
             acronym: None,
         }
-    }
-
-    #[test]
-    fn trade_sides_are_picked_by_user_and_summed() {
-        use super::{trade_id_of, trade_sides};
-        use crate::roblox_api::types::TradeBody;
-        let body = || {
-            let json = r#"{"offers":[
-                {"user":{"id":21},"userAssets":[{"assetId":1,"name":"Hat","serialNumber":7,"recentAveragePrice":100},{"assetId":2,"name":"Cape","recentAveragePrice":1000}],"robux":0},
-                {"user":{"id":77},"userAssets":[{"assetId":3,"name":"Sword","recentAveragePrice":50}],"robux":25}
-            ]}"#;
-            serde_json::from_str::<TradeBody>(json).unwrap()
-        };
-        // The account is user 77: it gives the sword and 25 Robux, whatever the order of the offers.
-        let t = trade_sides(body(), 77, None).unwrap();
-        assert_eq!((t.give.robux, t.give.rap, t.give.value, t.give.items[0].asset_id), (25, 50, None, 3));
-        assert_eq!((t.get.robux, t.get.rap, t.get.items.len(), t.get.items[0].serial), (0, 1_100, 2, Some(7)));
-        assert_eq!(trade_sides(body(), 21, None).unwrap().give.rap, 1_100);
-        assert_eq!(trade_sides(body(), 5, None).unwrap().give.rap, 1_100, "neither is the account: the first offer");
-
-        // Item 1 valued above its RAP, item 2 not valued (its RAP counts), item 3 unknown to Rolimons.
-        let list = std::collections::HashMap::from([(1, roli(Some(900))), (2, roli(None))]);
-        let t = trade_sides(body(), 77, Some(&list)).unwrap();
-        assert_eq!((t.get.value, t.give.value, t.get.rap), (Some(900 + 1_000), Some(50), 1_100));
-
-        assert!(trade_sides(TradeBody::default(), 77, None).is_err(), "no offers");
-        assert_eq!(trade_id_of("9007199254740993").unwrap(), 9_007_199_254_740_993);
-        assert!(trade_id_of("12x").is_err());
     }
 
     #[test]

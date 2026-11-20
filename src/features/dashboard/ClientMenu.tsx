@@ -69,6 +69,7 @@ export function ClientMenu({ at, account, onClose, afkOn, closing, onLimits, onC
           ) : (
             <MenuItem icon="minimize" onSelect={() => void show("minimize")}>{t("dashboard.minimize")}</MenuItem>
           )}
+          <MenuCheckItem checked={i.held} onChange={(on) => api.instanceTakeControl(i.id, on).catch(toastError)}>{t("dashboard.takeControl")}</MenuCheckItem>
           <MenuItem icon="grid" onSelect={() => void micro()}>{i.micro ? t("dashboard.normalSize") : t("dashboard.microWindow", tiny)}</MenuItem>
           {server && <MenuItem icon="link" onSelect={() => copyRoaltLink(server)}>{t("share.copyLink")}</MenuItem>}
           <MenuSeparator />
@@ -90,7 +91,7 @@ export function ClientMenu({ at, account, onClose, afkOn, closing, onLimits, onC
             ))}
           </div>
           <MenuCheckItem checked={i.limits.eco} onChange={(eco) => void limits({ eco })}>{t("dashboard.efficiencyMode")}</MenuCheckItem>
-          <MenuCheckItem checked={i.antiAfk} onChange={(on) => api.instanceSetAntiAfk(i.id, on).catch(toastError)}>
+          <MenuCheckItem checked={i.antiAfk && !i.held} disabled={i.held} onChange={(on) => api.instanceSetAntiAfk(i.id, on).catch(toastError)}>
             {afkOn ? t("dashboard.antiAfk") : t("dashboard.antiAfkOff")}
           </MenuCheckItem>
           <MenuItem icon="sliders" onSelect={() => onLimits(i.id)}>{t("home.limits")}</MenuItem>

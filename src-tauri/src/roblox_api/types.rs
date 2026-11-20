@@ -304,93 +304,6 @@ pub struct CollectibleRow {
     pub recent_average_price: Option<i64>,
 }
 
-/// `avatar.roblox.com/v2/avatar/users/{id}/outfits`.
-#[derive(Deserialize, Debug, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub struct OutfitPage {
-    pub data: Option<Vec<OutfitRow>>,
-    /// `""` on the last page.
-    pub pagination_token: Option<String>,
-}
-
-#[derive(Deserialize, Debug, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub struct OutfitRow {
-    pub id: Option<i64>,
-    pub name: Option<String>,
-}
-
-/// A look: an outfit's details, or what an account wears now. Its parts stay the JSON Roblox
-/// gave, to be sent back as they are (RoALT reads only an item's `id`, `name` and `meta`).
-#[derive(Deserialize, Debug, Default, Clone, PartialEq)]
-#[serde(rename_all = "camelCase", default)]
-pub struct Look {
-    pub assets: Option<Vec<serde_json::Value>>,
-    pub body_color3s: serde_json::Value,
-    /// An outfit calls it `scale`, the avatar worn now `scales`.
-    #[serde(alias = "scales")]
-    pub scale: serde_json::Value,
-    pub player_avatar_type: serde_json::Value,
-}
-
-/// The answer of `set-wearing-assets`.
-#[derive(Deserialize, Debug, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub struct WornAssets {
-    /// Items the account can't wear (it doesn't own them).
-    pub invalid_asset_ids: Option<Vec<i64>>,
-    pub success: Option<bool>,
-}
-
-/// `trades.roblox.com/v1/trades/{Inbound|Outbound|Completed}`: one page.
-#[derive(Deserialize, Debug, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub struct TradePage {
-    pub data: Option<Vec<TradeHead>>,
-}
-
-#[derive(Deserialize, Debug, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub struct TradeHead {
-    pub id: Option<i64>,
-    /// The other player.
-    pub user: Option<TradeUser>,
-    /// ISO 8601, as `expiration`.
-    pub created: Option<String>,
-    pub expiration: Option<String>,
-}
-
-#[derive(Deserialize, Debug, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub struct TradeUser {
-    pub id: Option<i64>,
-    pub name: Option<String>,
-}
-
-/// `trades.roblox.com/v1/trades/{id}`: what each of the two players offers.
-#[derive(Deserialize, Debug, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub struct TradeBody {
-    pub offers: Option<Vec<TradeSide>>,
-}
-
-#[derive(Deserialize, Debug, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub struct TradeSide {
-    pub user: Option<TradeUser>,
-    pub user_assets: Option<Vec<TradeAsset>>,
-    pub robux: Option<i64>,
-}
-
-#[derive(Deserialize, Debug, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub struct TradeAsset {
-    pub asset_id: Option<i64>,
-    pub serial_number: Option<i64>,
-    pub name: Option<String>,
-    pub recent_average_price: Option<i64>,
-}
-
 /// A list read page by page. `more`: pages were left unread (the cap, or a later page failed);
 /// `complete`: nothing failed (stopping at the cap is still complete).
 #[derive(Debug, Clone, PartialEq)]
@@ -635,44 +548,6 @@ pub struct PrivateServerList {
     pub game_join_restricted: Option<bool>,
 }
 
-/// `GET games.roblox.com/v1/vip-servers/{id}` as its owner sees it. Unrecorded signed in, so
-/// everything is optional. Its `joinCode` and `link` are join secrets and have no field here, so
-/// they are never read; no `Debug` all the same.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VipServerResponse {
-    pub name: Option<String>,
-    pub active: Option<bool>,
-    pub subscription: Option<VipSubscription>,
-    pub permissions: Option<VipPermissions>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VipSubscription {
-    /// Auto-renew is on.
-    pub active: Option<bool>,
-    pub expired: Option<bool>,
-    pub expiration_date: Option<String>,
-    pub price: Option<i64>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VipPermissions {
-    pub friends_allowed: Option<bool>,
-    pub users: Option<Vec<VipUser>>,
-}
-
-/// A player the owner allowed in. Rows without `id` are dropped by the caller.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VipUser {
-    pub id: Option<i64>,
-    pub name: Option<String>,
-    pub display_name: Option<String>,
-}
-
 /// Rows without `vipServerId` are dropped by the caller. `accessCode` is a join secret.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -685,34 +560,6 @@ pub struct PrivateServerRow {
     /// The job id while it runs.
     pub id: Option<String>,
     pub access_code: Option<String>,
-}
-
-/// `friends.roblox.com/v1/my/friends/requests`: one page. Unrecorded signed in: all optional.
-#[derive(Deserialize, Debug, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub struct FriendRequestPage {
-    pub data: Option<Vec<FriendRequestRow>>,
-}
-
-#[derive(Deserialize, Debug, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub struct FriendRequestRow {
-    /// The sender.
-    pub id: Option<i64>,
-    /// Often "": Roblox's friend lists stopped carrying names.
-    pub name: Option<String>,
-    pub display_name: Option<String>,
-    pub friend_request: Option<FriendRequestInfo>,
-    /// Only counted.
-    pub mutual_friends_list: Option<Vec<serde_json::Value>>,
-}
-
-#[derive(Deserialize, Debug, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub struct FriendRequestInfo {
-    pub sender_id: Option<i64>,
-    /// ISO 8601.
-    pub sent_at: Option<String>,
 }
 
 /// `transaction-records/v1/users/{id}/transactions`: one page. Unrecorded signed in: all optional.
@@ -764,27 +611,4 @@ pub struct TransactionTotals {
     pub incoming_robux_total: Option<f64>,
     pub outgoing_robux_total: Option<f64>,
     pub pending_robux_total: Option<f64>,
-}
-
-/// `games.roblox.com/v1/private-servers/my-private-servers`: one page. Unrecorded signed in.
-#[derive(Deserialize, Debug, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub struct MyPrivateServerPage {
-    pub data: Option<Vec<MyPrivateServerRow>>,
-    pub next_page_cursor: Option<String>,
-}
-
-#[derive(Deserialize, Debug, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub struct MyPrivateServerRow {
-    pub private_server_id: Option<i64>,
-    pub name: Option<String>,
-    pub place_id: Option<i64>,
-    pub universe_id: Option<i64>,
-    pub universe_name: Option<String>,
-    pub price_in_robux: Option<i64>,
-    /// ISO 8601.
-    pub expiration_date: Option<String>,
-    pub will_renew: Option<bool>,
-    pub active: Option<bool>,
 }

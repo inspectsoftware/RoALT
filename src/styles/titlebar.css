@@ -104,6 +104,16 @@
       display: none;
     }
   }
+  /* Donate: a labelled pill, its menu holds Robux and coffee. */
+  .wc.title-donate {
+    width: auto;
+    grid-auto-flow: column;
+    align-items: center;
+    gap: 6px;
+    padding-inline: 10px 8px;
+    font-size: 13px;
+    font-weight: 500;
+  }
   /* Hidden where the island needs the room (its own breakpoint); Donate stays in the app menu. */
   @container titlebar (width < 1180px) {
     .wc.title-donate {

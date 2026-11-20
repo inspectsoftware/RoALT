@@ -103,8 +103,9 @@ const MAX_T: u32 = 20;
 const MAX_P: u32 = 16;
 
 /// Writes atomically (temp file in the same folder, then rename).
+/// Uses the stronger 256 MiB KDF cost because backup files leave the PC and can be attacked offline.
 pub fn write(path: &Path, password: &str, payload: &BackupPayload) -> Result<()> {
-    let kdf = master::new_kdf();
+    let kdf = master::new_recovery_kdf();
     let mut out = MAGIC.to_vec();
     for v in [kdf.m_kib, kdf.t, kdf.p] {
         out.extend_from_slice(&v.to_le_bytes());

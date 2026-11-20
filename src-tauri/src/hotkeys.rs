@@ -1,9 +1,9 @@
-//! The global keys besides the panic and clip keys (`commands`): show or hide RoALT, tile and
+//! The global keys besides the panic key (`commands`): show or hide RoALT, tile and
 //! minimize the clients (`settings.*_hotkey`), and one per favourite (`FavouriteOptions::hotkey`).
 //! Each does what its tray menu item does (`tray::on_menu`), so a key is kept with that item's id.
 //! All unset by default: a global key is taken from every other app.
 //!
-//! A key that can't be had (another app holds it, or it is also RoALT's panic or clip key) is off
+//! A key that can't be had (another app holds it, or it is also RoALT's panic key) is off
 //! and the others still work. A change that sets such a key is refused (`try_change`).
 
 use std::sync::Mutex;
@@ -52,10 +52,9 @@ fn wanted(s: &App, v: &Settings, fav: Option<(Option<i64>, &str)>) -> Vec<(Strin
     out
 }
 
-/// The panic and clip keys of `v`: never given to anything here, also while the clip key is not
-/// registered (no clip account), so the two can't end up on one key.
+/// The panic key of `v`: never given to anything here.
 fn reserved(v: &Settings) -> Vec<Shortcut> {
-    [&v.panic_hotkey, &v.clip_hotkey].into_iter().filter_map(|k| parse_hotkey(k.trim()).ok()).collect()
+    parse_hotkey(v.panic_hotkey.trim()).ok().into_iter().collect()
 }
 
 /// Registers what the stored settings and favourites ask for, as far as it goes. Returns why each

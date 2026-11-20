@@ -22,7 +22,7 @@ import { useRow } from "../kit/rowError";
 import { SettingRow } from "../kit/SettingRow";
 
 /** The presets after Monochrome (""): the fill and its name. Any other colour comes from the picker. */
-const ACCENTS: [string, Key][] = [
+export const ACCENTS: [string, Key][] = [
   ["#c6f432", "settings.accent.lime"],
   ["#ff4fd8", "settings.accent.neon"],
   ["#f48fb8", "settings.accent.sakura"],

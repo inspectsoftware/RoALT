@@ -485,20 +485,18 @@ fn summary(a: Option<&Applied>, old_job: bool, free: bool, now: Instant) -> Stri
     )
 }
 
-/// The accounts the user plays: Full quality ones, and the one Clips record (a clip shows it).
-/// Their clients keep their window, sound, graphics and frame rate: no layout, tiny, cap or mute.
-pub fn played(s: &crate::App, v: &Settings) -> Vec<i64> {
-    let mut played = s.db.full_quality_accounts().unwrap_or_else(|e| {
+/// The accounts the user plays: the Full quality ones. Their clients keep their window, sound,
+/// graphics and frame rate: no layout, tiny, cap or mute.
+pub fn played(s: &crate::App) -> Vec<i64> {
+    s.db.full_quality_accounts().unwrap_or_else(|e| {
         log::debug!("could not read the Full quality accounts: {e}");
         Vec::new()
-    });
-    played.extend(v.clip_account);
-    played
+    })
 }
 
 /// `plan` for the clients running now, from what the tracker and the limiter know.
 pub fn plan_now(s: &crate::App, v: &Settings, clients: &[(String, u32, u64, Limits)], throttled: &[String]) -> Vec<(String, u32, u64, Limits)> {
-    let full_quality = played(s, v);
+    let full_quality = played(s);
     let free = s.tracker.free(&full_quality, crate::commands::now_ms());
     let front = super::process::foreground_pid();
     s.limiter.note_free(&free, front);

@@ -123,7 +123,7 @@ export function Island({ model, live }: { model: IslandModel; live?: ReactNode }
             const leaf = model.main.find((l) => l.id === id)!;
             const i = model.main.indexOf(leaf);
             return (
-              <span key={id} className="island-slot">
+              <span key={id} className="island-slot" data-section={id}>
                 <Item leaf={leaf} drag={drag} enter={first ? i : null} />
               </span>
             );
@@ -140,7 +140,7 @@ export function Island({ model, live }: { model: IslandModel; live?: ReactNode }
           />
         ))}
         {model.end.map((leaf, i) => (
-          <span key={leaf.id} className="island-slot">
+          <span key={leaf.id} className="island-slot" data-section={leaf.id}>
             <Item leaf={leaf} enter={first ? model.main.length + model.groups.length + i : null} />
           </span>
         ))}

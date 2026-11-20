@@ -1,8 +1,8 @@
 import { useState } from "react";
-import type { AccountSummary, Group } from "../../api";
+import { api, type AccountSummary, type Group } from "../../api";
 import type { ClientPrefs } from "../../bindings/ClientPrefs";
 import type { GroupDefaults } from "../../bindings/GroupDefaults";
-import { useSaveGroup, withGroupDefaults } from "../../data";
+import { qk, queryClient, useSaveGroup, withGroupDefaults } from "../../data";
 import { t } from "../../i18n";
 import { Button } from "../../ui/Button";
 import { NumberField, Segmented, Switch } from "../../ui/controls";
@@ -59,6 +59,7 @@ function Form({ group, onClose }: { group: Group; onClose: () => void }) {
   const [clientOn, setClientOn] = useState(d.client !== null);
   // The cores a group was given elsewhere (a backup) are kept: this dialog doesn't show them.
   const [client, setClient] = useState<ClientPrefs>(d.client ?? NO_LIMITS);
+  const [clearOverrides, setClearOverrides] = useState(false);
   const limit = (patch: Partial<ClientPrefs["limits"]>) => setClient((c) => ({ ...c, limits: { ...c.limits, ...patch } }));
 
   const submit = () => {
@@ -74,7 +75,15 @@ function Form({ group, onClose }: { group: Group; onClose: () => void }) {
     save.mutate(
       { id: group.id, name: group.name, color: group.color ?? undefined, defaults },
       {
-        onSuccess: () => {
+        onSuccess: async () => {
+          if (clearOverrides) {
+            try {
+              await api.groupClearOverrides(group.id);
+              void queryClient.invalidateQueries({ queryKey: qk.accounts });
+            } catch {
+              // group defaults were saved; keep going
+            }
+          }
           toast(t("groups.defaults.saved"));
           onClose();
         },
@@ -152,6 +161,10 @@ function Form({ group, onClose }: { group: Group; onClose: () => void }) {
             </div>
           )}
         </div>
+        <label className="flex items-start gap-2.5 pt-1 text-[13px] text-fg-2">
+          <input type="checkbox" className="cb mt-0.5" checked={clearOverrides} onChange={(e) => setClearOverrides(e.target.checked)} />
+          <span>{t("groups.defaults.clearOverrides")}</span>
+        </label>
       </div>
       <div className="dlg-foot">
         <Button onClick={onClose} disabled={save.isPending}>{t("common.cancel")}</Button>

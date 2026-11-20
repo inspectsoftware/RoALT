@@ -116,9 +116,14 @@ fn view(app: &AppHandle) -> View {
     }
 }
 
-/// "RoALT", and how many clients run while any does.
+/// "RoALT", whether locked, and how many clients run while any does.
 fn tooltip(v: &View) -> String {
-    if v.running == 0 { "RoALT".into() } else { format!("RoALT · {}: {}", tr!("Roblox clients"), v.running) }
+    match (v.locked, v.running) {
+        (true, 0) => format!("RoALT · {}", tr!("Locked")),
+        (true, n) => format!("RoALT · {} · {}: {}", tr!("Locked"), tr!("Roblox clients"), n),
+        (false, 0) => "RoALT".into(),
+        (false, n) => format!("RoALT · {}: {}", tr!("Roblox clients"), n),
+    }
 }
 
 fn menu(app: &AppHandle, v: &View) -> tauri::Result<Menu<Wry>> {
@@ -272,7 +277,7 @@ async fn launch(app: &AppHandle, id: i64) -> Result<()> {
     let s = app.state::<App>();
     let row = s.db.favourites()?.into_iter().find(|f| f.id == id).ok_or(AppError::NotFound)?;
     let fav = commands::favourite_of(&s, row)?;
-    let ids: Vec<i64> = commands::favourite_accounts(&s, &fav)?
+    let valid: Vec<i64> = commands::favourite_accounts(&s, &fav)?
         .into_iter()
         .filter(|&a| match s.db.account(a) {
             Ok(a) => a.status == AccountStatus::Valid,
@@ -282,6 +287,12 @@ async fn launch(app: &AppHandle, id: i64) -> Result<()> {
             }
         })
         .collect();
+    // Skip members already running so refilling dead accounts from the tray works in one click.
+    let ids: Vec<i64> = valid.iter().copied().filter(|&a| !s.tracker.has_live_client(a)).collect();
+    if ids.is_empty() && !valid.is_empty() {
+        notice(app, false, tr!("Every account of \"{name}\" is already running.", name = fav.name));
+        return Ok(());
+    }
     match ids.len() {
         0 => {
             show_main(app);

@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { api, asError, type AccountSummary, type Profile, type Settings } from "../../api";
-import { setAccounts, useAccounts, useInstances, useRunAccounts, useSetSettings } from "../../data";
+import { api, asError, type AccountSummary, type Group, type Profile, type Settings } from "../../api";
+import { qk, setAccounts, useAccounts, useGroups, useInstances, useRunAccounts, useSetSettings } from "../../data";
 import { fmtList, fmtNum, t, type Key } from "../../i18n";
 import { Button } from "../../ui/Button";
 import { Segmented } from "../../ui/controls";
@@ -9,7 +9,7 @@ import { Dialog } from "../../ui/Dialog";
 import { Icon } from "../../ui/Icon";
 import { Collapse, riseIn } from "../../ui/motion";
 import { friendly, toast } from "../../ui/Toast";
-import { setPreviewFps, storedFps, type PreviewFps } from "../dashboard/previewFps";
+import { fpsLabel, setPreviewFps, storedFps, type PreviewFps } from "../dashboard/previewFps";
 import { AccountPicker } from "../launch/AccountPicker";
 import { isLive } from "../launch/Running";
 import { FACTS_SHOWN, KEYS, LABELS, named, ownCaps, perClient, PRESETS, same, SHARED, type ProfileKey } from "./presets";
@@ -57,11 +57,12 @@ export function ReviewDialog({ profile, settings, facts, onApplied, onClose }: {
   const qc = useQueryClient();
   const set = useSetSettings({ quiet: true });
   const accounts = useAccounts().data ?? [];
+  const groups = useGroups().data ?? [];
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Compared with what was there when it opened: Apply writes the cache before the save answers
   // (data.ts), and the list must not empty under the busy Apply.
-  const [base, setBase] = useState(() => ({ settings, accounts, fps: storedFps() }));
+  const [base, setBase] = useState(() => ({ settings, accounts, groups, fps: storedFps() }));
   const [shownFor, setShownFor] = useState(profile);
   // Every account (Settings), or only the picked ones (each keeps the profile as its own).
   const [scope, setScope] = useState<"all" | "chosen">("all");
@@ -69,7 +70,7 @@ export function ReviewDialog({ profile, settings, facts, onApplied, onClose }: {
   const list = useRef<HTMLDivElement>(null);
   if (shownFor !== profile) {
     setShownFor(profile);
-    setBase({ settings, accounts, fps: storedFps() });
+    setBase({ settings, accounts, groups, fps: storedFps() });
     setError(null);
     setScope("all");
     setPicked([]);
@@ -90,11 +91,15 @@ export function ReviewDialog({ profile, settings, facts, onApplied, onClose }: {
       ? KEYS.filter((k) => own[k] != null).map((k) => ({ label: t(LABELS[k]), from: "", to: valueText(k, own[k]) }))
       : KEYS.filter((k) => profile[k] != null && !same(profile[k], s[k])).map((k) => ({ label: t(LABELS[k]), from: valueText(k, s[k]), to: valueText(k, profile[k]) }));
   const fps = profile?.previewFps as PreviewFps | undefined;
-  if (!chosen && fps != null && fps !== base.fps) changes.push({ label: t("dashboard.previewFps"), from: t("dashboard.fps", { fps: base.fps }), to: t("dashboard.fps", { fps }) });
+  if (!chosen && fps != null && fps !== base.fps) changes.push({ label: t("dashboard.previewFps"), from: fpsLabel(base.fps), to: fpsLabel(fps) });
   // A profile's FPS cap is what its clients get: an account's own looser one would win over it at launch.
   const cap = profile?.fpsCap;
-  const clearing = typeof cap === "number" ? (chosen ? targets : base.accounts).filter((a) => a.fpsCap && (cap === 0 || a.fpsCap > cap)) : [];
+  const looser = (c: number | null) => typeof cap === "number" && !!c && (cap === 0 || c > cap);
+  const clearing = (chosen ? targets : base.accounts).filter((a) => looser(a.fpsCap));
   if (clearing.length) changes.push({ label: t("performance.accountCaps"), from: ownCaps(clearing), to: t("performance.capsCleared") });
+  // A group's cap wins over Settings' too, but not over a chosen account's own profile.
+  const clearingGroups = chosen ? [] : base.groups.filter((g) => looser(g.defaults.fpsCap));
+  if (clearingGroups.length) changes.push({ label: t("performance.groupCaps"), from: fmtList(clearingGroups.map((g) => `${g.name} (${g.defaults.fpsCap})`)), to: t("performance.capsCleared") });
   // Windows change now; what a client reads at its start waits for its next launch.
   const running = (useInstances().data ?? []).filter((i) => isLive(i) && (!chosen || picked.includes(i.accountId)));
   // One still loading gets these when it reaches a game.
@@ -122,6 +127,7 @@ export function ReviewDialog({ profile, settings, facts, onApplied, onClose }: {
     setBusy(true);
     setError(null);
     const cleared = new Map<number, AccountSummary>();
+    const clearedGroups = new Map<number, Group>();
     try {
       if (chosen) {
         for (const a of targets) {
@@ -136,7 +142,12 @@ export function ReviewDialog({ profile, settings, facts, onApplied, onClose }: {
           const saved = await api.accountUpdate(a.id, { fpsCap: 0 });
           cleared.set(saved.id, saved);
         }
-        if (previewFps) setPreviewFps(previewFps as PreviewFps);
+        for (const g of clearingGroups) {
+          const saved = await api.groupSave({ id: g.id, name: g.name, color: g.color ?? undefined, defaults: { ...g.defaults, fpsCap: null } });
+          clearedGroups.set(saved.id, saved);
+        }
+        // 0 is Off.
+        if (previewFps != null) setPreviewFps(previewFps as PreviewFps);
       }
       await Promise.allSettled([...makeTiny.map((i) => api.instanceMicro(i.id, true)), ...hide.map((i) => api.instanceShow(i.id, "minimize"))]);
       toast(t(running.length && nextLaunch ? "performance.appliedRelaunch" : "performance.applied"));
@@ -146,6 +157,7 @@ export function ReviewDialog({ profile, settings, facts, onApplied, onClose }: {
     } finally {
       // One cache write for all of them, the ones saved before a failure too: each redraws every account list.
       if (cleared.size) setAccounts(qc, (all) => all.map((x) => cleared.get(x.id) ?? x));
+      if (clearedGroups.size) qc.setQueryData<Group[]>(qk.groups, (all) => all?.map((x) => clearedGroups.get(x.id) ?? x));
       setBusy(false);
     }
   }

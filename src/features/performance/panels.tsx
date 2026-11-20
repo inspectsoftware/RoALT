@@ -13,7 +13,7 @@ import { NumberField, Segmented, Switch } from "../../ui/controls";
 import { Icon } from "../../ui/Icon";
 import { Collapse, Morph, SPRING, Swap, TWEEN } from "../../ui/motion";
 import { StatusPill } from "../../ui/Status";
-import { PREVIEW_FPS, usePreviewFps } from "../dashboard/previewFps";
+import { fpsLabel, PREVIEW_FPS, usePreviewFps } from "../dashboard/previewFps";
 import { useJumpTarget } from "../settings/jump";
 import { useRow } from "../settings/kit/rowError";
 import { SettingRow, type RowRenderers } from "../settings/kit/SettingRow";
@@ -127,7 +127,7 @@ function PreviewFpsRow() {
   const [fps, setFps] = usePreviewFps();
   return (
     <SettingRow id="previewFps">
-      <Segmented mono label={t("dashboard.previewFps")} value={fps} options={PREVIEW_FPS.map((f) => ({ value: f, label: t("dashboard.fps", { fps: f }) }))} onChange={setFps} />
+      <Segmented mono label={t("dashboard.previewFps")} value={fps} options={PREVIEW_FPS.map((f) => ({ value: f, label: fpsLabel(f) }))} onChange={setFps} />
     </SettingRow>
   );
 }

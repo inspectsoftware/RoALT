@@ -293,9 +293,8 @@ pub fn start(app: AppHandle, mut req: BulkRequest) -> Result<String> {
         return Err(AppError::Invalid(crate::commands::installing()));
     }
     let mut accounts = Vec::with_capacity(ids.len());
-    // The ones the window layout places: the accounts the user plays (full quality, the one Clips
-    // record) keep their window.
-    let played = crate::instances::limits::played(&s, &s.db.settings()?);
+    // The ones the window layout places: the accounts the user plays (full quality) keep their window.
+    let played = crate::instances::limits::played(&s);
     let mut laid_out = Vec::new();
     for &id in ids {
         let a = s.db.effective(id)?;
@@ -1055,6 +1054,7 @@ mod tests {
             sign_in_problem: false,
             micro_size: None,
             applied_limits: Default::default(),
+            held: false,
         }
     }
 

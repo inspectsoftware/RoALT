@@ -36,6 +36,9 @@ pub struct AccountMeta {
 
 pub struct Db {
     conn: Mutex<Connection>,
+    /// Held across a read, change and save of the settings (`settings_change`), so two changes
+    /// at once don't drop one.
+    settings_change: Mutex<()>,
     /// The database file (its key is `cipher::read_key(file)`); None in memory.
     file: Option<PathBuf>,
 }
@@ -130,7 +133,7 @@ impl Db {
                 e => AppError::Storage(e.to_string()),
             }
         })?;
-        let db = Db { conn: Mutex::new(conn), file };
+        let db = Db { conn: Mutex::new(conn), settings_change: Mutex::new(()), file };
         db.public_guard_off_once()?;
         db.background_cover_once()?;
         Ok(db)
@@ -434,6 +437,50 @@ impl Db {
         Ok(self.conn().query_row(sql, [id], |r| Ok((r.get(0)?, r.get(1)?)))?)
     }
 
+    /// `(account_id, user_id, encrypted cookie)` for every stored account (used for key rotation).
+    pub fn all_account_cookies(&self) -> Result<Vec<(i64, i64, Vec<u8>)>> {
+        let c = self.conn();
+        let mut st = c.prepare("SELECT id, user_id, cookie FROM accounts")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Atomically commits a vault key rotation: updates the vault record, deletes any stale
+    /// recovery record (bound to the old key), and rewrites every encrypted cookie, favourite,
+    /// and Discord webhook in one transaction, then flushes old pages.
+    pub fn commit_key_rotation(
+        &self,
+        rec: &VaultRecord,
+        cookies: &[(i64, Vec<u8>)],
+        favourites: &[(i64, Vec<u8>)],
+        webhook_hex: Option<&str>,
+    ) -> Result<()> {
+        let (mode, kdf) = match rec.mode {
+            VaultMode::Dpapi => ("dpapi", None),
+            VaultMode::Master => ("master", rec.kdf.as_ref()),
+        };
+        let now = now_ms();
+        let mut c = self.conn();
+        let tx = c.transaction()?;
+        tx.execute(
+            "INSERT OR REPLACE INTO vault (id, mode, wrapped_key, kdf_salt, kdf_m_kib, kdf_t, kdf_p) \
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)",
+            params![mode, rec.wrapped_key, kdf.map(|k| &k.salt), kdf.map(|k| k.m_kib), kdf.map(|k| k.t), kdf.map(|k| k.p)],
+        )?;
+        tx.execute("DELETE FROM vault_recovery", [])?;
+        for (id, blob) in cookies {
+            tx.execute("UPDATE accounts SET cookie = ?2, updated_at = ?3 WHERE id = ?1", params![id, blob, now])?;
+        }
+        for (id, blob) in favourites {
+            tx.execute("UPDATE favourites SET target = ?2 WHERE id = ?1", params![id, blob])?;
+        }
+        if let Some(hex) = webhook_hex {
+            tx.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('discord_webhook', ?1)", [hex])?;
+        }
+        tx.commit()?;
+        flush_old_wraps(&c)
+    }
+
     pub fn set_cookie(&self, id: i64, blob: &[u8]) -> Result<()> {
         let sql = "UPDATE accounts SET cookie = ?2, updated_at = ?3 WHERE id = ?1";
         found(self.conn().execute(sql, params![id, blob, now_ms()])?)
@@ -552,6 +599,42 @@ impl Db {
         Ok(())
     }
 
+    /// Clears per-account overrides (`fps_cap`, `launch_args`, `client_limits`) on members of
+    /// `group_id` for the fields that the group's own defaults specify, so the group defaults take
+    /// effect immediately. Returns how many accounts were updated.
+    pub fn clear_group_overrides(&self, group_id: i64) -> Result<u32> {
+        let g = self.groups()?.into_iter().find(|g| g.id == group_id).ok_or(AppError::NotFound)?;
+        let d = &g.defaults;
+        let mut sets = Vec::new();
+        if d.fps_cap.is_some() {
+            sets.push("fps_cap = NULL");
+        }
+        if d.launch_args.is_some() {
+            sets.push("launch_args = NULL");
+        }
+        if d.client.is_some() {
+            sets.push("client_limits = NULL");
+        }
+        if d.full_quality.is_some() {
+            sets.push("full_quality = 0");
+        }
+        if d.allow_disconnect.is_some() {
+            sets.push("allow_disconnect = 0");
+        }
+        if d.discord_muted.is_some() {
+            sets.push("discord_muted = 0");
+        }
+        if sets.is_empty() {
+            return Ok(0);
+        }
+        let sql = format!(
+            "UPDATE accounts SET {}, updated_at = ?2 WHERE id IN (SELECT account_id FROM account_groups WHERE group_id = ?1)",
+            sets.join(", ")
+        );
+        let n = self.conn().execute(&sql, params![group_id, now_ms()])?;
+        Ok(n as u32)
+    }
+
     /// Existing group id for this name (case-insensitive), or a new group.
     pub fn group_by_name_or_create(&self, name: &str, color: Option<&str>) -> Result<i64> {
         let c = self.conn();
@@ -587,6 +670,12 @@ impl Db {
                     .or_else(|| readable_settings(&j))
             })
             .unwrap_or_default())
+    }
+
+    /// Taken by whoever reads the settings to save a changed copy, until it is saved. Off the main
+    /// thread, never held while waiting for the main thread (`set_settings_on_main`).
+    pub fn settings_change(&self) -> MutexGuard<'_, ()> {
+        self.settings_change.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn save_settings(&self, s: &Settings) -> Result<()> {

@@ -4,7 +4,7 @@ import type { IconName } from "../ui/Icon";
 import type { SettingsArea } from "../features/settings/areas";
 import type { LaunchTarget } from "../api";
 
-export type View = "dashboard" | "accounts" | "launch" | "browse" | "servers" | "monitor" | "discord" | "clips" | "mods" | "outfits" | "trades" | "friends" | "privates" | "crashes" | "debug" | "settings";
+export type View = "dashboard" | "accounts" | "launch" | "browse" | "servers" | "monitor" | "discord" | "mods" | "crashes" | "debug" | "settings";
 
 export const VIEW_NAME: Record<View, Key> = {
   dashboard: "app.nav.dashboard",
@@ -14,12 +14,7 @@ export const VIEW_NAME: Record<View, Key> = {
   servers: "app.nav.servers",
   monitor: "app.nav.monitor",
   discord: "app.nav.discord",
-  clips: "app.nav.clips",
   mods: "app.nav.mods",
-  outfits: "app.nav.outfits",
-  trades: "app.nav.trades",
-  friends: "app.nav.friends",
-  privates: "servers.privateServers",
   crashes: "app.nav.crashes",
   debug: "app.nav.debug",
   settings: "app.nav.settings",
@@ -27,7 +22,7 @@ export const VIEW_NAME: Record<View, Key> = {
 
 /** The island's places, by the ids `roalt.sectionOrder` keeps (Debug moved into Tools). */
 export const MAIN_SECTIONS = ["home", "play", "browse", "accounts"] as const;
-export const TOOL_SECTIONS = ["servers", "monitor", "discord", "clips", "mods", "outfits", "trades", "friends", "privates", "crashes", "debug"] as const;
+export const TOOL_SECTIONS = ["servers", "monitor", "discord", "mods", "crashes", "debug"] as const;
 export type Section = (typeof MAIN_SECTIONS)[number] | (typeof TOOL_SECTIONS)[number];
 
 export const SECTION_VIEW: Record<Section, View> = {
@@ -38,12 +33,7 @@ export const SECTION_VIEW: Record<Section, View> = {
   servers: "servers",
   monitor: "monitor",
   discord: "discord",
-  clips: "clips",
   mods: "mods",
-  outfits: "outfits",
-  trades: "trades",
-  friends: "friends",
-  privates: "privates",
   crashes: "crashes",
   debug: "debug",
 };
@@ -55,12 +45,7 @@ export const SECTION_ICON: Record<Section, IconName> = {
   servers: "servers",
   monitor: "monitor",
   discord: "bell",
-  clips: "film",
   mods: "palette",
-  outfits: "shirt",
-  trades: "swap",
-  friends: "chat",
-  privates: "lock",
   crashes: "alert",
   debug: "terminal",
 };

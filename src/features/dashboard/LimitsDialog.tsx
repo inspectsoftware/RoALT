@@ -31,7 +31,17 @@ export function LimitsDialog({ instanceId, name, onClose }: { instanceId: string
 }
 
 function LimitsBody({ inst }: { inst: Instance }) {
+  const all = useInstances().data ?? [];
+  const runningCount = all.filter(isRunning).length;
   const set = (patch: Partial<Limits>) => api.instanceSetLimits(inst.id, { ...inst.limits, ...patch }).catch(toastError);
+  const [applyingAll, setApplyingAll] = useState(false);
+  const applyAll = () => {
+    setApplyingAll(true);
+    api
+      .instancesApplyLimits(inst.limits)
+      .then((count) => toast(t("launch.limits.appliedAll", { count })), toastError)
+      .finally(() => setApplyingAll(false));
+  };
   const afk = useSettings().data?.antiAfk;
   const [trimming, setTrimming] = useState(false);
   const s = useSettings().data;
@@ -121,6 +131,14 @@ function LimitsBody({ inst }: { inst: Instance }) {
         <Switch label={t("launch.limits.antiAfkClient")} checked={inst.antiAfk} onChange={(on) => api.instanceSetAntiAfk(inst.id, on).catch(toastError)} />
       </div>
       <p className="text-xs text-fg-3">{t("launch.limits.kept")}</p>
+      {runningCount > 1 && (
+        <div className="flex items-center justify-between gap-2 pt-1">
+          <span className="text-xs text-fg-2">{t("launch.limits.applyAllHint")}</span>
+          <button type="button" className="btn btn-sm" disabled={applyingAll} onClick={applyAll}>
+            {t("launch.limits.applyAll", { count: runningCount })}
+          </button>
+        </div>
+      )}
       <Disclosure summary={t("settings.moreAbout", { label: t("monitor.limits") })} className="home-limits-help">
         {t("launch.limits.help")}
       </Disclosure>

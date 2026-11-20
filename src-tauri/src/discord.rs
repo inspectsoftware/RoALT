@@ -1,5 +1,5 @@
 //! Discord alerts (opt-in): what happens to the clients, posted to a webhook the user pastes.
-//! The only host besides Roblox RoALT talks to, and only once a webhook is set.
+//! Contacted only once a webhook is set.
 //!
 //! The webhook URL holds its token, so it is a secret: kept in the vault (AES-GCM, `DISCORD_AAD`)
 //! as hex in the settings table, never logged, never sent to the UI (only its id's last digits).
@@ -9,6 +9,7 @@
 //! and never carry a cookie, ticket, launch link or log line.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -20,7 +21,7 @@ use tauri::{AppHandle, Manager};
 use crate::App;
 use crate::error::{AppError, Result};
 use crate::instances::{Transition, hung, unexpected};
-use crate::model::{AccountSummary, BulkProgress, BulkStage, CrashKind, DiscordEvents, DiscordStatus, InstanceState};
+use crate::model::{AccountSummary, BulkProgress, BulkStage, CrashKind, DiscordEvents, DiscordStatus, InstanceState, PingLevel};
 use crate::vault::Secret;
 
 const DISCORD_AAD: &[u8] = b"roalt.discord.webhook";
@@ -30,6 +31,8 @@ const KEY: &str = "discord_webhook";
 const GAP: Duration = Duration::from_secs(2);
 /// Events waiting beyond this many drop the oldest.
 const MAX_QUEUED: usize = 50;
+/// Consecutive network failures before a failing batch is dropped instead of retrying forever.
+const MAX_RETRIES: u32 = 6;
 /// Lines in one message; the rest are counted.
 const MAX_LINES: usize = 15;
 const HOSTS: [&str; 6] =
@@ -117,8 +120,6 @@ pub enum Event {
     Throttled { name: String },
     /// A newer RoALT is out.
     Update { version: String },
-    /// `count` new incoming trades, the first from `from` (escaped).
-    Trade { name: String, count: usize, from: String },
     /// The PC's memory stayed nearly full with `clients` running.
     PcMemory { pct: u32, clients: usize },
     /// The clients' GPU use stayed nearly at its most.
@@ -127,8 +128,12 @@ pub enum Event {
     Restart { name: String, cause: CrashKind },
     /// The crash breaker gave up on the account.
     Breaker { name: String, count: u32, window_min: u32 },
+    /// A relaunch stopped for good (60-min timeout, invalid cookie, client wouldn't close, permanent error).
+    GaveUp { name: String, reason: String },
     BatchDone { total: usize, in_game: usize, done: usize, failed: usize },
-    Status { clients: usize, ram_mb: f64, cpu_pct: Option<f64> },
+    Status { in_game: usize, disconnected: usize, given_up: usize, ram_mb: f64, cpu_pct: Option<f64> },
+    /// Windows was locked while anti-AFK looks after clients: it can't press keys until unlocked.
+    AfkBlocked,
 }
 
 impl Event {
@@ -136,16 +141,16 @@ impl Event {
         match self {
             Self::Crash { .. } => v.crash,
             Self::Hang { .. } => v.hang,
-            Self::Disconnect { .. } => v.disconnect,
+            // Told with the disconnects it leads to.
+            Self::Disconnect { .. } | Self::AfkBlocked => v.disconnect,
             Self::Launch { .. } => v.launch,
             Self::SignIn { .. } => v.sign_in,
             Self::Throttled { .. } => v.throttle,
             Self::Update { .. } => v.update,
-            Self::Trade { .. } => v.trade,
             Self::PcMemory { .. } | Self::PcGpu { .. } => v.pc,
             Self::Restart { cause: CrashKind::Mem, .. } => v.mem_restart,
             Self::Restart { .. } => v.restart,
-            Self::Breaker { .. } => v.breaker,
+            Self::Breaker { .. } | Self::GaveUp { .. } => v.breaker,
             Self::BatchDone { .. } => v.batch_done,
             Self::Status { .. } => v.status_every_min > 0,
         }
@@ -154,7 +159,7 @@ impl Event {
     /// 2: bad, 1: worth a look, 0: news.
     fn severity(&self) -> u8 {
         match self {
-            Self::Crash { .. } | Self::Breaker { .. } => 2,
+            Self::Crash { .. } | Self::Breaker { .. } | Self::GaveUp { .. } | Self::AfkBlocked => 2,
             Self::Hang { .. } | Self::Disconnect { .. } | Self::SignIn { .. } | Self::PcMemory { .. } | Self::PcGpu { .. } => 1,
             Self::BatchDone { failed, .. } if *failed > 0 => 1,
             _ => 0,
@@ -181,8 +186,6 @@ impl Event {
             Self::SignIn { name, note } => format!("🔐 **{name}**: {note}."),
             Self::Throttled { name } => format!("🐢 {}", tr!("**{name}**: slowed down, it uses too much memory.", name = name)),
             Self::Update { version } => format!("⬆️ {}", tr!("RoALT {version} is out.", version = version)),
-            Self::Trade { name, count: 1, from } => format!("📦 {}", tr!("**{name}**: a new trade from {from}.", name = name, from = from)),
-            Self::Trade { name, count, .. } => format!("📦 {}", tr!("**{name}**: new trades waiting: {n}.", name = name, n = count)),
             Self::PcMemory { pct, clients } => format!("🧠 {}", tr!("This PC's memory is {pct}% full (clients running: {n}).", pct = pct, n = clients)),
             Self::PcGpu { pct, clients } => format!("🖥️ {}", tr!("The clients keep the GPU at {pct}% (clients running: {n}).", pct = pct, n = clients)),
             Self::Restart { name, cause: CrashKind::Disconnect } => format!("🔁 {}", tr!("**{name}**: rejoined.", name = name)),
@@ -206,7 +209,15 @@ impl Event {
                     minutes = window_min
                 )
             ),
+            Self::GaveUp { name, reason } => {
+                let why = reason.trim().trim_end_matches('.');
+                format!("⛔ **{name}**: {why}.")
+            }
             // Why a batch stopped early is left out: that text names accounts by alias, also muted ones.
+            Self::AfkBlocked => format!(
+                "🔒 {}",
+                tr!("Windows is locked, so anti-AFK can't press keys: clients in a game will be disconnected for idling after 20 minutes. Unlock the PC to keep them in.")
+            ),
             Self::BatchDone { total, in_game, done, failed } => {
                 let mut s = format!("🚀 {}", tr!("Batch finished: {in_game} of {total} in game", in_game = in_game, total = total));
                 if *done > 0 {
@@ -217,18 +228,33 @@ impl Event {
                 }
                 s + "."
             }
-            Self::Status { clients, ram_mb, cpu_pct } => {
+            Self::Status { in_game, disconnected, given_up, ram_mb, cpu_pct } => {
+                if *in_game + *disconnected + *given_up == 0 {
+                    return format!("📊 {}", tr!("0 clients running."));
+                }
                 let cpu = cpu_pct.map(|c| format!(" · {c:.0}% CPU")).unwrap_or_default();
-                format!(
-                    "📊 {}",
-                    trn!(
-                        *clients,
-                        "{n} client running · {ram} MB RAM{cpu}.",
-                        "{n} clients running · {ram} MB RAM{cpu}.",
-                        ram = format!("{ram_mb:.0}"),
-                        cpu = cpu
+                let ram = format!("{ram_mb:.0}");
+                if *disconnected == 0 && *given_up == 0 {
+                    format!(
+                        "📊 {}",
+                        trn!(
+                            *in_game,
+                            "{n} client running · {ram} MB RAM{cpu}.",
+                            "{n} clients running · {ram} MB RAM{cpu}.",
+                            ram = ram,
+                            cpu = cpu
+                        )
                     )
-                )
+                } else {
+                    let mut parts = vec![tr!("{n} in game", n = in_game)];
+                    if *disconnected > 0 {
+                        parts.push(tr!("{n} disconnected", n = disconnected));
+                    }
+                    if *given_up > 0 {
+                        parts.push(tr!("{n} gave up", n = given_up));
+                    }
+                    format!("📊 {} · {ram} MB RAM{cpu}.", parts.join(", "))
+                }
             }
         }
     }
@@ -278,8 +304,8 @@ pub fn launched(t: &Transition) -> bool {
 }
 
 /// The webhook body for some events (pure): one embed, one line each. `ping` is mentioned
-/// only when something went wrong (severity 1 or 2), never for news.
-pub fn message(events: &[Event], ping: &str) -> Value {
+/// according to `ping_level` (`Urgent`: severity 2; `Warnings`: severity 1 or 2), never for news.
+pub fn message(events: &[Event], ping: &str, ping_level: PingLevel) -> Value {
     let mut lines: Vec<String> = events.iter().take(MAX_LINES).map(Event::line).collect();
     if events.len() > MAX_LINES {
         lines.push(trn!(events.len() - MAX_LINES, "…and {n} more.", "…and {n} more."));
@@ -295,7 +321,11 @@ pub fn message(events: &[Event], ping: &str) -> Value {
         "allowed_mentions": { "parse": [] },
         "embeds": [{ "title": "RoALT", "description": lines.join("\n"), "color": color }],
     });
-    if severity.is_some_and(|s| s > 0) {
+    let min_sev = match ping_level {
+        PingLevel::Urgent => 2,
+        PingLevel::Warnings => 1,
+    };
+    if severity.is_some_and(|s| s >= min_sev) {
         add_ping(&mut body, ping);
     }
     body
@@ -319,6 +349,8 @@ fn retry_after(body: &str, header: Option<&str>) -> Duration {
 pub struct Outbox {
     queue: VecDeque<Event>,
     not_before: Option<Instant>,
+    /// Consecutive network failures for the current batch (reset on success or drop).
+    retries: u32,
 }
 
 impl Outbox {
@@ -341,6 +373,7 @@ impl Outbox {
     /// A message went out (or failed for good) at `now`.
     /// Never shortens a longer wait Discord asked for.
     fn sent(&mut self, now: Instant) {
+        self.retries = 0;
         self.not_before = Some(self.not_before.map_or(now + GAP, |t| t.max(now + GAP)));
     }
 
@@ -354,6 +387,20 @@ impl Outbox {
         }
         self.not_before = Some(now + after.max(GAP));
     }
+
+    /// Network failure backoff (30 s, 60 s, 120 s, 240 s, 300 s, capped at `MAX_RETRIES`).
+    /// Returns `Some(wait)` when requeued, or `None` when the retry cap was reached and the batch dropped.
+    fn network_retry(&mut self, events: Vec<Event>, now: Instant) -> Option<Duration> {
+        self.retries += 1;
+        if self.retries > MAX_RETRIES {
+            self.sent(now);
+            return None;
+        }
+        let secs = 30u64.saturating_mul(1u64 << (self.retries - 1).min(4)).min(300);
+        let wait = Duration::from_secs(secs);
+        self.retry(events, now, wait);
+        Some(wait)
+    }
 }
 
 pub struct Discord {
@@ -361,6 +408,12 @@ pub struct Discord {
     http: std::result::Result<reqwest::Client, String>,
     /// When the last status summary was queued.
     last_status: Mutex<Option<Instant>>,
+    /// Cached `configured` flag so background loops don't hit SQLite when no webhook is set.
+    configured_cache: Mutex<Option<bool>>,
+    /// True once at least one client was seen by the status check, so dropping to 0 reports once.
+    had_clients: AtomicBool,
+    /// Rate-limits the warning when alerts are dropped because the vault is locked.
+    locked_warned: AtomicBool,
 }
 
 impl Discord {
@@ -372,7 +425,14 @@ impl Discord {
             .build()
             .map_err(|e| e.without_url().to_string())
             .inspect_err(|e| log::error!("discord: http client unavailable: {e}"));
-        Discord { outbox: Mutex::default(), http, last_status: Mutex::new(None) }
+        Discord {
+            outbox: Mutex::default(),
+            http,
+            last_status: Mutex::new(None),
+            configured_cache: Mutex::new(None),
+            had_clients: AtomicBool::new(false),
+            locked_warned: AtomicBool::new(false),
+        }
     }
 
     fn outbox(&self) -> MutexGuard<'_, Outbox> {
@@ -410,9 +470,18 @@ pub fn stored_url(s: &App) -> Option<zeroize::Zeroizing<String>> {
     webhook(s).ok().flatten().map(|h| h.url.expose().to_owned().into())
 }
 
-/// The stored ping; "" (no one) when settings are unreadable, so the alert still goes.
-fn ping(s: &App) -> String {
-    s.db.settings().map(|v| v.discord.ping).unwrap_or_default()
+/// Re-encrypts the stored Discord webhook under `new_key`, returning the new hex string (or `None`
+/// if no webhook is stored).
+pub fn reencrypt_webhook(s: &App, new_key: &[u8; 32]) -> Result<Option<String>> {
+    let Some(stored) = s.db.setting_value(KEY)? else { return Ok(None) };
+    let blob = unhex(&stored).ok_or(AppError::Crypto)?;
+    let rotated = s.vault.reencrypt_with_key(new_key, DISCORD_AAD, &blob)?;
+    Ok(Some(hex(&rotated)))
+}
+
+/// The stored ping and ping level; defaults when settings are unreadable, so the alert still goes.
+fn ping_settings(s: &App) -> (String, PingLevel) {
+    s.db.settings().map(|v| (v.discord.ping, v.discord.ping_level)).unwrap_or_default()
 }
 
 /// While the vault is locked a stored webhook still shows as configured (its id unknown).
@@ -431,10 +500,12 @@ pub fn set(s: &App, url: Option<&str>) -> Result<DiscordStatus> {
             let hook = parse_webhook(u)?;
             let blob = s.vault.encrypt(DISCORD_AAD, hook.url.expose().as_bytes())?;
             s.db.set_setting_value(KEY, Some(&hex(&blob)))?;
+            *s.discord.configured_cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(true);
             log::info!("discord webhook set (id ending {})", masked(&hook.id));
         }
         None => {
             s.db.set_setting_value(KEY, None)?;
+            *s.discord.configured_cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(false);
             s.discord.outbox().queue.clear();
             log::info!("discord webhook removed");
         }
@@ -451,7 +522,7 @@ pub async fn test(s: &App) -> Result<()> {
         "embeds": [{ "title": "RoALT", "description": format!("✅ {}", tr!("Test message: RoALT's alerts reach this channel.")), "color": 0xB4_F0_00 }],
     });
     // The test pings too, so it shows the mention works.
-    add_ping(&mut body, &ping(s));
+    add_ping(&mut body, &ping_settings(s).0);
     let now = Instant::now();
     let r = post(s, &hook, &body).await;
     match r {
@@ -467,12 +538,17 @@ pub async fn test(s: &App) -> Result<()> {
 /// One POST; Some(wait) when Discord rate-limited it. Errors never carry the URL.
 async fn post(s: &App, hook: &Webhook, body: &Value) -> Result<Option<Duration>> {
     let http = s.discord.http.as_ref().map_err(|e| AppError::Internal(e.clone()))?;
-    let r = http
-        .post(hook.url.expose())
-        .json(body)
-        .send()
-        .await
-        .map_err(|e| AppError::Network(e.without_url().to_string()))?;
+    let r = http.post(hook.url.expose()).json(body).send().await.map_err(|e| {
+        let post_connect_timeout = e.is_timeout() && !e.is_connect();
+        let msg = e.without_url().to_string();
+        // A timeout after connecting may mean Discord already received the message: don't retry
+        // and duplicate it. Connect/DNS errors haven't sent anything and can safely retry.
+        if post_connect_timeout {
+            AppError::Internal(format!("Discord timed out: {msg}"))
+        } else {
+            AppError::Network(msg)
+        }
+    })?;
     match r.status() {
         st if st.is_success() => Ok(None),
         StatusCode::TOO_MANY_REQUESTS => {
@@ -482,6 +558,8 @@ async fn post(s: &App, hook: &Webhook, body: &Value) -> Result<Option<Duration>>
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => {
             Err(AppError::Invalid(tr!("Discord refused the webhook; it may have been deleted. Paste a new one.")))
         }
+        // Any other 4xx (e.g. 400 Bad Request, 413 Payload Too Large) will never succeed on retry.
+        st if st.is_client_error() => Err(AppError::Invalid(tr!("Discord rejected the alert ({status}).", status = st.as_u16()))),
         st => Err(AppError::Network(tr!("Discord answered {status}.", status = st.as_u16()))),
     }
 }
@@ -489,21 +567,26 @@ async fn post(s: &App, hook: &Webhook, body: &Value) -> Result<Option<Duration>>
 /// Queues an event when its toggle is on, a webhook is set and the vault is unlocked; whether it was.
 pub fn notify(app: &AppHandle, event: Event) -> bool {
     let s = app.state::<App>();
+    if !configured(&s) {
+        return false;
+    }
     let wanted = s
         .db
         .settings()
         .inspect_err(|e| log::warn!("discord: event dropped, settings unreadable: {e}"))
         .is_ok_and(|v| event.wanted(&v.discord));
-    let queued = wanted
-        && !s.vault.is_locked()
-        && s.db
-            .setting_value(KEY)
-            .inspect_err(|e| log::warn!("discord: event dropped, webhook setting unreadable: {e}"))
-            .is_ok_and(|v| v.is_some());
-    if queued {
-        s.discord.outbox().push(event);
+    if !wanted {
+        return false;
     }
-    queued
+    if s.vault.is_locked() {
+        if !s.discord.locked_warned.swap(true, Ordering::Relaxed) {
+            log::warn!("discord: alerts paused while the vault is locked");
+        }
+        return false;
+    }
+    s.discord.locked_warned.store(false, Ordering::Relaxed);
+    s.discord.outbox().push(event);
+    true
 }
 
 /// A disconnect's reason in words (pure): Roblox's error code when the logged line ends in a known
@@ -561,16 +644,21 @@ pub fn throttled(app: &AppHandle, account_id: i64) {
     }
 }
 
-/// A webhook is set (whether or not the vault is unlocked to read it).
+/// A webhook is set (whether or not the vault is unlocked to read it). Cached in memory so
+/// background loops do zero SQLite reads when no webhook is configured.
 pub fn configured(s: &App) -> bool {
-    s.db.setting_value(KEY).is_ok_and(|v| v.is_some())
+    let mut cache = s.discord.configured_cache.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(v) = *cache {
+        return v;
+    }
+    let v = s.db.setting_value(KEY).is_ok_and(|v| v.is_some());
+    *cache = Some(v);
+    v
 }
 
-/// `count` incoming trades are new for the account; the first is from `from`.
-pub fn trades(app: &AppHandle, account_id: i64, count: usize, from: &str) {
-    if let Some(name) = named(app, account_id) {
-        notify(app, Event::Trade { name, count, from: escape(from) });
-    }
+/// Windows was locked while anti-AFK looks after clients (`session`).
+pub fn afk_blocked(app: &AppHandle) {
+    notify(app, Event::AfkBlocked);
 }
 
 /// The account's saved sign-in stopped working, or Roblox wants a human check for it.
@@ -632,12 +720,16 @@ pub fn spawn(app: AppHandle) {
         let (mut memory, mut gpu, mut looked) = (Sustained::default(), Sustained::default(), Instant::now());
         loop {
             tokio::time::sleep(Duration::from_millis(500)).await;
-            queue_status(&app).await;
+            let s = app.state::<App>();
             if looked.elapsed() >= PC_EVERY {
                 looked = Instant::now();
-                queue_pc(&app, &mut memory, &mut gpu).await;
+                if configured(&s) {
+                    queue_status(&app).await;
+                    queue_pc(&app, &mut memory, &mut gpu).await;
+                } else {
+                    (memory, gpu) = Default::default();
+                }
             }
-            let s = app.state::<App>();
             let events = s.discord.outbox().take(Instant::now());
             if !events.is_empty() {
                 deliver(&s, events).await;
@@ -655,17 +747,21 @@ async fn deliver(s: &App, events: Vec<Event>) {
             return;
         }
     };
+    let (ping_to, ping_level) = ping_settings(s);
     let now = Instant::now();
-    match post(s, &hook, &message(&events, &ping(s))).await {
+    match post(s, &hook, &message(&events, &ping_to, ping_level)).await {
         Ok(None) => s.discord.outbox().sent(now),
         Ok(Some(wait)) => {
             log::info!("discord: rate limited, waiting {} s", wait.as_secs());
             s.discord.outbox().retry(events, now, wait);
         }
-        // An outage is when the alerts matter most: they go when it's over.
+        // An outage is when the alerts matter most: back off up to MAX_RETRIES before dropping.
         Err(AppError::Network(e)) => {
-            log::warn!("discord: message not sent, trying again: {e}");
-            s.discord.outbox().retry(events, now, Duration::from_secs(30));
+            let n = events.len();
+            match s.discord.outbox().network_retry(events, now) {
+                Some(wait) => log::warn!("discord: message not sent, trying again in {} s: {e}", wait.as_secs()),
+                None => log::warn!("discord: {n} event(s) dropped after {MAX_RETRIES} network failures: {e}"),
+            }
         }
         Err(e) => {
             log::warn!("discord: message not sent: {e}");
@@ -705,7 +801,8 @@ async fn queue_pc(app: &AppHandle, memory: &mut Sustained, gpu: &mut Sustained) 
     }
 }
 
-/// Every `status_every_min` minutes while clients run: how many, their RAM and CPU.
+/// Every `status_every_min` minutes while clients run (and once when they all stop):
+/// how many are in game / disconnected / gave up, plus their RAM and CPU.
 async fn queue_status(app: &AppHandle) {
     let s = app.state::<App>();
     let every = s.db.settings().map_or(0, |v| v.discord.status_every_min);
@@ -721,6 +818,15 @@ async fn queue_status(app: &AppHandle) {
     if !due {
         return;
     }
+    let (in_game, disconnected, given_up) = s.tracker.status_counts();
+    let total = in_game + disconnected + given_up;
+    if total == 0 {
+        if s.discord.had_clients.swap(false, Ordering::Relaxed) {
+            notify(app, Event::Status { in_game: 0, disconnected: 0, given_up: 0, ram_mb: 0.0, cpu_pct: None });
+        }
+        return;
+    }
+    s.discord.had_clients.store(true, Ordering::Relaxed);
     let handle = app.clone();
     let m = tauri::async_runtime::spawn_blocking(move || {
         let s = handle.state::<App>();
@@ -731,13 +837,11 @@ async fn queue_status(app: &AppHandle) {
         log::warn!("discord: status metrics failed: {e}");
         Vec::new()
     });
-    if !m.is_empty() {
-        let ram_mb = m.iter().map(|c| c.memory_mb).sum();
-        // CPU needs an earlier sample of the same client; without one it's left out, not 0%.
-        let cpu: Vec<f64> = m.iter().filter_map(|c| c.cpu_pct).collect();
-        let cpu_pct = (!cpu.is_empty()).then(|| cpu.iter().sum());
-        notify(app, Event::Status { clients: m.len(), ram_mb, cpu_pct });
-    }
+    let ram_mb = m.iter().map(|c| c.memory_mb).sum();
+    // CPU needs an earlier sample of the same client; without one it's left out, not 0%.
+    let cpu: Vec<f64> = m.iter().filter_map(|c| c.cpu_pct).collect();
+    let cpu_pct = (!cpu.is_empty()).then(|| cpu.iter().sum());
+    notify(app, Event::Status { in_game, disconnected, given_up, ram_mb, cpu_pct });
 }
 
 #[cfg(test)]
@@ -820,6 +924,7 @@ mod tests {
             sign_in_problem: false,
             micro_size: None,
             applied_limits: crate::model::Limits::default(),
+            held: false,
         }
     }
 
@@ -858,7 +963,7 @@ mod tests {
     #[test]
     fn builds_one_embed_per_message() {
         let crash = Event::Crash { name: "Nova (@nova\\_builds)".into(), place_id: Some(1818), game: None };
-        let one = message(std::slice::from_ref(&crash), "");
+        let one = message(std::slice::from_ref(&crash), "", PingLevel::Urgent);
         assert_eq!(one["username"], "RoALT");
         assert_eq!(one["allowed_mentions"]["parse"], json!([]));
         let embeds = one["embeds"].as_array().unwrap();
@@ -867,22 +972,29 @@ mod tests {
         assert_eq!(embeds[0]["color"], 0xE5484D);
 
         let rejoin = Event::Restart { name: "A".into(), cause: CrashKind::Disconnect };
-        assert_eq!(message(std::slice::from_ref(&rejoin), "")["embeds"][0]["color"], 0xB4F000);
+        assert_eq!(message(std::slice::from_ref(&rejoin), "", PingLevel::Urgent)["embeds"][0]["color"], 0xB4F000);
         let batch = Event::BatchDone { total: 3, in_game: 1, done: 1, failed: 1 };
         assert_eq!(batch.line(), "🚀 Batch finished: 1 of 3 in game, 1 done, 1 failed.");
-        let status = Event::Status { clients: 2, ram_mb: 1536.4, cpu_pct: Some(12.6) };
+        let status = Event::Status { in_game: 2, disconnected: 0, given_up: 0, ram_mb: 1536.4, cpu_pct: Some(12.6) };
         assert_eq!(status.line(), "📊 2 clients running · 1536 MB RAM · 13% CPU.");
+        let split = Event::Status { in_game: 8, disconnected: 2, given_up: 1, ram_mb: 4000.0, cpu_pct: None };
+        assert_eq!(split.line(), "📊 8 in game, 2 disconnected, 1 gave up · 4000 MB RAM.");
+        let zero = Event::Status { in_game: 0, disconnected: 0, given_up: 0, ram_mb: 0.0, cpu_pct: None };
+        assert_eq!(zero.line(), "📊 0 clients running.");
         let launch = Event::Launch { name: "A".into(), place_id: Some(1818), game: None };
         assert_eq!(launch.line(), "🎮 **A**: in game (place 1818).");
-        let no_cpu = Event::Status { clients: 1, ram_mb: 512.0, cpu_pct: None };
+        let no_cpu = Event::Status { in_game: 1, disconnected: 0, given_up: 0, ram_mb: 512.0, cpu_pct: None };
         assert_eq!(no_cpu.line(), "📊 1 client running · 512 MB RAM.");
+        let gave_up = Event::GaveUp { name: "A".into(), reason: "its old client didn't close.".into() };
+        assert_eq!(gave_up.line(), "⛔ **A**: its old client didn't close.");
+        assert_eq!(gave_up.severity(), 2);
 
         // Many at once: the first 15 lines, then a count.
         let many: Vec<Event> = (0..20).map(|n| Event::Disconnect { name: format!("A{n}"), reason: None }).collect();
-        let text = message(&many, "")["embeds"][0]["description"].as_str().unwrap().to_owned();
+        let text = message(&many, "", PingLevel::Urgent)["embeds"][0]["description"].as_str().unwrap().to_owned();
         assert_eq!(text.lines().count(), 16);
         assert!(text.ends_with("…and 5 more.") && text.starts_with("🔌 **A0**"));
-        assert_eq!(message(&many, "")["embeds"][0]["color"], 0xFFA05C);
+        assert_eq!(message(&many, "", PingLevel::Urgent)["embeds"][0]["color"], 0xFFA05C);
     }
 
     #[test]
@@ -924,11 +1036,9 @@ mod tests {
         let mut s = Sustained::default();
         assert!(!s.step(true, at(0), hold) && !s.step(false, at(30), hold) && !s.step(true, at(61), hold));
         assert_eq!(Event::PcMemory { pct: 93, clients: 12 }.line(), "🧠 This PC's memory is 93% full (clients running: 12).");
-        assert_eq!(Event::Trade { name: "A".into(), count: 1, from: "nova".into() }.line(), "📦 **A**: a new trade from nova.");
-        assert_eq!(Event::Trade { name: "A".into(), count: 3, from: "nova".into() }.line(), "📦 **A**: new trades waiting: 3.");
         assert_eq!(Event::Restart { name: "A".into(), cause: CrashKind::Timed }.line(), "⏱️ **A**: restarted on its timer.");
         let v = DiscordEvents::default();
-        assert!(!Event::PcGpu { pct: 99, clients: 1 }.wanted(&v) && !Event::Trade { name: "A".into(), count: 1, from: "n".into() }.wanted(&v), "both are opt-in");
+        assert!(!Event::PcGpu { pct: 99, clients: 1 }.wanted(&v), "opt-in");
     }
 
     #[test]
@@ -944,18 +1054,22 @@ mod tests {
     #[test]
     fn pings_only_when_something_went_wrong() {
         let crash = [Event::Crash { name: "A".into(), place_id: None, game: None }];
-        let m = message(&crash, "<@123>");
+        let m = message(&crash, "<@123>", PingLevel::Urgent);
         assert_eq!(m["content"], "<@123>");
         assert_eq!(m["allowed_mentions"], json!({ "parse": [], "users": ["123"] }));
-        let m = message(&crash, "<@&9>");
+        let m = message(&crash, "<@&9>", PingLevel::Urgent);
         assert_eq!(m["allowed_mentions"], json!({ "parse": [], "roles": ["9"] }));
         // News and no ping: no mention at all.
         let news = [Event::Launch { name: "A".into(), place_id: None, game: None }, Event::Restart { name: "A".into(), cause: CrashKind::Crash }];
-        assert_eq!(message(&news, "<@123>").get("content"), None);
-        assert_eq!(message(&crash, ""), json!({ "username": "RoALT", "allowed_mentions": { "parse": [] }, "embeds": message(&crash, "<@1>")["embeds"] }));
-        // A disconnect among news still pings.
+        assert_eq!(message(&news, "<@123>", PingLevel::Warnings).get("content"), None);
+        assert_eq!(
+            message(&crash, "", PingLevel::Urgent),
+            json!({ "username": "RoALT", "allowed_mentions": { "parse": [] }, "embeds": message(&crash, "<@1>", PingLevel::Urgent)["embeds"] })
+        );
+        // A disconnect (severity 1) doesn't ping on Urgent (default), but does on Warnings.
         let mixed = [news[0].clone(), Event::Disconnect { name: "B".into(), reason: None }];
-        assert_eq!(message(&mixed, "<@123>")["content"], "<@123>");
+        assert_eq!(message(&mixed, "<@123>", PingLevel::Urgent).get("content"), None);
+        assert_eq!(message(&mixed, "<@123>", PingLevel::Warnings)["content"], "<@123>");
     }
 
     #[test]
@@ -994,7 +1108,7 @@ mod tests {
         let mut v = DiscordEvents::default();
         let mem = Event::Restart { name: "A".into(), cause: CrashKind::Mem };
         let crash_restart = Event::Restart { name: "A".into(), cause: CrashKind::Crash };
-        let status = Event::Status { clients: 1, ram_mb: 1.0, cpu_pct: Some(1.0) };
+        let status = Event::Status { in_game: 1, disconnected: 0, given_up: 0, ram_mb: 1.0, cpu_pct: Some(1.0) };
         let launch = Event::Launch { name: "A".into(), place_id: None, game: None };
         assert!(mem.wanted(&v) && crash_restart.wanted(&v) && !status.wanted(&v) && !launch.wanted(&v));
         v.launch = true;
@@ -1035,6 +1149,10 @@ mod tests {
         (0..60).for_each(|n| o.push(ev(n)));
         let out = o.take(t0);
         assert_eq!((out.len(), out.first(), out.last()), (MAX_QUEUED, Some(&ev(10)), Some(&ev(59))));
+        // Network retries back off exponentially and drop after MAX_RETRIES.
+        let mut o = Outbox::default();
+        let waits: Vec<Option<u64>> = (0..=MAX_RETRIES).map(|_| o.network_retry(vec![ev(1)], t0).map(|d| d.as_secs())).collect();
+        assert_eq!(waits, [Some(30), Some(60), Some(120), Some(240), Some(300), Some(300), None]);
     }
 
     #[test]

@@ -4,16 +4,26 @@ import { overlayOpen } from "../../ui/a11y";
 
 /** Frame-free previews, where live ones would get Windows' yellow frame (`instances::thumbs`):
  * Windows draws each client over its card's picture box, on top of everything in RoALT's window.
- * One loop places them all, each frame something moved and twice a second anyway (the client's
- * window may have changed). None while a dialog or menu is open, for a box the view's edge cuts or
+ * One loop places them all, each frame while something may be moving (`BURST_MS` after a scroll, a
+ * pointer, a key, a transition or a dialog) and twice a second anyway (the client's window may have
+ * changed): an idle Overview costs no work each frame. None while a dialog or menu is open, for a box the view's edge cuts or
  * a toast covers; a dim one while the card's keys or pill sit over the picture. */
 type Card = { box: HTMLElement; view: HTMLElement | null; dim: () => boolean };
 const cards = new Map<string, Card>();
 let frame = 0;
+let timer = 0;
 let sent = "";
 let sentAt = 0;
+let movedAt = 0;
 /** Sent again at least this often. */
 const REFRESH_MS = 500;
+/** Placed each frame for this long after something that may move a card. */
+const BURST_MS = 700;
+const WAKES = ["scroll", "wheel", "resize", "pointerover", "pointerout", "pointerdown", "pointermove", "focusin", "focusout", "keydown", "transitionrun", "animationstart", "toggle"];
+/** Dialogs opening, as their `open` attribute appears. */
+const opened = new MutationObserver(() => wake());
+/** A card or its scroller changing size moves the cards after it. */
+const resized = new ResizeObserver(() => wake());
 
 /** The nearest ancestor that scrolls: a box must be inside it to be drawn. */
 function scroller(el: HTMLElement) {
@@ -47,16 +57,50 @@ function tick() {
     sentAt = now;
     void api.instanceThumbs(places).catch(() => {});
   }
+  frame = 0;
   // The last card gone: the empty list above took every picture away.
-  frame = cards.size ? requestAnimationFrame(tick) : 0;
+  if (!cards.size) return stop();
+  if (now - movedAt < BURST_MS) frame = requestAnimationFrame(tick);
+  else timer = window.setTimeout(tick, REFRESH_MS);
+}
+
+/** Something may move a card: placed each frame for a while. */
+function wake() {
+  movedAt = performance.now();
+  if (frame) return;
+  clearTimeout(timer);
+  frame = requestAnimationFrame(tick);
+}
+
+function start() {
+  for (const w of WAKES) window.addEventListener(w, wake, { capture: true, passive: true });
+  opened.observe(document.body, { subtree: true, attributeFilter: ["open"] });
+  wake();
+}
+
+function stop() {
+  for (const w of WAKES) window.removeEventListener(w, wake, { capture: true });
+  opened.disconnect();
+  resized.disconnect();
+  cancelAnimationFrame(frame);
+  clearTimeout(timer);
+  frame = timer = 0;
 }
 
 /** Draws client `id` over `box` until the returned function is called. `dim`: something of the
  * card's own is over the picture now. */
 export function showWindowThumb(id: string, box: HTMLElement, dim: () => boolean) {
-  cards.set(id, { box, view: scroller(box), dim });
-  if (!frame) frame = requestAnimationFrame(tick);
+  const first = !cards.size;
+  const view = scroller(box);
+  cards.set(id, { box, view, dim });
+  if (first) start();
+  else wake();
+  resized.observe(box.closest(".tile") ?? box);
+  if (view) resized.observe(view);
   return () => {
     if (cards.get(id)?.box === box) cards.delete(id);
+    resized.unobserve(box.closest(".tile") ?? box);
+    // The next tick sends the list without it, then stops once none is left.
+    wake();
   };
 }

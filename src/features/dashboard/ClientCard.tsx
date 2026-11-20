@@ -49,6 +49,7 @@ function tagsOf(i: Instance, a: AccountSummary | undefined, afkOn: boolean, defa
   const own = i.limits;
   const on = i.appliedLimits;
   const tags: Tag[] = [];
+  if (i.held) tags.push({ label: t("dashboard.held"), tip: t("dashboard.heldHint") });
   if (a?.fullQuality) tags.push({ label: t("accounts.detail.fullQuality"), tip: t("accounts.detail.fullQualityHint") });
   // Only once the cap is on: it may have been refused.
   if (i.throttled && on.cpuCap !== null) tags.push({ label: t("dashboard.throttled"), tip: t("dashboard.throttledHint"), tone: "attention" });
@@ -193,7 +194,7 @@ export function ClientCard({ inst: i, account: a, detailed, width, menuOpen, onS
   const pictureNote = status === "minimized" ? t("dashboard.minimized")
     : status === "noWindow" ? t("dashboard.noWindow")
     : status === "pending" ? t("dashboard.waitingPicture")
-    : status === "unsupported" ? t("dashboard.noPreview")
+    : status === "unsupported" ? t(fps === 0 ? "dashboard.previewsOff" : "dashboard.noPreview")
     : "";
   // The one thing to know, by priority; a client in game with a live picture needs no pill.
   const pill: Pill | null = closing ? { tone: "neutral", label: t("launch.running.closing"), pulse: true }

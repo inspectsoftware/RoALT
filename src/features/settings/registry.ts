@@ -5,7 +5,7 @@ import { LANGUAGES, t, type Key } from "../../i18n";
 import { motionPreference } from "../../ui/motion";
 import { RANGES } from "../../ui/ranges";
 import type { View } from "../../app/navigation";
-import type { AntiAfk, DiscordEvents, Settings, VaultStatus } from "../../api";
+import type { AntiAfk, DiscordEvents, DiscordRpc, Settings, VaultStatus } from "../../api";
 import type { MemThrottle } from "../../bindings/MemThrottle";
 import type { RenderFlags } from "../../bindings/RenderFlags";
 import { AREAS, ROW_IDS, type AreaDef, type SettingsArea } from "./areas";
@@ -13,7 +13,6 @@ import { GOALS, UNPLACED } from "./goals";
 import { SHORTCUTS } from "./shortcuts";
 import { PERFORMANCE_ENTRIES } from "../performance/entries";
 import { DISCORD_ENTRIES } from "../discord/entries";
-import { CLIPS_ENTRIES } from "../clips/entries";
 
 export type { AreaDef, SettingsArea };
 
@@ -21,7 +20,6 @@ export type { AreaDef, SettingsArea };
 export type Place =
   | { view: "settings"; area: SettingsArea; group?: Key }
   | { view: "discord"; group?: Key }
-  | { view: "clips"; group?: Key }
   | { view: Extract<View, "accounts" | "launch" | "dashboard" | "mods">; link: true };
 
 /** What conditions and changing lines read. `background`: a background image is set. */
@@ -32,9 +30,10 @@ export type Label = Key | { key: Key; params: Record<string, string | number> } 
 
 /** What a row reads and writes: a Settings field, a nested one, the vault's mode or this PC's own store. */
 export type Field =
-  | Exclude<keyof Settings, "antiAfk" | "discord" | "adaptive" | "memThrottle" | "renderFlags">
+  | Exclude<keyof Settings, "antiAfk" | "discord" | "discordRpc" | "adaptive" | "memThrottle" | "renderFlags">
   | `antiAfk.${keyof AntiAfk}`
   | `discord.${keyof DiscordEvents}`
+  | `discordRpc.${keyof DiscordRpc}`
   | `memThrottle.${keyof MemThrottle}`
   | "adaptive.enabled"
   | `adaptive.background.${"cpuCap" | "eco" | "trimEveryMin"}`
@@ -55,6 +54,7 @@ export type Control =
   /** 0 is Off; `on` is the value switching it on starts at. */
   | ({ kind: "offOrValue"; min: number; max: number; step?: number; on: number } & Units)
   | { kind: "text"; placeholder: Key; size: "sm" | "md" | "lg" }
+  | { kind: "hotkey" }
   | { kind: "shortcut"; combo: string }
   /** Drawn by its view's renderer (`Renderers`). */
   | { kind: "custom" }
@@ -83,7 +83,7 @@ export type Entry = {
   /** Where search and jumps go while `when` is false (else the parent). */
   fallback?: string;
   /** Queries a successful write makes stale. */
-  invalidates?: readonly ("multi" | "values" | "market" | "tradeDetails")[];
+  invalidates?: readonly ("multi" | "values" | "market")[];
   /** ASCII search words (fps, afk, qos): never shown, never translated. */
   aliases?: readonly string[];
 };
@@ -134,11 +134,11 @@ const SETTINGS_ENTRIES: readonly Entry[] = [
   },
   {
     id: "panic", place: launching, label: "settings.panic", hint: "settings.panicShort", more: "settings.panicHint", field: "panicHotkey",
-    control: { kind: "text", placeholder: "settings.placeholderOff", size: "md" }, aliases: ["kill", "hotkey", "emergency"],
+    control: { kind: "hotkey" }, aliases: ["kill", "hotkey", "emergency"],
   },
-  { id: "keyToggle", place: shortcuts, label: "settings.keyToggle", hint: "settings.globalKeyHint", field: "toggleHotkey", control: { kind: "text", placeholder: "settings.placeholderOff", size: "md" }, aliases: ["hotkey", "global", "tray", "show", "hide"] },
-  { id: "keyTile", place: shortcuts, label: "dashboard.tile", hint: "settings.globalKeyHint", field: "tileHotkey", control: { kind: "text", placeholder: "settings.placeholderOff", size: "md" }, aliases: ["hotkey", "global", "tile", "windows"] },
-  { id: "keyMinimize", place: shortcuts, label: "dashboard.minimizeAll", hint: "settings.globalKeyHint", field: "minimizeHotkey", control: { kind: "text", placeholder: "settings.placeholderOff", size: "md" }, aliases: ["hotkey", "global", "minimize"] },
+  { id: "keyToggle", place: shortcuts, label: "settings.keyToggle", hint: "settings.globalKeyHint", field: "toggleHotkey", control: { kind: "hotkey" }, aliases: ["hotkey", "global", "tray", "show", "hide"] },
+  { id: "keyTile", place: shortcuts, label: "dashboard.tile", hint: "settings.globalKeyHint", field: "tileHotkey", control: { kind: "hotkey" }, aliases: ["hotkey", "global", "tile", "windows"] },
+  { id: "keyMinimize", place: shortcuts, label: "dashboard.minimizeAll", hint: "settings.globalKeyHint", field: "minimizeHotkey", control: { kind: "hotkey" }, aliases: ["hotkey", "global", "minimize"] },
   { id: "closeGrace", place: launching, label: "settings.closeGrace", hint: "settings.closeGraceHint", field: "closeGraceS", control: { kind: "number", min: 1, max: 60, unit: "settings.unit.seconds", short: "settings.unit.s" } },
   { id: "shutdown", place: launching, label: "settings.shutdown", hint: "settings.shutdownShort", more: "settings.shutdownHintClose", control: ACTION, aliases: ["timer", "power", "turn off"] },
   {
@@ -193,7 +193,7 @@ const SETTINGS_ENTRIES: readonly Entry[] = [
   {
     id: "encryption", place: security, label: "settings.encryption", field: "vault.mode", control: CUSTOM, aliases: ["dpapi", "aes", "password", "hello", "vault"],
     hint: (c) => (master(c) ? "settings.encryptionHintMaster" : "settings.encryptionHintDpapi"),
-    more: (c) => (master(c) ? "settings.encryptionMoreMaster" : "settings.clipboardHintHello"),
+    more: (c) => (master(c) ? "settings.encryptionMoreMaster" : "settings.encryptionMoreDpapi"),
   },
   { id: "masterPassword", place: security, when: master, fallback: "encryption", label: "settings.masterPassword", hint: "settings.masterPasswordHint", control: ACTION, aliases: ["password", "change"] },
   {
@@ -204,6 +204,7 @@ const SETTINGS_ENTRIES: readonly Entry[] = [
     id: "autoLock", place: security, when: master, fallback: "encryption", label: "settings.autoLock", hint: "settings.autoLockHint", field: "autoLockMinutes", aliases: ["lock", "idle", "timeout"],
     control: { kind: "segmented", label: "settings.autoLockLabel", mono: true, options: [0, 5, 15, 30, 60].map((n) => ({ value: n, label: n ? { key: "settings.minutes", params: { n } } : "common.off" })) },
   },
+  { id: "lockOnSessionLock", place: security, when: master, fallback: "encryption", label: "settings.lockOnSessionLock", hint: "settings.lockOnSessionLockHint", field: "lockOnSessionLock", control: SWITCH, aliases: ["lock", "win+l", "sleep", "lock screen"] },
   { id: "clipboard", place: security, label: "settings.clipboard", field: "clipboardClearSeconds", control: { kind: "number", min: 5, max: 300, unit: "settings.unit.seconds", short: "settings.unit.s" }, aliases: ["copy", "cookie"] },
   { id: "signInWatch", place: security, label: "settings.signInWatch", hint: "settings.signInWatchShort", more: "settings.signInWatchHint", field: "signInWatch", control: SWITCH, aliases: ["cookie", "sign in", "expired", "check", "validate"] },
   { id: "lockPurchases", place: security, label: "settings.lockPurchases", hint: "settings.lockPurchasesShort", more: "settings.lockPurchasesHint", field: "lockPurchases", control: SWITCH, aliases: ["robux", "buy", "spend", "purchase", "premium", "money"] },
@@ -217,12 +218,14 @@ const SETTINGS_ENTRIES: readonly Entry[] = [
 
   { id: "selfUpdate", place: about, label: "settings.selfUpdate", more: "settings.selfUpdateHint", field: "selfUpdate", control: CUSTOM, aliases: ["update", "github", "version"] },
   { id: "onlineCount", place: about, label: "settings.onlineCount", more: "settings.onlineCountHint", field: "onlineCount", control: SWITCH, aliases: ["online", "users", "counter", "telemetry", "privacy"] },
-  { id: "showSponsor", place: about, label: "settings.showSponsor", more: "settings.showSponsorHint", field: "showSponsor", control: SWITCH, aliases: ["sponsor", "sponsored", "ads", "news", "privacy"] },
+  { id: "news", place: about, label: "settings.news", more: "settings.newsHint", field: "news", control: SWITCH, aliases: ["news", "devforum", "github", "newsroom", "privacy"] },
+  { id: "showSponsor", place: about, label: "settings.showSponsor", more: "settings.showSponsorHint", field: "showSponsor", control: SWITCH, aliases: ["sponsor", "sponsored", "ads", "privacy"] },
   {
     id: "rolimons", place: about, label: "settings.rolimons", hint: "settings.rolimonsShort", more: "settings.rolimonsHint", field: "rolimonsValues",
-    control: SWITCH, invalidates: ["values", "market", "tradeDetails"], aliases: ["rolimons", "value", "rap", "limiteds", "trading", "trades", "privacy"],
+    control: SWITCH, invalidates: ["values", "market"], aliases: ["rolimons", "value", "rap", "limiteds", "privacy"],
   },
   { id: "version", place: about, label: "settings.openReleases", hint: "settings.aboutShort", more: "settings.aboutHint", control: ACTION, aliases: ["version", "about", "changelog", "privacy", "downgrade", "older", "previous"] },
+  { id: "replayTour", place: about, label: "onboarding.replay", hint: "onboarding.replayHint", control: ACTION, aliases: ["tutorial", "onboarding", "setup", "tour", "welcome", "help"] },
   { id: "support", place: about, label: "app.joinDiscord", control: ACTION, aliases: ["donate", "robux", "community", "help", "supporters", "coffee"] },
 ];
 
@@ -251,7 +254,7 @@ const KEY_ENTRIES: readonly Entry[] = SHORTCUTS.map((s) => ({
   aliases: ["shortcut", "hotkey", s.combo.toLowerCase()],
 }));
 
-export const ENTRIES: readonly Entry[] = [...SETTINGS_ENTRIES, ...PERFORMANCE_ENTRIES, ...DISCORD_ENTRIES, ...CLIPS_ENTRIES, ...LINK_ENTRIES, ...KEY_ENTRIES];
+export const ENTRIES: readonly Entry[] = [...SETTINGS_ENTRIES, ...PERFORMANCE_ENTRIES, ...DISCORD_ENTRIES, ...LINK_ENTRIES, ...KEY_ENTRIES];
 
 const BY_ID = new Map(ENTRIES.map((e) => [e.id, e]));
 const KIDS = new Map<string, Entry[]>();

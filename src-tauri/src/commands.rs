@@ -2911,6 +2911,7 @@ pub async fn multi_instance_set(app: AppHandle, enabled: bool) -> Result<MultiIn
         s.db.save_settings(&v)?;
         drop(change);
         if enabled {
+            s.multi.clear_holders_cache();
             match s.multi.enable() {
                 Ok(()) => protect_running(&s, &v),
                 Err(e) => log::info!("multi-instance not active yet: {e}"),
@@ -3093,7 +3094,20 @@ async fn close_roblox(s: &App, force: bool, keep_closing: bool) -> Result<MultiI
         }
     }
     let v = s.db.settings()?;
+    s.multi.clear_holders_cache();
     retake_multi(s, &v);
+    if v.multi_instance && !s.multi.is_active() {
+        let helpers = s.multi.roblox_helper_holders();
+        if !helpers.is_empty() {
+            for ((pid, _), r) in helpers.iter().zip(close_all(helpers.clone(), force, grace(s)).await?) {
+                if let Err(e) = r {
+                    log::warn!("could not close Roblox helper process {pid}: {e}");
+                }
+            }
+            s.multi.clear_holders_cache();
+            retake_multi(s, &v);
+        }
+    }
     Ok(s.multi.status(v.multi_instance, v.protect_shared_login))
 }
 

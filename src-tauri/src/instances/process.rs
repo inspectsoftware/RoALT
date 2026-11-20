@@ -42,6 +42,32 @@ pub fn roblox_processes() -> Vec<ProcInfo> {
     named(CLIENT_EXE)
 }
 
+/// Live `RobloxPlayerBeta.exe` PIDs that `start_time` couldn't open (e.g. running as
+/// administrator). Exited processes still lingered by a handle are excluded.
+pub fn unreadable_roblox_pids() -> Vec<u32> {
+    let mut out = Vec::new();
+    // SAFETY: as in `named`.
+    unsafe {
+        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return out };
+        let snap = Owned::new(snap);
+        let mut e = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+        let mut more = Process32FirstW(*snap, &mut e).is_ok();
+        while more {
+            if is_named(&e.szExeFile, CLIENT_EXE) && start_time(e.th32ProcessID).is_none() && unreadable_client(e.th32ProcessID) {
+                out.push(e.th32ProcessID);
+            }
+            more = Process32NextW(*snap, &mut e).is_ok();
+        }
+    }
+    out
+}
+
+/// Roblox's own helper executables that can inherit or hold `ROBLOX_singletonEvent` even after
+/// `RobloxPlayerBeta.exe` has exited.
+pub fn is_roblox_helper(exe: &str) -> bool {
+    exe.eq_ignore_ascii_case("RobloxCrashHandler.exe") || exe.eq_ignore_ascii_case("RobloxPlayerLauncher.exe")
+}
+
 /// Whether Roblox's own installer (or its launcher, which can update too) runs: it updates the
 /// client, then starts it again.
 pub fn installer_running() -> bool {

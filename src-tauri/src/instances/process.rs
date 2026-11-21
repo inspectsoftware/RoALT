@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{E_ACCESSDENIED, FILETIME, HANDLE, HWND, LPARAM, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM};
+use windows::Win32::Foundation::{E_ACCESSDENIED, FILETIME, HANDLE, HWND, LPARAM, RECT, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
@@ -18,8 +18,9 @@ use windows::Win32::System::Threading::{
     PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, QueryFullProcessImageNameW, TerminateProcess, WaitForSingleObject,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GW_OWNER, GetForegroundWindow, GetWindow, GetWindowThreadProcessId, IsHungAppWindow, IsIconic, IsWindow, IsWindowVisible,
-    PostMessageW, WM_CLOSE,
+    EnumWindows, GW_OWNER, GWL_EXSTYLE, GWL_STYLE, GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowRect,
+    GetWindowThreadProcessId, IsHungAppWindow, IsIconic, IsWindow, IsWindowVisible, PostMessageW, WM_CLOSE,
+    WS_CAPTION, WS_EX_TOOLWINDOW,
 };
 use windows::core::{BOOL, Owned};
 
@@ -277,13 +278,44 @@ pub fn hung(pid: u32) -> bool {
     top_windows(pid).into_iter().any(|h| unsafe { IsWindowVisible(h).as_bool() && IsHungAppWindow(h).as_bool() })
 }
 
-/// The client's main window: its first visible top-level window without an owner (window
-/// queries only), and whether it is minimized.
+/// The client's main window: its best visible top-level window without an owner (window
+/// queries only), skipping tool windows and zero-area helper windows, and whether it is minimized.
 pub fn main_window(pid: u32) -> Option<(HWND, bool)> {
-    // SAFETY: reads windows' state; a stale handle answers false.
-    let main = top_windows(pid).into_iter().find(|&h| unsafe { IsWindowVisible(h).as_bool() && GetWindow(h, GW_OWNER).is_err() })?;
-    // SAFETY: reads one window's state.
-    Some((main, unsafe { IsIconic(main) }.as_bool()))
+    let mut best: Option<(HWND, bool, (bool, i64))> = None;
+    for h in top_windows(pid) {
+        // SAFETY: reads one window's state and style; a stale handle answers false / 0.
+        let (visible, unowned, ex_style, style, iconic) = unsafe {
+            (
+                IsWindowVisible(h).as_bool(),
+                GetWindow(h, GW_OWNER).is_err(),
+                GetWindowLongPtrW(h, GWL_EXSTYLE) as u32,
+                GetWindowLongPtrW(h, GWL_STYLE) as u32,
+                IsIconic(h).as_bool(),
+            )
+        };
+        if !visible || !unowned || ex_style & WS_EX_TOOLWINDOW.0 != 0 {
+            continue;
+        }
+        let area = if iconic {
+            1
+        } else {
+            let mut r = RECT::default();
+            // SAFETY: reads one window's rectangle into a local.
+            if unsafe { GetWindowRect(h, &mut r) }.is_err() {
+                continue;
+            }
+            let (w, ht) = (i64::from(r.right - r.left), i64::from(r.bottom - r.top));
+            if w <= 0 || ht <= 0 {
+                continue;
+            }
+            w * ht
+        };
+        let key = (style & WS_CAPTION.0 != 0, area);
+        if best.is_none_or(|(_, _, prev)| key > prev) {
+            best = Some((h, iconic, key));
+        }
+    }
+    best.map(|(h, iconic, _)| (h, iconic))
 }
 
 /// The process owning the window in front (window queries only), for the adaptive manager.

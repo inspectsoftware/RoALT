@@ -2575,7 +2575,8 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
 /// the picture's RGBA unless `known` is its number already. Answers at once with the newest picture there is.
 #[tauri::command]
 pub async fn instance_thumbnail(s: State<'_, App>, id: String, max_w: u32, known: u32) -> Result<tauri::ipc::Response> {
-    let pid = client_pid(&s, &id)?;
+    s.tracker.get(&id).ok_or(AppError::NotFound)?;
+    let pid = s.tracker.window_pid(&id);
     let max_w = (max_w > 0).then(|| max_w.clamp(16, 1280));
     let preview = blocking(move || crate::instances::window::preview(pid, max_w)).await?;
     Ok(tauri::ipc::Response::new(preview.to_bytes(known)))

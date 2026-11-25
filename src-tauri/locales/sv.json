@@ -428,5 +428,9 @@
     "other": "{version} ({n} filer matchade inte den här Roblox-versionen)",
     "one": "{version} ({n} fil matchade inte den här Roblox-versionen)"
   },
-  "RoALT restarted in the tray after it stopped responding. Your running clients weren't closed.": "RoALT startades om i systemfältet efter att ha slutat svara. Dina körande klienter stängdes inte."
+  "RoALT restarted in the tray after it stopped responding. Your running clients weren't closed.": "RoALT startades om i systemfältet efter att ha slutat svara. Dina körande klienter stängdes inte.",
+  "Remote device watching": "En fjärrenhet tittar",
+  "Stop remote watching": "Stoppa fjärrvisning",
+  "This RoALT version is too old for Remote. Update RoALT to use Remote again.": "Den här versionen av RoALT är för gammal för Remote. Uppdatera RoALT för att använda Remote igen.",
+  "Remote is paused. Resume it before pairing a device.": "Remote är pausat. Återuppta det innan du parkopplar en enhet."
 }

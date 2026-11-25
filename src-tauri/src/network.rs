@@ -38,6 +38,10 @@ impl Network {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
+    pub fn is_public(&self) -> bool {
+        self.get().public
+    }
+
     fn set(&self, n: NetworkStatus) {
         *self.0.lock().unwrap_or_else(|e| e.into_inner()) = n;
     }
@@ -121,6 +125,7 @@ pub fn spawn(app: AppHandle) {
                 log::info!("network: {}", if now.public { "public" } else { "not public" });
                 s.network.set(now.clone());
                 let _ = app.emit("app://network", now);
+                s.remote.notify_network_changed();
             }
             let why = blocked(&s);
             if let (false, Some(why)) = (was, &why) {

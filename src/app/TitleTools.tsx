@@ -3,6 +3,7 @@ import { t } from "../i18n";
 import { IconButton } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { IconSwap } from "../ui/motion";
+import { RemoteBadge } from "../features/remote/RemoteBadge";
 
 /** The title bar's own keys: refresh (as F5), the layout, the theme, and the vault (a lock key with a
  * master password, else the encryption's state). */
@@ -17,6 +18,7 @@ export function TitleTools({ dark, onRefresh, onToggleTheme, sideTabs, onToggleT
 }) {
   return (
     <div className="title-tools">
+      <RemoteBadge />
       {onRefresh && <IconButton icon="refresh" label={t("ui.refresh")} shortcut="F5" onClick={onRefresh} />}
       {onToggleTabs && (
         <IconButton icon={sideTabs ? "layoutTop" : "layoutSide"} label={sideTabs ? t("ui.accountsTop") : t("ui.accountsSide")} onClick={onToggleTabs} />

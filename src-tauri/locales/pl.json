@@ -440,5 +440,9 @@
     "one": "{version} ({n} plik nie pasował do tej wersji Robloxa)",
     "few": "{version} ({n} pliki nie pasowały do tej wersji Robloxa)"
   },
-  "RoALT restarted in the tray after it stopped responding. Your running clients weren't closed.": "RoALT uruchomił się ponownie w zasobniku po braku odpowiedzi. Twoje działające klienty nie zostały zamknięte."
+  "RoALT restarted in the tray after it stopped responding. Your running clients weren't closed.": "RoALT uruchomił się ponownie w zasobniku po braku odpowiedzi. Twoje działające klienty nie zostały zamknięte.",
+  "Remote device watching": "Zdalne urządzenie ogląda",
+  "Stop remote watching": "Zatrzymaj zdalny podgląd",
+  "This RoALT version is too old for Remote. Update RoALT to use Remote again.": "Ta wersja RoALT jest za stara dla Remote. Zaktualizuj RoALT, aby znów korzystać z Remote.",
+  "Remote is paused. Resume it before pairing a device.": "Remote jest wstrzymany. Wznów go przed sparowaniem urządzenia."
 }

@@ -30,7 +30,7 @@ export type Label = Key | { key: Key; params: Record<string, string | number> } 
 
 /** What a row reads and writes: a Settings field, a nested one, the vault's mode or this PC's own store. */
 export type Field =
-  | Exclude<keyof Settings, "antiAfk" | "discord" | "discordRpc" | "adaptive" | "memThrottle" | "renderFlags">
+  | Exclude<keyof Settings, "antiAfk" | "discord" | "discordRpc" | "adaptive" | "memThrottle" | "renderFlags" | "remote">
   | `antiAfk.${keyof AntiAfk}`
   | `discord.${keyof DiscordEvents}`
   | `discordRpc.${keyof DiscordRpc}`
@@ -209,6 +209,8 @@ const SETTINGS_ENTRIES: readonly Entry[] = [
   { id: "signInWatch", place: security, label: "settings.signInWatch", hint: "settings.signInWatchShort", more: "settings.signInWatchHint", field: "signInWatch", control: SWITCH, aliases: ["cookie", "sign in", "expired", "check", "validate"] },
   { id: "lockPurchases", place: security, label: "settings.lockPurchases", hint: "settings.lockPurchasesShort", more: "settings.lockPurchasesHint", field: "lockPurchases", control: SWITCH, aliases: ["robux", "buy", "spend", "purchase", "premium", "money"] },
   { id: "publicNetworks", place: security, label: "settings.public", hint: "settings.publicShort", more: "settings.publicHint", field: "allowPublicNetworks", control: CUSTOM, aliases: ["wifi", "network", "cafe", "hotel"] },
+
+  { id: "remoteDashboard", place: { view: "settings", area: "remote" }, label: "settings.section.remote", control: ACTION, aliases: ["remote", "phone", "mobile", "web", "dashboard", "roalt.dev", "qr", "pair"] },
 
   { id: "dataFolder", place: data, label: "settings.dataFolder", control: ACTION, aliases: ["folder", "path", "appdata", "logs", "move"] },
   { id: "backup", place: data, label: "settings.backup", hint: "settings.backupHint", control: ACTION, aliases: ["export", "import", "restore"] },

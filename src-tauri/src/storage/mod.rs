@@ -13,7 +13,7 @@ use rusqlite_migration::{M, Migrations};
 
 use crate::commands::now_ms;
 use crate::error::{AppError, Result};
-use crate::model::{AccountPatch, AccountStatus, AccountSummary, Crash, CrashKind, Group, GroupDefaults, GroupInput, PlayedServer, PlaytimeDay, PlaytimeRow, ServerVisit, Settings, VaultMode};
+use crate::model::{AccountPatch, AccountStatus, AccountSummary, Crash, CrashKind, Group, GroupDefaults, GroupInput, PlayedServer, PlaytimeDay, PlaytimeRow, RemoteRole, ServerVisit, Settings, VaultMode};
 use crate::vault::{Kdf, RecoveryRecord, VaultRecord};
 
 /// What `upsert_account` writes. `cookie` is the encrypted blob.
@@ -46,6 +46,25 @@ pub struct Db {
 /// The key file beside a database: `roalt.db` → `roalt.db.key`.
 pub fn key_path(db: &Path) -> PathBuf {
     cipher::beside(db, ".key")
+}
+
+/// A pending device's first session (`Db::remote_device_touch_seen`): the device rows it replaced
+/// and deleted.
+#[derive(Debug, PartialEq)]
+pub struct FirstSession {
+    pub replaced: Vec<String>,
+}
+
+/// One paired browser/device row from `remote_devices` (stored inside the SQLCipher DB).
+#[derive(Clone, Debug)]
+pub struct RemoteDeviceRow {
+    pub id: String,
+    pub label: String,
+    pub pubkey: Vec<u8>,
+    pub room_token: String,
+    pub role: RemoteRole,
+    pub created_at: i64,
+    pub last_seen_at: Option<i64>,
 }
 
 /// A `favourites` row; `target` is the encrypted `LaunchTarget` JSON (link codes are bearer secrets).
@@ -1017,6 +1036,138 @@ impl Db {
         let rows = st.query_map([], |r| r.get(0))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
+
+    /// Paired devices, pending ones included (`remote_devices_spend_pending` drops those).
+    pub fn remote_devices(&self) -> Result<Vec<RemoteDeviceRow>> {
+        let c = self.conn();
+        let mut st = c.prepare(
+            "SELECT id, label, pubkey, room_token, role, created_at, last_seen_at \
+             FROM remote_devices ORDER BY created_at DESC",
+        )?;
+        let rows = st.query_map([], |r| {
+            let role_str: String = r.get(4)?;
+            let role = parse_remote_role(&role_str);
+            Ok(RemoteDeviceRow {
+                id: r.get(0)?,
+                label: r.get(1)?,
+                pubkey: r.get(2)?,
+                room_token: r.get(3)?,
+                role,
+                created_at: r.get(5)?,
+                last_seen_at: r.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn remote_device(&self, id: &str) -> Result<Option<RemoteDeviceRow>> {
+        let c = self.conn();
+        let row = c
+            .query_row(
+                "SELECT id, label, pubkey, room_token, role, created_at, last_seen_at FROM remote_devices WHERE id = ?1",
+                [id],
+                |r| {
+                    let role_str: String = r.get(4)?;
+                    let role = parse_remote_role(&role_str);
+                    Ok(RemoteDeviceRow {
+                        id: r.get(0)?,
+                        label: r.get(1)?,
+                        pubkey: r.get(2)?,
+                        room_token: r.get(3)?,
+                        role,
+                        created_at: r.get(5)?,
+                        last_seen_at: r.get(6)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    /// Adds a newly paired device, pending until its first session (`remote_device_touch_seen`) and
+    /// deleted once `remote_devices_spend_pending` used up its `pending_ms` without one; refuses an
+    /// id that is already paired. The first session also deletes the devices `replaces` names.
+    pub fn remote_device_insert(&self, d: &RemoteDeviceRow, pending_ms: i64, replaces: &[String]) -> Result<()> {
+        let role_str = match d.role {
+            RemoteRole::Control => "control",
+            RemoteRole::Readonly => "readonly",
+        };
+        let replaces = (!replaces.is_empty()).then(|| replaces.join(" "));
+        self.conn().execute(
+            "INSERT INTO remote_devices (id, label, pubkey, room_token, role, created_at, last_seen_at, pending_ms, replaces) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![d.id, d.label, d.pubkey, d.room_token, role_str, d.created_at, d.last_seen_at, pending_ms, replaces],
+        )?;
+        Ok(())
+    }
+
+    pub fn remote_device_remove(&self, id: &str) -> Result<bool> {
+        let n = self.conn().execute("DELETE FROM remote_devices WHERE id = ?1", [id])?;
+        Ok(n > 0)
+    }
+
+    pub fn remote_device_update(&self, id: &str, label: Option<&str>, role: Option<RemoteRole>) -> Result<bool> {
+        let c = self.conn();
+        let mut changed = 0;
+        if let Some(lbl) = label {
+            let clean: String = lbl.trim().chars().take(64).collect();
+            if !clean.is_empty() {
+                changed += c.execute("UPDATE remote_devices SET label = ?1 WHERE id = ?2", params![clean, id])?;
+            }
+        }
+        if let Some(r) = role {
+            let role_str = match r {
+                RemoteRole::Control => "control",
+                RemoteRole::Readonly => "readonly",
+            };
+            changed += c.execute("UPDATE remote_devices SET role = ?1 WHERE id = ?2", params![role_str, id])?;
+        }
+        Ok(changed > 0)
+    }
+
+    /// Records a session the device authenticated. The first one confirms its pending pairing and
+    /// deletes the devices it replaces: then the result names those it deleted.
+    pub fn remote_device_touch_seen(&self, id: &str, at: i64) -> Result<Option<FirstSession>> {
+        let mut c = self.conn();
+        let tx = c.transaction()?;
+        let pending: Option<Option<String>> =
+            tx.query_row("SELECT replaces FROM remote_devices WHERE id = ?1 AND pending_ms IS NOT NULL", [id], |r| r.get(0)).optional()?;
+        tx.execute("UPDATE remote_devices SET last_seen_at = ?1, pending_ms = NULL, replaces = NULL WHERE id = ?2", params![at, id])?;
+        let mut replaced = Vec::new();
+        for old in pending.iter().flatten().flat_map(|ids| ids.split_whitespace()).filter(|old| *old != id) {
+            if tx.execute("DELETE FROM remote_devices WHERE id = ?1", [old])? > 0 {
+                replaced.push(old.to_owned());
+            }
+        }
+        tx.commit()?;
+        Ok(pending.map(|_| FirstSession { replaced }))
+    }
+
+    /// Ids of devices still waiting for their first session.
+    pub fn remote_pending_ids(&self) -> Result<Vec<String>> {
+        let c = self.conn();
+        let mut st = c.prepare("SELECT id FROM remote_devices WHERE pending_ms IS NOT NULL")?;
+        let rows = st.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Takes `ms` off the time every pending device has left for its first session, and deletes
+    /// those with none left; returns their labels.
+    pub fn remote_devices_spend_pending(&self, ms: i64) -> Result<Vec<String>> {
+        let mut c = self.conn();
+        let tx = c.transaction()?;
+        tx.execute("UPDATE remote_devices SET pending_ms = pending_ms - ?1 WHERE pending_ms IS NOT NULL", [ms])?;
+        let labels = tx
+            .prepare("DELETE FROM remote_devices WHERE pending_ms <= 0 RETURNING label")?
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<Vec<String>>>()?;
+        tx.commit()?;
+        Ok(labels)
+    }
+}
+
+fn parse_remote_role(raw: &str) -> RemoteRole {
+    if raw == "control" { RemoteRole::Control } else { RemoteRole::Readonly }
 }
 
 fn migrations() -> Migrations<'static> {
@@ -1040,6 +1191,10 @@ fn migrations() -> Migrations<'static> {
         M::up(include_str!("migrations/017_history.sql")),
         M::up(include_str!("migrations/018_group_defaults.sql")),
         M::up(include_str!("migrations/019_account_profile.sql")),
+        M::up(include_str!("migrations/020_remote.sql")),
+        M::up(include_str!("migrations/021_remote_role_default.sql")),
+        M::up(include_str!("migrations/022_remote_pending.sql")),
+        M::up(include_str!("migrations/023_remote_pending_time.sql")),
     ])
 }
 
@@ -1238,6 +1393,86 @@ fn write_group(c: &Connection, id: Option<i64>, name: &str, color_in: Option<&st
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_roles_fail_closed_and_paired_ids_are_never_overwritten() {
+        assert_eq!(parse_remote_role("control"), RemoteRole::Control);
+        for raw in ["readonly", "Control", "viewer", ""] {
+            assert_eq!(parse_remote_role(raw), RemoteRole::Readonly);
+        }
+        let db = Db::open_in_memory().unwrap();
+        let row = |token: &str, role| RemoteDeviceRow {
+            id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee".into(),
+            label: "Phone".into(),
+            pubkey: vec![4; 65],
+            room_token: token.into(),
+            role,
+            created_at: 1,
+            last_seen_at: None,
+        };
+        db.remote_device_insert(&row("first", RemoteRole::Readonly), i64::MAX, &[]).unwrap();
+        assert!(db.remote_device_insert(&row("second", RemoteRole::Control), i64::MAX, &[]).is_err());
+        let kept = db.remote_device("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee").unwrap().unwrap();
+        assert_eq!((kept.room_token.as_str(), kept.role), ("first", RemoteRole::Readonly));
+        db.conn().execute("INSERT INTO remote_devices (id, label, pubkey, room_token, created_at) VALUES ('x', 'l', x'04', 't', 1)", []).unwrap();
+        assert_eq!(db.remote_device("x").unwrap().unwrap().role, RemoteRole::Readonly);
+    }
+
+    #[test]
+    fn a_pending_remote_device_expires_unless_its_first_session_confirms_it() {
+        let db = Db::open_in_memory().unwrap();
+        let row = |id: &str| RemoteDeviceRow {
+            id: id.into(),
+            label: "Phone".into(),
+            pubkey: vec![4; 65],
+            room_token: format!("token-{id}"),
+            role: RemoteRole::Readonly,
+            created_at: 1,
+            last_seen_at: None,
+        };
+        db.remote_device_insert(&row("old"), i64::MAX, &[]).unwrap();
+        assert_eq!(db.remote_device_touch_seen("old", 2).unwrap(), Some(FirstSession { replaced: vec![] }));
+        db.remote_device_insert(&row("stale"), 100, &[]).unwrap();
+        db.remote_device_insert(&row("held"), 200, &[]).unwrap();
+        db.remote_device_insert(&row("new"), i64::MAX, &["old".into()]).unwrap();
+        assert_eq!(db.remote_pending_ids().unwrap().len(), 3);
+        assert_eq!(db.remote_devices_spend_pending(60).unwrap(), Vec::<String>::new());
+        assert_eq!(db.remote_devices_spend_pending(40).unwrap(), ["Phone"], "the time spent adds up");
+        assert!(db.remote_device("stale").unwrap().is_none());
+        let ids = |db: &Db| {
+            let mut ids = db.remote_devices().unwrap().into_iter().map(|d| d.id).collect::<Vec<_>>();
+            ids.sort();
+            ids
+        };
+        assert_eq!(ids(&db), ["held", "new", "old"], "the replaced row stays until its replacement is confirmed");
+        assert_eq!(db.remote_device_touch_seen("new", 3).unwrap(), Some(FirstSession { replaced: vec!["old".into()] }));
+        assert_eq!(ids(&db), ["held", "new"]);
+        assert_eq!(db.remote_device_touch_seen("new", 4).unwrap(), None);
+        assert_eq!(db.remote_device("new").unwrap().unwrap().last_seen_at, Some(4));
+    }
+
+    #[test]
+    fn a_re_pairing_that_proved_two_old_devices_drops_both_on_its_first_session() {
+        let db = Db::open_in_memory().unwrap();
+        let row = |id: &str| RemoteDeviceRow {
+            id: id.into(),
+            label: "Phone".into(),
+            pubkey: vec![4; 65],
+            room_token: format!("token-{id}"),
+            role: RemoteRole::Readonly,
+            created_at: 1,
+            last_seen_at: None,
+        };
+        for id in ["a", "b", "other"] {
+            db.remote_device_insert(&row(id), i64::MAX, &[]).unwrap();
+            db.remote_device_touch_seen(id, 2).unwrap();
+        }
+        db.remote_device_insert(&row("c"), i64::MAX, &["a".into(), "b".into(), "gone".into()]).unwrap();
+        assert_eq!(db.remote_device_touch_seen("c", 3).unwrap(), Some(FirstSession { replaced: vec!["a".into(), "b".into()] }));
+        let mut ids = db.remote_devices().unwrap().into_iter().map(|d| d.id).collect::<Vec<_>>();
+        ids.sort();
+        assert_eq!(ids, ["c", "other"]);
+    }
 
     #[test]
     fn one_bad_setting_keeps_the_others() {

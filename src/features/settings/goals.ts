@@ -17,6 +17,7 @@ const LISTED: readonly Goal[] = [
   {
     id: "online", icon: "refresh", title: "settings.goal.online", say: "settings.goal.onlineSay",
     start: ["autoRejoin", "autoRestart", "antiAfk"], tune: ["closeToTray", "breaker", "restartEvery", "closeAfter", "memRestart", "signInWatch"], links: ["acct.bringBack", "client.antiAfk"],
+    end: ["remote"],
   },
   { id: "stop", icon: "stop", title: "settings.goal.stop", say: "settings.goal.stopSay", start: ["panic"], tune: ["closeGrace", "shutdown"], links: [] },
   {

@@ -68,6 +68,13 @@ import type { RobuxTransaction } from "./bindings/RobuxTransaction";
 import type { UserRef } from "./bindings/UserRef";
 import type { VaultMode } from "./bindings/VaultMode";
 import type { VaultStatus } from "./bindings/VaultStatus";
+import type { RemoteDevice } from "./bindings/RemoteDevice";
+import type { RemotePairPending } from "./bindings/RemotePairPending";
+import type { RemotePairSession } from "./bindings/RemotePairSession";
+import type { RemoteRole } from "./bindings/RemoteRole";
+import type { RemoteSettings } from "./bindings/RemoteSettings";
+import type { RemoteState } from "./bindings/RemoteState";
+import type { RemoteStatus } from "./bindings/RemoteStatus";
 
 export type {
   AccountInfo, AccountPresence, Headshot,
@@ -75,6 +82,7 @@ export type {
   BandwidthStatus, ClientMetrics, Crash, DiscordStatus, Instance, MultiInstanceStatus, BulkProgress, BulkRequest, ServerOrder, ServerPage, GameInfo, PrivateServerPage, DataDir, LogsCleaned, Notice, RobloxClient, RobloxLauncher,
   AccountPatch, AccountSummary, AppUpdate, ConflictPolicy, ErrorPayload, Group, GroupInput,
   ImportReport, InstallProgress, Settings, SettingsPatch, VaultMode, VaultStatus,
+  RemoteDevice, RemotePairPending, RemotePairSession, RemoteRole, RemoteSettings, RemoteState, RemoteStatus,
 };
 export type { AccountStatus } from "./bindings/AccountStatus";
 export type { NewsItem } from "./bindings/NewsItem";
@@ -390,6 +398,17 @@ export const api = {
 
   settingsGet: () => invoke<Settings>("settings_get"),
   settingsSet: (patch: SettingsPatch) => invoke<Settings>("settings_set", { patch }),
+
+  remoteStatus: () => invoke<RemoteStatus>("remote_status"),
+  remotePairStart: () => invoke<RemotePairSession>("remote_pair_start"),
+  remotePairCancel: () => invoke<void>("remote_pair_cancel"),
+  remotePairApprove: (viewerId: string, approve: boolean, role: RemoteRole, sas: string | null) =>
+    invoke<void>("remote_pair_approve", { viewerId, approve, role, sas }),
+  remoteDeviceRevoke: (deviceId: string) => invoke<void>("remote_device_revoke", { deviceId }),
+  remoteDeviceUpdate: (deviceId: string, label?: string, role?: RemoteRole) =>
+    invoke<void>("remote_device_update", { deviceId, label, role }),
+  /** Paused: every device is dropped and none connects until resumed, also after a restart. */
+  remoteSetPaused: (paused: boolean) => invoke<void>("remote_set_paused", { paused }),
 };
 
 export const events = {
@@ -414,4 +433,9 @@ export const events = {
   onRobloxInstall: (f: (p: InstallProgress) => void): Promise<UnlistenFn> => listen<InstallProgress>("roblox://install", (e) => f(e.payload)),
   /** Joined or left a Public network (checked every 10 s). */
   onNetwork: (f: (n: NetworkStatus) => void): Promise<UnlistenFn> => listen<NetworkStatus>("app://network", (e) => f(e.payload)),
+  /** Remote Dashboard connection state, paired devices, or pairing request changed. */
+  onRemoteChanged: (f: () => void): Promise<UnlistenFn> => listen("remote://changed", f),
+  /** A pairing finished: the device confirmed and is paired, or it left before that. */
+  onRemotePairing: (f: (e: { outcome: "paired" | "left" | "expired"; label?: string }) => void): Promise<UnlistenFn> =>
+    listen<{ outcome: "paired" | "left" | "expired"; label?: string }>("remote://pairing", (e) => f(e.payload)),
 };

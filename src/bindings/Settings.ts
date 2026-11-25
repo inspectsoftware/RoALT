@@ -8,6 +8,7 @@ import type { DiscordRpc } from "./DiscordRpc";
 import type { FlagScope } from "./FlagScope";
 import type { Look } from "./Look";
 import type { MemThrottle } from "./MemThrottle";
+import type { RemoteSettings } from "./RemoteSettings";
 import type { RenderFlags } from "./RenderFlags";
 import type { TabLayout } from "./TabLayout";
 import type { Theme } from "./Theme";
@@ -274,4 +275,8 @@ modsAck: boolean,
  * The first-run setup was finished or skipped (the UI shows it while this is off and there
  * are no accounts).
  */
-onboarded: boolean, };
+onboarded: boolean, 
+/**
+ * Opt-in E2EE Remote Dashboard (`https://remote.roalt.dev/`). Off by default.
+ */
+remote: RemoteSettings, };

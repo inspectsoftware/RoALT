@@ -428,5 +428,9 @@
     "other": "{version} ({n} archivos no coincidieron con esta versión de Roblox)",
     "one": "{version} ({n} archivo no coincidió con esta versión de Roblox)"
   },
-  "RoALT restarted in the tray after it stopped responding. Your running clients weren't closed.": "RoALT se reinició en la bandeja del sistema tras dejar de responder. Tus clientes activos no se cerraron."
+  "RoALT restarted in the tray after it stopped responding. Your running clients weren't closed.": "RoALT se reinició en la bandeja del sistema tras dejar de responder. Tus clientes activos no se cerraron.",
+  "Remote device watching": "Un dispositivo remoto está mirando",
+  "Stop remote watching": "Detener la vista remota",
+  "This RoALT version is too old for Remote. Update RoALT to use Remote again.": "Esta versión de RoALT es demasiado antigua para Remote. Actualiza RoALT para volver a usar Remote.",
+  "Remote is paused. Resume it before pairing a device.": "Remote está en pausa. Reanúdalo antes de vincular un dispositivo."
 }

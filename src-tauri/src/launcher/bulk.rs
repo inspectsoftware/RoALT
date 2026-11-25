@@ -340,6 +340,7 @@ pub fn start(app: AppHandle, mut req: BulkRequest) -> Result<String> {
         s.tracker.reserve_slots(&laid_out, true);
     }
     let _ = app.emit(EVENT, &progress);
+    s.remote.notify_bulk_progress(progress.clone());
     log::info!("bulk batch {}: {} account(s)", progress.batch_id, accounts.len());
     let run = Run { app: app.clone(), batch_id: progress.batch_id.clone(), cancel, accounts };
     tauri::async_runtime::spawn(run.run(req));
@@ -794,7 +795,8 @@ impl Run {
             (b.progress != before).then(|| b.progress.clone())
         };
         if let Some(p) = changed {
-            let _ = self.app.emit(EVENT, p);
+            let _ = self.app.emit(EVENT, &p);
+            self.app.state::<App>().remote.notify_bulk_progress(p);
         }
     }
 }

@@ -7,6 +7,7 @@ import { TitleTools } from "./app/TitleTools";
 import { useTheme } from "./app/theme";
 import { playAllAgain } from "./features/dashboard/Ended";
 import { DonateDialog } from "./features/donate/DonateDialog";
+import { HallOfFameDialog } from "./features/hallOfFame/HallOfFameDialog";
 import { PublicNetworkBanner } from "./features/settings/PublicNetworkBanner";
 import { resetLaunches } from "./features/launch/launchQueue";
 import { Splash } from "./features/splash/Splash";
@@ -48,6 +49,7 @@ function Root() {
   const [lockReason, setLockReason] = useState<LockReason>("start");
   const [islandSlot, setIslandSlot] = useState<HTMLDivElement | null>(null);
   const [donating, setDonating] = useState(false);
+  const [hallOfFame, setHallOfFame] = useState(false);
   const [closeAsk, setCloseAsk] = useState(false);
   const manualLockAt = useRef(0);
   const v = vault.data;
@@ -86,6 +88,7 @@ function Root() {
       events.onBulkProgress((p) => qc.setQueryData(qk.bulk, p)),
       events.onRobloxClient((c) => qc.setQueryData(qk.client, c)),
       events.onNetwork((n) => qc.setQueryData(qk.network, n)),
+      events.onRemoteChanged(() => void qc.invalidateQueries({ queryKey: qk.remote })),
       events.onAppUpdate((u) => qc.setQueryData(qk.appUpdate, u)),
       events.onSettingsChanged(() => void qc.invalidateQueries({ queryKey: qk.settings })),
       events.onPlayAgain(() => playAllAgain(qc)),
@@ -155,7 +158,7 @@ function Root() {
     <div className="app">
       <TitleBar
         islandSlot={setIslandSlot}
-        start={<AppMenu unlocked={unlocked} vaultMode={v?.mode} onRefresh={refresh} onDonate={() => setDonating(true)} />}
+        start={<AppMenu unlocked={unlocked} vaultMode={v?.mode} onRefresh={refresh} onDonate={() => setDonating(true)} onHallOfFame={() => setHallOfFame(true)} />}
         tools={
           <TitleTools
             dark={dark}
@@ -184,6 +187,7 @@ function Root() {
       {/* A new recovery code no flow is showing (a recovered unlock, a lock mid-flow): up here because it must outlive what made it, as the old code is void by now. Never while locked: it would open the vault for whoever comes by. */}
       <RecoveryCodeHost unlocked={unlocked} />
       <DonateDialog open={donating} onClose={() => setDonating(false)} />
+      <HallOfFameDialog open={hallOfFame} onClose={() => setHallOfFame(false)} />
       <CloseAskDialog open={closeAsk} onClose={() => setCloseAsk(false)} />
     </div>
   );

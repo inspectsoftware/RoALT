@@ -14,8 +14,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{COLORREF, HWND, RECT};
-use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
+use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT};
+use windows::Win32::Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
+use windows::Win32::Graphics::Gdi::{ClientToScreen, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
 use windows::Win32::UI::WindowsAndMessaging::{
     GWL_EXSTYLE, GWL_STYLE, GetClientRect, GetForegroundWindow, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, HWND_TOP, IsIconic, IsZoomed, LWA_ALPHA,
     SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SW_SHOWMINNOACTIVE,
@@ -106,15 +107,16 @@ impl Preview {
 /// The client's preview, asking for a newer picture at most `max_w` pixels wide (its aspect kept;
 /// None: no new one) unless it is minimized: then its last picture stays. Never waits, for the
 /// capture or the client. `pid`: None while only its bootstrapper is seen.
-pub fn preview(pid: Option<u32>, max_w: Option<u32>) -> Preview {
+/// `remote`: for the Remote Dashboard, which may capture with Windows' yellow border (`capture`).
+pub fn preview(pid: Option<u32>, max_w: Option<u32>, remote: bool) -> Preview {
     let Some((hwnd, iconic)) = pid.and_then(process::main_window) else {
         return Preview { status: status_of(None, false, false), hidden: false, shot: None };
     };
     if !iconic && let Some(max_w) = max_w {
-        super::capture::request(hwnd, max_w);
+        super::capture::request(hwnd, max_w, remote);
     }
-    let shot = super::capture::last(hwnd);
-    Preview { status: status_of(Some(iconic), shot.is_some(), super::capture::unsupported(hwnd)), hidden: iconic, shot }
+    let shot = super::capture::last(hwnd, max_w, remote);
+    Preview { status: status_of(Some(iconic), shot.is_some(), super::capture::unsupported(hwnd, remote)), hidden: iconic, shot }
 }
 
 /// An older RoALT's ghost: these extended style bits, drawn at alpha 1. Only ever read, to bring
@@ -148,6 +150,8 @@ static RESIZING: Mutex<Vec<isize>> = Mutex::new(Vec::new());
 /// How long a `free_resize` waits for one already at its window.
 const RESIZE_WAITS: u32 = 100;
 const RESIZE_GAP: Duration = Duration::from_millis(20);
+pub(super) const UNHIDE_TIME: Duration =
+    RESTORE_GAP.saturating_mul(RESTORE_TRIES + RESTORE_WAITS).saturating_add(RESIZE_GAP.saturating_mul(RESIZE_WAITS));
 /// Smallest client-area dimension RoALT will ever record or apply (matches `commands::check_window_size`).
 const MIN_CLIENT_SIZE: u32 = 16;
 
@@ -428,8 +432,8 @@ fn saved() -> MutexGuard<'static, Vec<(String, u32, WINDOWPLACEMENT)>> {
 pub fn hide_on_launch(pid: u32) {
     let Some((hwnd, false)) = process::main_window(pid) else { return };
     let until = Instant::now() + LAUNCH_PICTURE_WAIT;
-    while super::capture::last(hwnd).is_none() && !super::capture::unsupported(hwnd) && Instant::now() < until {
-        super::capture::request(hwnd, LAUNCH_PICTURE_W);
+    while super::capture::last(hwnd, None, false).is_none() && !super::capture::unsupported(hwnd, false) && Instant::now() < until {
+        super::capture::request(hwnd, LAUNCH_PICTURE_W, false);
         std::thread::sleep(Duration::from_millis(100));
     }
     hide(hwnd);
@@ -772,6 +776,23 @@ fn frame_or_default(hwnd: HWND) -> (i32, i32) {
     frame(hwnd).unwrap_or_else(|| {
         if (style_of(hwnd) as u32) & WS_CAPTION.0 != 0 { default_frame() } else { (0, 0) }
     })
+}
+
+/// The window's client area and its visible frame (DWM's, which is what a capture shows), both in
+/// screen pixels; None while minimized or unreadable.
+pub fn client_in_frame(hwnd: HWND) -> Option<(RECT, RECT)> {
+    let (mut client, mut frame, mut origin) = (RECT::default(), RECT::default(), POINT::default());
+    // SAFETY: reads one window's state, rectangles and a point into locals of the sizes given.
+    unsafe {
+        if IsIconic(hwnd).as_bool() {
+            return None;
+        }
+        GetClientRect(hwnd, &mut client).ok()?;
+        ClientToScreen(hwnd, &mut origin).ok().ok()?;
+        DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, (&raw mut frame).cast(), size_of::<RECT>() as u32).ok()?;
+    }
+    let client = RECT { left: origin.x, top: origin.y, right: origin.x + client.right, bottom: origin.y + client.bottom };
+    (client.right > client.left && client.bottom > client.top).then_some((client, frame))
 }
 
 fn client_size(hwnd: HWND) -> Option<(u32, u32)> {

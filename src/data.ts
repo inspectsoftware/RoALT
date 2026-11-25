@@ -46,6 +46,7 @@ export const qk = {
   shutdown: ["shutdown"],
   background: ["background"],
   network: ["network"],
+  remote: ["remote"],
   news: ["news"],
   extras: ["extras"],
   online: ["online"],
@@ -66,6 +67,7 @@ const bySortOrder = <T extends { sortOrder: number }>(list: T[]) => [...list].so
 
 export const useVault = () => useQuery({ queryKey: qk.vault, queryFn: api.vaultStatus });
 export const useSettings = () => useQuery({ queryKey: qk.settings, queryFn: api.settingsGet });
+export const useRemote = () => useQuery({ queryKey: qk.remote, queryFn: api.remoteStatus });
 /** The MAIN account first, then the user's order (as the backend lists them). */
 const mainFirst = (list: AccountSummary[]) => bySortOrder(list).sort((a, b) => Number(b.main) - Number(a.main));
 export const useAccounts = () => useQuery({ queryKey: qk.accounts, queryFn: api.accountsList, select: mainFirst });

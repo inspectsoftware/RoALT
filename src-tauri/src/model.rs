@@ -452,6 +452,142 @@ pub struct Settings {
     /// The first-run setup was finished or skipped (the UI shows it while this is off and there
     /// are no accounts).
     pub onboarded: bool,
+    /// Opt-in E2EE Remote Dashboard (`https://remote.roalt.dev/`). Off by default.
+    pub remote: RemoteSettings,
+}
+
+/// Opt-in settings for the end-to-end encrypted Remote Dashboard (`remote`).
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export)]
+pub struct RemoteSettings {
+    /// Connects to the blind relay while on and paired (or while pairing). Off by default.
+    pub enabled: bool,
+    /// Friendly name shown in the web dashboard's PC switcher (empty: Windows computer name).
+    pub pc_name: String,
+    /// Pause remote connections when Windows reports a Public network.
+    pub block_on_public_network: bool,
+    /// Blind E2EE relay WebSocket URL (default `wss://remote.roalt.dev/ws/remote`).
+    #[serde(deserialize_with = "relay_url")]
+    pub relay_url: String,
+    /// View-only devices may watch live previews of the clients.
+    pub allow_view_previews: bool,
+}
+
+/// The relay's address before it moved to its own origin; settings that still hold it load as the default.
+pub const LEGACY_RELAY_URL: &str = "wss://roalt.dev/ws/remote";
+
+fn relay_url<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<String, D::Error> {
+    let url = String::deserialize(d)?;
+    Ok(if url.trim() == LEGACY_RELAY_URL { RemoteSettings::default().relay_url } else { url })
+}
+
+impl Default for RemoteSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            pc_name: String::new(),
+            block_on_public_network: false,
+            relay_url: "wss://remote.roalt.dev/ws/remote".into(),
+            allow_view_previews: true,
+        }
+    }
+}
+
+/// Permission level granted to one paired remote browser/device.
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum RemoteRole {
+    /// May view everything and run allowlisted management commands (never cookies/vault).
+    Control,
+    /// View-only: may inspect status, metrics, crashes and live previews, never mutate.
+    Readonly,
+}
+
+/// One paired browser/device stored in SQLite (`remote_devices`). Never carries secret tokens.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RemoteDevice {
+    pub id: String,
+    pub label: String,
+    pub role: RemoteRole,
+    #[ts(type = "number")]
+    pub created_at: i64,
+    #[ts(type = "number | null")]
+    pub last_seen_at: Option<i64>,
+    /// True while this device currently has an active authenticated session.
+    pub connected: bool,
+    /// Paired, but its first connection hasn't come yet; removed if it never does.
+    pub pending: bool,
+}
+
+/// Connection state of the outbound relay supervisor.
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum RemoteState {
+    Off,
+    Idle,
+    Connecting,
+    Connected,
+    PausedPublic,
+    Error,
+}
+
+/// A pairing request (QR or manual code) awaiting user confirmation in RoALT desktop.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RemotePairPending {
+    pub viewer_id: String,
+    pub device_id: String,
+    /// Chosen by the joining device: show it as a claim, never as proof.
+    pub label: String,
+    /// Manual code: the 6-digit verification code (e.g. "482 193") shown on both PC and browser,
+    /// which approving must pass back. Empty for a QR join.
+    pub sas: Option<String>,
+    /// Approved here; waiting for the device to confirm before it is paired.
+    pub approved: bool,
+}
+
+/// An active 120-second pairing window opened by the user.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RemotePairSession {
+    pub pair_id: String,
+    /// Full URL (`https://remote.roalt.dev/#pair=...`) encoded into the QR code; fragment stays local.
+    pub qr_url: String,
+    /// 8-character manual code (`ABCD-1234`) for typing on another device.
+    pub manual_code: String,
+    #[ts(type = "number")]
+    pub expires_at: i64,
+    pub pending: Option<RemotePairPending>,
+    /// A second device or an invalid request used this pairing, so it stopped; start a new one.
+    pub aborted: bool,
+}
+
+/// Snapshot of the desktop remote service shown in Settings and the top bar.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RemoteStatus {
+    pub state: RemoteState,
+    pub pc_id: Option<String>,
+    pub pc_name: String,
+    pub relay_url: String,
+    pub error: Option<String>,
+    pub devices: Vec<RemoteDevice>,
+    pub active_viewers: u32,
+    /// Viewers watching live previews of the clients right now.
+    pub watching: u32,
+    /// The user paused Remote: no device connects until it is resumed (kept over restarts).
+    pub paused: bool,
+    pub pairing: Option<RemotePairSession>,
+    /// This build may use a relay other than the official one (dev and QA builds).
+    pub custom_relay: bool,
 }
 
 /// The network RoALT runs on (`network`). Never its name: streamers show RoALT on screen.
@@ -766,6 +902,7 @@ minimize_hotkey: String::new(),
             mods_on: true,
             mods_ack: false,
             onboarded: false,
+            remote: RemoteSettings::default(),
         }
     }
 }
@@ -906,6 +1043,8 @@ pub struct SettingsPatch {
     pub mods_ack: Option<bool>,
     #[ts(optional)]
     pub onboarded: Option<bool>,
+    #[ts(optional)]
+    pub remote: Option<RemoteSettings>,
 }
 
 /// What a Roblox log clean-up deleted (`logs_clean`).
@@ -2092,4 +2231,19 @@ pub struct Crash {
 pub struct Notice {
     pub error: bool,
     pub message: String,
+}
+
+#[cfg(test)]
+mod remote_settings_tests {
+    use super::*;
+
+    #[test]
+    fn the_old_default_relay_loads_as_the_new_one() {
+        let old: RemoteSettings = serde_json::from_str(r#"{"enabled":true,"relayUrl":"wss://roalt.dev/ws/remote"}"#).unwrap();
+        assert_eq!(old.relay_url, RemoteSettings::default().relay_url);
+        assert!(old.enabled);
+        let custom: RemoteSettings = serde_json::from_str(r#"{"relayUrl":"wss://relay.example/ws"}"#).unwrap();
+        assert_eq!(custom.relay_url, "wss://relay.example/ws");
+        assert!(!serde_json::to_string(&old).unwrap().contains(LEGACY_RELAY_URL));
+    }
 }

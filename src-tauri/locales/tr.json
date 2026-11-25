@@ -428,5 +428,9 @@
     "other": "{version} ({n} dosya bu Roblox sürümüyle eşleşmedi)",
     "one": "{version} ({n} dosya bu Roblox sürümüyle eşleşmedi)"
   },
-  "RoALT restarted in the tray after it stopped responding. Your running clients weren't closed.": "RoALT yanıt vermeyi durdurduktan sonra tepside yeniden başlatıldı. Çalışan istemcilerin kapatılmadı."
+  "RoALT restarted in the tray after it stopped responding. Your running clients weren't closed.": "RoALT yanıt vermeyi durdurduktan sonra tepside yeniden başlatıldı. Çalışan istemcilerin kapatılmadı.",
+  "Remote device watching": "Uzak bir cihaz izliyor",
+  "Stop remote watching": "Uzaktan izlemeyi durdur",
+  "This RoALT version is too old for Remote. Update RoALT to use Remote again.": "Bu RoALT sürümü Remote için çok eski. Remote'u yeniden kullanmak için RoALT'ı güncelle.",
+  "Remote is paused. Resume it before pairing a device.": "Remote duraklatıldı. Bir cihaz eşleştirmeden önce devam ettir."
 }

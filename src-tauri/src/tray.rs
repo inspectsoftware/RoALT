@@ -30,6 +30,7 @@ struct View {
     ended: bool,
     /// Anti-AFK is on (its tick).
     afk: bool,
+    watching: bool,
     /// The menu's language (`i18n::current`).
     lang: &'static str,
 }
@@ -112,18 +113,21 @@ fn view(app: &AppHandle) -> View {
         running: s.tracker.clients().len(),
         ended: list.iter().any(|i| i.state == InstanceState::Exited),
         afk: s.db.settings().is_ok_and(|v| v.anti_afk.enabled),
+        watching: crate::remote::watching(app),
         lang: crate::i18n::current(),
     }
 }
 
-/// "RoALT", whether locked, and how many clients run while any does.
+/// "RoALT", whether locked, how many clients run while any does, and whether a remote device
+/// watches them.
 fn tooltip(v: &View) -> String {
-    match (v.locked, v.running) {
+    let base = match (v.locked, v.running) {
         (true, 0) => format!("RoALT · {}", tr!("Locked")),
         (true, n) => format!("RoALT · {} · {}: {}", tr!("Locked"), tr!("Roblox clients"), n),
         (false, 0) => "RoALT".into(),
         (false, n) => format!("RoALT · {}: {}", tr!("Roblox clients"), n),
-    }
+    };
+    if v.watching { format!("{base} · {}", tr!("Remote device watching")) } else { base }
 }
 
 fn menu(app: &AppHandle, v: &View) -> tauri::Result<Menu<Wry>> {
@@ -157,6 +161,9 @@ fn menu(app: &AppHandle, v: &View) -> tauri::Result<Menu<Wry>> {
             &item("kill-all", &tr!("Stop all Roblox"), true)?,
         ],
     )?;
+    if v.watching {
+        menu.insert(&item("remote-pause", &tr!("Stop remote watching"), true)?, 1)?;
+    }
     if v.master {
         menu.append(&item("lock", &tr!("Lock vault"), !v.locked)?)?;
     }
@@ -204,6 +211,11 @@ pub(crate) fn on_menu(app: &AppHandle, id: &str) {
             });
         }
         "kill-all" => kill_all(app),
+        "remote-pause" => {
+            if let Err(e) = crate::remote::set_paused(app, true) {
+                notice(app, true, e.message());
+            }
+        }
         "tile" | "minimize-all" | "restore-all" => {
             let (app, id) = (app.clone(), id.to_owned());
             tauri::async_runtime::spawn(async move {

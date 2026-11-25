@@ -3,10 +3,10 @@ import type { IconName } from "../../ui/Icon";
 import { SHORTCUTS } from "./shortcuts";
 
 /** Settings' areas: the parts of its one page, listed at its side. */
-export type SettingsArea = "performance" | "launching" | "appearance" | "security" | "data" | "about" | "shortcuts";
+export type SettingsArea = "performance" | "launching" | "appearance" | "security" | "remote" | "data" | "about" | "shortcuts";
 
 /** A group that isn't rows: Settings draws that panel under its name (SettingsView's PANELS). */
-export type Panel = "presets" | "bench" | "share" | "keys";
+export type Panel = "presets" | "bench" | "share" | "remote" | "keys";
 
 /** An area's rows by group, in page order. A group has no label only when it is the area's one group.
  * A `panel` group's ids are the entries it stands for (search names their place by it), not rows. */
@@ -53,6 +53,7 @@ export const AREAS: readonly AreaDef[] = [
     icon: "shield",
     groups: [{ ids: ["encryption", "masterPassword", "recoveryCode", "autoLock", "lockOnSessionLock", "clipboard", "signInWatch", "lockPurchases", "publicNetworks"] }],
   },
+  { id: "remote", label: "settings.section.remote", icon: "globe", groups: [{ ids: ["remoteDashboard"], panel: "remote" }] },
   { id: "data", label: "settings.section.data", icon: "database", groups: [{ ids: ["dataFolder", "backup", "cache", "cleanLogs", "browserData"] }] },
   { id: "about", label: "settings.section.about", icon: "info", groups: [{ ids: ["selfUpdate", "onlineCount", "news", "showSponsor", "rolimons", "version", "replayTour", "support"] }] },
   {

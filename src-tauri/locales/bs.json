@@ -440,5 +440,9 @@
     "one": "{version} ({n} datoteka ne odgovara ovoj verziji Robloxa)",
     "few": "{version} ({n} datoteke ne odgovaraju ovoj verziji Robloxa)"
   },
-  "RoALT restarted in the tray after it stopped responding. Your running clients weren't closed.": "RoALT se ponovo pokrenuo u sistemskoj traci nakon što je prestao reagovati. Tvoji pokrenuti klijenti nisu zatvoreni."
+  "RoALT restarted in the tray after it stopped responding. Your running clients weren't closed.": "RoALT se ponovo pokrenuo u sistemskoj traci nakon što je prestao reagovati. Tvoji pokrenuti klijenti nisu zatvoreni.",
+  "Remote device watching": "Udaljeni uređaj gleda",
+  "Stop remote watching": "Zaustavi daljinsko gledanje",
+  "This RoALT version is too old for Remote. Update RoALT to use Remote again.": "Ova verzija RoALT-a je prestara za Remote. Ažurirajte RoALT da ponovo koristite Remote.",
+  "Remote is paused. Resume it before pairing a device.": "Remote je pauziran. Nastavi ga prije uparivanja uređaja."
 }

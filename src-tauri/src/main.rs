@@ -21,6 +21,7 @@ mod rpc;
 mod session;
 mod news;
 mod online;
+mod remote;
 mod rolimons;
 mod self_update;
 mod splash;
@@ -69,6 +70,8 @@ pub struct App {
     pub shutdown: Mutex<Option<i64>>,
     /// Rotated cookies that arrived while the vault was locked, stored at the next unlock.
     pub rotated_later: Mutex<Vec<(i64, vault::Secret)>>,
+    /// Opt-in E2EE Remote Dashboard (`https://remote.roalt.dev/`).
+    pub remote: remote::Remote,
 }
 
 impl App {
@@ -527,6 +530,7 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
         self_update: self_update::SelfUpdater::new(),
         network: network::Network::new(),
         shutdown: Mutex::new(shutdown),
+        remote: remote::Remote::new(),
     });
     // Before any client starts: what a launch cut short by a quit or crash left behind goes.
     launcher::flags::restore();
@@ -591,6 +595,7 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
     network::spawn(app.handle().clone());
     launcher::client_settings::spawn(app.handle().clone());
     discord::spawn(app.handle().clone());
+    remote::spawn(app.handle().clone());
     watch::spawn(app.handle().clone());
     rpc::spawn(app.handle().clone());
     launcher::update::spawn(app.handle().clone());
@@ -622,6 +627,7 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
 
 /// What quitting does once the window is gone; also the watchdog's restart, off the main thread.
 pub(crate) fn exit_cleanup(app: &AppHandle) {
+    instances::remote_input::release_now(Duration::from_millis(500));
     // The next start follows the running clients again (`Tracker::readopt`).
     let Some(s) = app.try_state::<App>() else { return };
     s.tracker.persist(&s.db, true);
@@ -974,6 +980,13 @@ fn main() {
             commands::settings_get,
             commands::settings_set,
             commands::network_status,
+            commands::remote_status,
+            commands::remote_pair_start,
+            commands::remote_pair_cancel,
+            commands::remote_pair_approve,
+            commands::remote_device_revoke,
+            commands::remote_device_update,
+            commands::remote_set_paused,
         ]))
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| fatal(&tr!("RoALT failed to start: {why}", why = e)))

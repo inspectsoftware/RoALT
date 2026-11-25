@@ -21,6 +21,7 @@ pub fn now_ms() -> i64 {
 
 fn accounts_changed(app: &AppHandle) {
     let _ = app.emit("accounts://changed", ());
+    app.state::<App>().remote.notify_accounts_changed();
 }
 
 // ---------- vault ----------
@@ -51,6 +52,7 @@ fn after_unlock(app: &AppHandle, s: &App) {
     let later = std::mem::take(&mut *s.rotated_later.lock().unwrap_or_else(|e| e.into_inner()));
     later.into_iter().for_each(|(id, cookie)| s.store_rotated(id, cookie));
     crate::tray::refresh(app);
+    s.remote.notify_lock_state_changed();
 }
 
 /// Forgot the password: `code` sets `new_password` and unlocks. The code is used up; returns the
@@ -2234,6 +2236,7 @@ pub async fn robux_totals(app: AppHandle, s: State<'_, App>, account_id: i64) ->
 pub fn instances_changed(app: &AppHandle) {
     let _ = app.emit("instances://changed", ());
     crate::tray::refresh(app);
+    app.state::<App>().remote.notify_instances_changed();
 }
 
 #[tauri::command]
@@ -2578,7 +2581,7 @@ pub async fn instance_thumbnail(s: State<'_, App>, id: String, max_w: u32, known
     s.tracker.get(&id).ok_or(AppError::NotFound)?;
     let pid = s.tracker.window_pid(&id);
     let max_w = (max_w > 0).then(|| max_w.clamp(16, 1280));
-    let preview = blocking(move || crate::instances::window::preview(pid, max_w)).await?;
+    let preview = blocking(move || crate::instances::window::preview(pid, max_w, false)).await?;
     Ok(tauri::ipc::Response::new(preview.to_bytes(known)))
 }
 
@@ -3416,6 +3419,7 @@ pub(crate) fn lock_vault_now(app: &AppHandle) {
     });
     let _ = app.emit("vault://locked", ());
     crate::tray::refresh(app);
+    app.state::<App>().remote.notify_lock_state_changed();
 }
 
 // ---------- discord ----------
@@ -3563,11 +3567,18 @@ pub async fn backup_export(
             })
             .collect(),
         favourites,
-        settings: Some(serde_json::to_value(s.db.settings()?).map_err(|e| AppError::Internal(e.to_string()))?),
+        settings: Some(without_remote(serde_json::to_value(s.db.settings()?).map_err(|e| AppError::Internal(e.to_string()))?)),
         discord_webhook: crate::discord::stored_url(&s),
     };
     blocking(move || backup::write(Path::new(&path), &password, &payload)).await??;
     Ok(count)
+}
+
+fn without_remote(mut settings: serde_json::Value) -> serde_json::Value {
+    if let Some(o) = settings.as_object_mut() {
+        o.remove("remote");
+    }
+    settings
 }
 
 /// What a backup entry must be before any of the file is applied.
@@ -3601,7 +3612,7 @@ fn check_backup(p: &backup::BackupPayload) -> Result<()> {
 /// gets (`set_settings`, `discord::set`): the file may be anyone's. False when they couldn't be
 /// applied.
 fn restore_settings(app: &AppHandle, s: &App, payload: &BackupPayload) -> bool {
-    let Some(mut json) = payload.settings.clone() else { return false };
+    let Some(mut json) = payload.settings.clone().map(without_remote) else { return false };
     let apply = |json: serde_json::Value| serde_json::from_value::<SettingsPatch>(json).map_err(|e| AppError::Internal(e.to_string())).and_then(|p| set_settings_on_main(app, p));
     // A global key another program holds on this PC must not cost every other setting.
     let done = apply(json.clone()).or_else(|e| {
@@ -4104,6 +4115,12 @@ pub(crate) fn set_settings(app: &AppHandle, s: &App, patch: SettingsPatch) -> Re
         v.panic_hotkey = k.trim().to_owned();
     }
     if let Some(a) = patch.allow_public_networks { v.allow_public_networks = a }
+    let remote_changed = patch.remote.is_some();
+    if let Some(mut r) = patch.remote {
+        r.pc_name = r.pc_name.trim().chars().take(48).collect();
+        r.relay_url = crate::remote::validate_relay_url(&r.relay_url)?;
+        v.remote = r;
+    }
     // The other global keys, tried before the save: one Windows won't give is refused, and the ones
     // there stay.
     let keys = [(&patch.toggle_hotkey, &mut v.toggle_hotkey), (&patch.tile_hotkey, &mut v.tile_hotkey), (&patch.minimize_hotkey, &mut v.minimize_hotkey)];
@@ -4155,7 +4172,47 @@ pub(crate) fn set_settings(app: &AppHandle, s: &App, patch: SettingsPatch) -> Re
     if let Some(u) = self_update {
         crate::self_update::switched(app, u);
     }
+    if remote_changed {
+        s.remote.notify_settings_changed();
+    }
     Ok(v)
+}
+
+// ---------- remote dashboard ----------
+
+#[tauri::command(async)]
+pub fn remote_status(app: AppHandle) -> Result<RemoteStatus> {
+    crate::remote::status(&app)
+}
+
+#[tauri::command(async)]
+pub fn remote_pair_start(app: AppHandle) -> Result<RemotePairSession> {
+    crate::remote::pair_start(&app)
+}
+
+#[tauri::command]
+pub fn remote_pair_cancel(app: AppHandle) {
+    crate::remote::pair_cancel(&app);
+}
+
+#[tauri::command(async)]
+pub fn remote_pair_approve(app: AppHandle, viewer_id: String, approve: bool, role: Option<RemoteRole>, sas: Option<String>) -> Result<()> {
+    crate::remote::pair_approve(&app, &viewer_id, approve, role.unwrap_or(RemoteRole::Readonly), sas.as_deref())
+}
+
+#[tauri::command(async)]
+pub fn remote_device_revoke(app: AppHandle, device_id: String) -> Result<()> {
+    crate::remote::device_revoke(&app, &device_id)
+}
+
+#[tauri::command(async)]
+pub fn remote_device_update(app: AppHandle, device_id: String, label: Option<String>, role: Option<RemoteRole>) -> Result<()> {
+    crate::remote::device_update(&app, &device_id, label, role)
+}
+
+#[tauri::command(async)]
+pub fn remote_set_paused(app: AppHandle, paused: bool) -> Result<()> {
+    crate::remote::set_paused(&app, paused)
 }
 
 // ---------- network ----------

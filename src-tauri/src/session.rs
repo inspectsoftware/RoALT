@@ -81,9 +81,18 @@ unsafe extern "system" fn on_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM)
     match msg {
         WM_WTSSESSION_CHANGE if what == WTS_SESSION_LOCK => {
             LOCKED.store(true, Ordering::Relaxed);
+            crate::instances::remote_input::release_all();
             went_away(false);
+            if let Some(app) = APP.get() {
+                app.state::<App>().remote.notify_lock_state_changed();
+            }
         }
-        WM_WTSSESSION_CHANGE if what == WTS_SESSION_UNLOCK => LOCKED.store(false, Ordering::Relaxed),
+        WM_WTSSESSION_CHANGE if what == WTS_SESSION_UNLOCK => {
+            LOCKED.store(false, Ordering::Relaxed);
+            if let Some(app) = APP.get() {
+                app.state::<App>().remote.notify_lock_state_changed();
+            }
+        }
         WM_POWERBROADCAST if what == PBT_APMSUSPEND => went_away(true),
         _ => {}
     }

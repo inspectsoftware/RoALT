@@ -1,0 +1,45 @@
+services:
+  remote-relay:
+    build: .
+    image: roalt-remote-relay:local
+    container_name: roalt-remote-relay
+    restart: unless-stopped
+    environment:
+      - RELAY_BIND=0.0.0.0:8788
+      - RELAY_TRUSTED_PROXIES=172.31.88.1
+      - RELAY_MAX_CONNS=3072
+      - RELAY_MAX_CONNS_PER_IP=32
+      - RUST_LOG=info
+    ports:
+      - "127.0.0.1:8788:8788"
+    networks:
+      - relay
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    sysctls:
+      net.ipv4.tcp_rmem: "4096 65536 262144"
+      net.ipv4.tcp_wmem: "4096 65536 262144"
+    mem_limit: 4g
+    memswap_limit: 4g
+    cpus: "1.0"
+    pids_limit: 128
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 8192
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  relay:
+    ipam:
+      config:
+        - subnet: 172.31.88.0/24
+          gateway: 172.31.88.1

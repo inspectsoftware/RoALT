@@ -3,6 +3,7 @@ dist/
 dist-demo/
 dist-installer/
 src-tauri/target/
+server/remote-relay/target/
 src-tauri/gen/
 *.log
 .vite/

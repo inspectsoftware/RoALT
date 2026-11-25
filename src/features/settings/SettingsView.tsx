@@ -10,6 +10,7 @@ import { Icon, type IconName } from "../../ui/Icon";
 import { Collapse, ListPresence, prefersReducedMotion, RISE, SPRING, TWEEN } from "../../ui/motion";
 import { useStored } from "../../ui/stored";
 import { BenchPanel, PERFORMANCE_RENDERERS, PresetsPanel, ReviewProvider, SharePanel } from "../performance/panels";
+import { RemotePanel } from "../remote/RemotePanel";
 import { AREAS, type Panel, type SettingsArea } from "./areas";
 import { GOALS } from "./goals";
 import { jumpTo, requestJump } from "./jump";
@@ -82,7 +83,7 @@ function KeysPanel({ block }: { block?: string }) {
   );
 }
 /** The groups that aren't rows (areas.ts), each drawn whole; `block`: its name on the page. */
-const PANELS: Record<Panel, ComponentType<{ block?: string }>> = { presets: PresetsPanel, bench: BenchPanel, share: SharePanel, keys: KeysPanel };
+const PANELS: Record<Panel, ComponentType<{ block?: string }>> = { presets: PresetsPanel, bench: BenchPanel, share: SharePanel, remote: RemotePanel, keys: KeysPanel };
 const panel = (name: Panel, block?: string) => {
   const Draw = PANELS[name];
   return <Draw key={name} block={block} />;

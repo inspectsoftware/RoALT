@@ -416,5 +416,9 @@
   "{version} ({n} files didn't match this Roblox version)": {
     "other": "{version} (파일 {n}개가 이 Roblox 버전과 일치하지 않음)"
   },
-  "RoALT restarted in the tray after it stopped responding. Your running clients weren't closed.": "RoALT가 응답하지 않아 트레이에서 다시 시작되었습니다. 실행 중인 클라이언트는 닫히지 않았습니다."
+  "RoALT restarted in the tray after it stopped responding. Your running clients weren't closed.": "RoALT가 응답하지 않아 트레이에서 다시 시작되었습니다. 실행 중인 클라이언트는 닫히지 않았습니다.",
+  "Remote device watching": "원격 기기가 보는 중",
+  "Stop remote watching": "원격 보기 중지",
+  "This RoALT version is too old for Remote. Update RoALT to use Remote again.": "이 RoALT 버전은 Remote에 쓰기에는 너무 오래되었습니다. Remote를 다시 쓰려면 RoALT를 업데이트하세요.",
+  "Remote is paused. Resume it before pairing a device.": "Remote가 일시 중지되었습니다. 기기를 페어링하기 전에 다시 시작하세요."
 }

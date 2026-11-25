@@ -416,5 +416,9 @@
   "{version} ({n} files didn't match this Roblox version)": {
     "other": "{version} ({n} ไฟล์ไม่ตรงกับ Roblox เวอร์ชันนี้)"
   },
-  "RoALT restarted in the tray after it stopped responding. Your running clients weren't closed.": "RoALT รีสตาร์ทในถาดระบบหลังจากหยุดตอบสนอง ไคลเอนต์ที่กำลังทำงานอยู่ไม่ได้ถูกปิด"
+  "RoALT restarted in the tray after it stopped responding. Your running clients weren't closed.": "RoALT รีสตาร์ทในถาดระบบหลังจากหยุดตอบสนอง ไคลเอนต์ที่กำลังทำงานอยู่ไม่ได้ถูกปิด",
+  "Remote device watching": "อุปกรณ์ระยะไกลกำลังดู",
+  "Stop remote watching": "หยุดการดูจากระยะไกล",
+  "This RoALT version is too old for Remote. Update RoALT to use Remote again.": "RoALT เวอร์ชันนี้เก่าเกินไปสำหรับ Remote อัปเดต RoALT เพื่อใช้ Remote อีกครั้ง",
+  "Remote is paused. Resume it before pairing a device.": "Remote ถูกหยุดชั่วคราว โปรดเริ่มต่อก่อนจับคู่อุปกรณ์"
 }

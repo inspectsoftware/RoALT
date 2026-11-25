@@ -1,0 +1,61 @@
+/* Hall of fame: contributors and beta testers listed by Discord username. */
+@layer views {
+  .hof-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .hof-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: var(--h-lg);
+    padding: 8px 12px;
+    border-radius: var(--r-md);
+    border: 1px solid var(--line);
+    background: var(--surface-2);
+    color: var(--fg);
+    font-size: var(--fs-body);
+    font-weight: 500;
+    text-align: start;
+    cursor: pointer;
+    transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+  }
+  .hof-card:hover {
+    background: var(--hover);
+    border-color: var(--edge);
+  }
+  .hof-card:active {
+    background: var(--press);
+  }
+  .hof-icon {
+    flex: none;
+    color: var(--fg-3);
+  }
+  .hof-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .hof-copy {
+    flex: none;
+    margin-inline-start: auto;
+    color: var(--fg-3);
+    opacity: 0;
+    transition: opacity var(--dur-fast) var(--ease-out);
+  }
+  .hof-card:hover .hof-copy,
+  .hof-card:focus-visible .hof-copy,
+  .hof-card[data-copied] .hof-copy {
+    opacity: 1;
+  }
+  .hof-card[data-copied] .hof-copy {
+    color: var(--ok);
+  }
+  @media (max-width: 420px) {
+    .hof-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+}

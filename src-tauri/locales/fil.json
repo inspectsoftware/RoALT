@@ -428,5 +428,9 @@
     "one": "{version} ({n} file ang hindi tumugma sa bersyong ito ng Roblox)",
     "other": "{version} ({n} mga file ang hindi tumugma sa bersyong ito ng Roblox)"
   },
-  "RoALT restarted in the tray after it stopped responding. Your running clients weren't closed.": "Nag-restart ang RoALT sa tray matapos itong hindi tumugon. Hindi isinara ang mga tumatakbong client mo."
+  "RoALT restarted in the tray after it stopped responding. Your running clients weren't closed.": "Nag-restart ang RoALT sa tray matapos itong hindi tumugon. Hindi isinara ang mga tumatakbong client mo.",
+  "Remote device watching": "May remote device na nanonood",
+  "Stop remote watching": "Itigil ang remote na panonood",
+  "This RoALT version is too old for Remote. Update RoALT to use Remote again.": "Masyadong luma ang bersyong ito ng RoALT para sa Remote. I-update ang RoALT para magamit ulit ang Remote.",
+  "Remote is paused. Resume it before pairing a device.": "Naka-pause ang Remote. Ituloy ito bago mag-pair ng device."
 }

@@ -37,11 +37,12 @@ function DonateMenu({ onDonate }: { onDonate: () => void }) {
 /** The logo and name, as the app's own menu: the vault's state, the community, Donate, and the keys
  * that used to sit in the sidebar's foot. While locked, only what needs no vault. Beside it, how
  * many use RoALT now while that's on, then Discord and Donate (Robux or coffee), each one click away. */
-export function AppMenu({ unlocked, vaultMode, onRefresh, onDonate }: {
+export function AppMenu({ unlocked, vaultMode, onRefresh, onDonate, onHallOfFame }: {
   unlocked: boolean;
   vaultMode?: VaultMode;
   onRefresh: () => void;
   onDonate: () => void;
+  onHallOfFame: () => void;
 }) {
   const anchor = useAnchor();
   const [open, setOpen] = useState(false);
@@ -98,6 +99,9 @@ export function AppMenu({ unlocked, vaultMode, onRefresh, onDonate }: {
         )}
         <MenuItem icon="chat" onSelect={() => openUrl(DISCORD_INVITE).catch(toastError)}>
           {t("app.joinDiscord")}
+        </MenuItem>
+        <MenuItem icon="trophy" onSelect={onHallOfFame}>
+          {t("hallOfFame.button")}
         </MenuItem>
         <MenuItem icon="heart" onSelect={onDonate}>
           {t("donate.button")}

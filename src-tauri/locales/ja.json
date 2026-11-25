@@ -416,5 +416,9 @@
   "{version} ({n} files didn't match this Roblox version)": {
     "other": "{version}（{n} 件のファイルがこの Roblox バージョンに一致しませんでした）"
   },
-  "RoALT restarted in the tray after it stopped responding. Your running clients weren't closed.": "RoALT が応答しなくなったためトレイで再起動しました。起動中のクライアントは閉じられていません。"
+  "RoALT restarted in the tray after it stopped responding. Your running clients weren't closed.": "RoALT が応答しなくなったためトレイで再起動しました。起動中のクライアントは閉じられていません。",
+  "Remote device watching": "リモートデバイスが視聴中",
+  "Stop remote watching": "リモート視聴を停止",
+  "This RoALT version is too old for Remote. Update RoALT to use Remote again.": "この RoALT のバージョンは Remote には古すぎます。Remote をまた使うには RoALT を更新してください。",
+  "Remote is paused. Resume it before pairing a device.": "Remote は一時停止中です。デバイスをペアリングする前に再開してください。"
 }

@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -57,6 +57,8 @@ const HANG_FREE_POLLS: u32 = 5;
 const WRITER_AFTER_MS: i64 = 2_000;
 /// ... and proves a running client for this long: an idle client logs every 2 minutes (measured).
 const WRITER_PROOF_MS: i64 = 150_000;
+/// How long `window_pid` trusts a check that a PID still is its client.
+const CLIENT_CHECK_TTL: Duration = Duration::from_millis(500);
 
 pub struct Tracker {
     inner: Mutex<Vec<Entry>>,
@@ -77,6 +79,9 @@ pub struct Tracker {
     fit_n: AtomicUsize,
     /// Bumped by each re-layout (and Tile): an older one still placing stops (the newer has every window).
     pub(crate) layout_gen: AtomicUsize,
+    /// Recent `same_client` answers by (pid, start time) for `window_pid`, which previews and remote
+    /// input ask many times a second; never locked together with `inner`.
+    client_checks: Mutex<Vec<(u32, Option<u64>, Instant)>>,
 }
 
 /// One window for the layout: (instance id, pid, window rect, client size the tiny sweep keeps).
@@ -431,6 +436,7 @@ impl Tracker {
             slots_pending: Mutex::new(Vec::new()),
             fit_n: AtomicUsize::new(0),
             layout_gen: AtomicUsize::new(0),
+            client_checks: Mutex::new(Vec::new()),
         }
     }
 
@@ -883,13 +889,46 @@ impl Tracker {
             .collect()
     }
 
-    /// The client's PID for window-only queries (previews): works even when the process's start
-    /// time couldn't be read (e.g. elevated client), as long as it is adopted and still alive.
+    /// The client's PID for window-only queries (previews, remote input): works even when the
+    /// process's start time couldn't be read (e.g. elevated client), as long as it is adopted, alive
+    /// and the process holding the PID right now is still that client (`same_client`).
+    /// A positive check is reused for `CLIENT_CHECK_TTL`: it opens the process, and lists every
+    /// process for an elevated client.
     pub fn window_pid(&self, id: &str) -> Option<u32> {
+        let (pid, t0) = self.window_candidate(id)?;
+        let now = Instant::now();
+        let fresh = |at: Instant| now.saturating_duration_since(at) < CLIENT_CHECK_TTL;
+        let checks = || self.client_checks.lock().unwrap_or_else(|e| e.into_inner());
+        if checks().iter().any(|&(p, t, at)| p == pid && t == t0 && fresh(at)) {
+            return Some(pid);
+        }
+        if !same_client(&Live, pid, t0) {
+            return None;
+        }
+        let mut kept = checks();
+        kept.retain(|&(_, _, at)| fresh(at));
+        kept.push((pid, t0, now));
+        Some(pid)
+    }
+
+    /// As `window_pid`, with the start time the client was checked against.
+    pub fn window_client(&self, id: &str) -> Option<super::remote_input::Client> {
+        let pid = self.window_pid(id)?;
+        let started = self.window_candidate(id).filter(|(p, _)| *p == pid)?.1;
+        Some(super::remote_input::Client { pid, started })
+    }
+
+    fn window_candidate(&self, id: &str) -> Option<(u32, Option<u64>)> {
         self.entries()
             .iter()
             .find(|e| e.inst.id == id && e.inst.state != InstanceState::Exited && e.adopted && e.alive)
-            .map(|e| e.inst.pid)
+            .map(|e| (e.inst.pid, e.start_time))
+    }
+
+    #[cfg(test)]
+    fn window_pid_of(&self, id: &str, procs: &dyn Procs) -> Option<u32> {
+        let (pid, t0) = self.window_candidate(id)?;
+        same_client(procs, pid, t0).then_some(pid)
     }
 
     /// Running (non-Exited) clients broken down into (in_game_or_joining, disconnected, given_up)
@@ -1497,6 +1536,14 @@ pub struct Transition {
     pub first_game: bool,
     /// What its log's disconnect line said, if any (`LogFacts::reason`).
     pub reason: Option<String>,
+}
+
+fn same_client(procs: &dyn Procs, pid: u32, t0: Option<u64>) -> bool {
+    match (procs.start_time(pid), t0) {
+        (Some(seen), Some(t0)) => seen == t0,
+        (Some(_), None) => false,
+        (None, _) => procs.unreadable_client(pid),
+    }
 }
 
 fn client_of(e: &Entry) -> Option<(u32, u64)> {
@@ -2535,7 +2582,12 @@ mod tests {
         old_log(&log, secs + 8);
         t.poll(Some(&dir), &procs, &user_of, start + 9_000);
         assert_eq!(state(&t, &id), (InGame, None, 901));
-        assert_eq!(t.window_pid(&id), Some(901));
+        assert_eq!(t.window_pid_of(&id, &procs), Some(901));
+        procs.set(&[(901, secs + 30)]);
+        assert_eq!(t.window_pid_of(&id, &procs), None, "another process got the PID before the next poll");
+        procs.set(&[]);
+        procs.set_unreadable(&[901]);
+        assert_eq!(t.window_pid_of(&id, &procs), Some(901), "an elevated client that runs on");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

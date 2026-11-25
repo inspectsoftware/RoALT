@@ -5,7 +5,7 @@
 <br>
 
 A fast, local-only account manager and multi-client launcher for Windows.<br>
-Your cookies stay encrypted on your PC. Nothing is sent anywhere except Roblox.
+Your cookies stay encrypted on your PC and never leave it.
 
 [![Latest release](https://img.shields.io/github/v/release/inspectsoftware/RoALT?style=for-the-badge&color=b4f000&labelColor=1a1a1a&label=release)](https://github.com/inspectsoftware/RoALT/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/inspectsoftware/RoALT/total?style=for-the-badge&color=2b2b2b&labelColor=1a1a1a)](https://github.com/inspectsoftware/RoALT/releases)
@@ -59,7 +59,7 @@ and only ever one client open at a time. RoALT removes all of that.
 - **Paste any game link** and launch one account, or ten, into it. Even into the same server.
 - **Run several Roblox windows side by side**, and let RoALT bring back any that crash or get kicked.
 
-It runs entirely on your PC. There is no RoALT account and no tracking: the only RoALT server is an online counter that gets a random ID and how many Roblox clients RoALT runs, and you can turn it off. RoALT's site is asked who sponsors and supports it, with nothing sent about you. Rolimons values (off by default) only download Rolimons' public item list.
+It runs entirely on your PC. There is no RoALT account and no tracking. RoALT has two servers: an online counter that gets a random ID and how many Roblox clients RoALT runs, which you can turn off, and, only if you turn on Remote, a relay that passes encrypted traffic between your PC and your phone. RoALT's site is asked who sponsors and supports it, with nothing sent about you. Rolimons values (off by default) only download Rolimons' public item list.
 
 <table>
 <tr>
@@ -267,7 +267,14 @@ Your own picture or animated GIF behind the app, up to 16 MB, with a choice of h
 holds still while RoALT isn't in front, so the clients you're playing don't pay for it.
 
 </td>
-<td></td>
+<td valign="top">
+
+### 📱 Remote
+Off by default. Turn it on and pair your phone with a QR code to watch your clients, their live previews and the
+monitor from [remote.roalt.dev](https://remote.roalt.dev/). Give a device **Control** and it can also launch, close
+and play. You approve every device on the PC, and it's end-to-end encrypted. [What the relay sees](#-safety-and-privacy).
+
+</td>
 </tr>
 </table>
 
@@ -307,6 +314,7 @@ holds still while RoALT isn't in front, so the clients you're playing don't pay 
 | 🔔 **Discord** | Crash, disconnect, restart and batch alerts, with the game's name and why a client was disconnected. Also when an account's sign-in stops working or Roblox wants a human check, and when a newer RoALT is out. Opt-in alerts when a client gets into a game or is slowed down for its memory, and when the PC's memory or the clients' GPU use stays nearly full. Mute alerts per account. **Rich presence** (on by default, a switch on the Discord page): your profile shows "Playing RoALT", idling or with the game and how many alts run. |
 | 📰 **News** | A tab on Home with RoALT's releases (GitHub), the DevForum's announcements and release notes, the Roblox Newsroom and Roblox client updates. Filter by source, unread counts, mark all read. |
 | 🔄 **RoALT updates** | Looks for a new RoALT on GitHub Releases at start and every 6 hours (can be turned off; *Check now* in Settings). The island offers it; *Update now* downloads it, checks its release signature, installs it silently and restarts RoALT. Never installs on its own. Older installers stay on GitHub Releases, but they get no fixes or support, and an older RoALT won't open data saved by a newer one (it says so and changes nothing). |
+| 📱 **Remote** | Off by default (Settings › Remote). **Pair device** shows a QR code and an 8-character code for [remote.roalt.dev](https://remote.roalt.dev/), valid 120 s; a code pairing also shows a 6-digit code on both screens to compare. Every device needs **Approve** on the PC and starts as **View only**: clients, live previews, the monitor and crashes. **Control** adds launching accounts and favourites, closing, arranging and limiting clients, stopping them all, a shutdown timer, and taps, a joystick, camera drag and keys inside a client. Held keys and touches are let go when the device goes quiet. A title-bar pill shows who is connected; **Revoke** removes a device. Up to 64 devices; one dashboard can follow several PCs. Optional pause on Public networks. While Windows is locked, previews and input stop and management still works. |
 | 🧰 **Comfort** | Tray menu with favourites, the window tools (Tile, Minimize all, Restore all), Play all again and the Anti-AFK switch, and a tooltip that counts the running clients; close to tray, relaunch an ended client in one click, movable data folder, keyboard shortcuts (`?` lists them). One search (`Ctrl+F`) finds any setting, in Settings or Discord, and takes you to it. Dark, light or system theme, white by default or any accent colour, and your own background image or animated GIF (it holds still while you play in Roblox), with a choice of how much the theme covers it. **Custom themes**: recolour the window, title bar, navigation bar, panels, tabs, buttons, menus and text, start from a built-in theme (Midnight, Sakura, Terminal, Ocean, Paper), make corners square or round, and share a theme as a code. Text stays readable whatever you pick. **Motion**: follow Windows' animation setting, or always full or reduced. Optional skip of the splash screen. |
 
 </details>
@@ -419,7 +427,7 @@ In **Settings → Launching**, turn on **Auto-rejoin** (and, if you like, **Auto
 
 #### ✅ What RoALT does
 
-- Talks **only** to `*.roblox.com` and `*.rbxcdn.com`, plus GitHub for RoALT updates and for News' list of RoALT releases (each can be turned off; an update downloads from `github.com` and GitHub's `objects.githubusercontent.com` / `release-assets.githubusercontent.com`), RoALT's online counter (`roalt-online.roalt-counterlive.workers.dev`, can be turned off), `roalt.dev` for the sponsor (can be turned off) and, while Settings › About is open, the supporter names, Rolimons' public item list (only with Rolimons values on), and your Discord webhook. *(Embedded Roblox webviews restrict top-level navigation to Roblox/sign-in hosts; third-party subresources embedded by Roblox's own web pages load as in any browser.)*
+- Talks **only** to `*.roblox.com` and `*.rbxcdn.com`, plus GitHub for RoALT updates and for News' list of RoALT releases (each can be turned off; an update downloads from `github.com` and GitHub's `objects.githubusercontent.com` / `release-assets.githubusercontent.com`), RoALT's online counter (`roalt-online.roalt-counterlive.workers.dev`, can be turned off), the Remote relay (`wss://remote.roalt.dev/ws/remote`, only while Remote is on and a device is paired or pairing), `roalt.dev` for the sponsor (can be turned off) and, while Settings › About is open, the supporter names, Rolimons' public item list (only with Rolimons values on), and your Discord webhook. *(Embedded Roblox webviews restrict top-level navigation to Roblox/sign-in hosts; third-party subresources embedded by Roblox's own web pages load as in any browser.)*
 - Encrypts every cookie with **AES-256-GCM** under a key protected by **Windows DPAPI** (stops another PC or Windows user, not software running as you), plus your master password if you set one (locks the key whenever RoALT is locked).
 - Encrypts the **whole database** too (SQLCipher, AES-256), with its own DPAPI-protected key: a copied `roalt.db` can't be read on another PC or Windows account.
 - Signs you in through **Roblox's own page**, in a browser profile of its own that keeps no Roblox, Google or Apple sign-in once the window closes. Besides Roblox, that window opens only Google's and Apple's sign-in pages (`accounts.google.com`, `appleid.apple.com`), when you pick them.
@@ -444,6 +452,7 @@ In **Settings → Launching**, turn on **Auto-rejoin** (and, if you like, **Auto
 - **Never** changes Windows settings, except the opt-in bandwidth limit.
 - **Never** contacts Discord's servers unless you paste a webhook. Rich presence goes only to the Discord app on your PC.
 - **Never** contacts Rolimons unless you turn on **Rolimons values** (Settings > About). Then it downloads only Rolimons' public item list while counting limiteds or showing Browse › Limiteds, and sends no user ID, name or cookie.
+- **Never** sends a cookie, vault password, recovery code, account note or launch argument to a Remote device, even one with Control.
 
 </td>
 </tr>
@@ -499,6 +508,20 @@ In **Settings → Launching**, turn on **Auto-rejoin** (and, if you like, **Auto
   (outside open menus or window drags), RoALT logs the UI call stack; after 60 s it restarts itself so running Roblox
   clients stay followed (`Tracker::readopt`). In master-password mode the restarted window opens visibly so you can
   unlock it.
+- **Remote (opt-in, off by default).** Turned on, RoALT keeps one WebSocket open to RoALT's relay at
+  `wss://remote.roalt.dev/ws/remote` while a device is paired or a pairing is open; the dashboard is served from
+  `https://remote.roalt.dev/`. What the PC and your devices send each other (clients, previews, commands, input) is
+  end-to-end encrypted: P-256 keys made on each side, AES-256-GCM, and a pairing you approve on the PC. The relay
+  can't read it, but it does see the IP addresses of your PC and devices, a fixed ID for the PC and its RoALT
+  version, when the PC is online, how many devices connect and which PCs a browser follows, and how much traffic
+  passes and when. It has no database: rooms and connections live in memory. Relay connections are not in the web
+  server's access log. The dashboard page's access log (IP addresses, user agents) rolls over at 10 MB; the old files
+  are deleted 72 hours after that, so on a quiet day the current one can hold older lines. The relay's own logs (no
+  addresses or IDs) rotate at 3 × 10 MB. On Windows 10, a client a device is watching gets Windows' yellow
+  capture border; Windows 11 shows none. Two limits to know: Control can spend Robux and trade in
+  game through taps and launches, so give it only to your own devices; and whoever runs the server that serves the
+  dashboard could serve changed code to browsers already paired. Never show the QR code or the pairing code on a
+  stream or to anyone. More in [the Remote threat model](docs/REMOTE_THREAT_MODEL.md).
 - **Rolimons values (opt-in, off by default).** While counting or with Browse › Limiteds open, RoALT downloads Rolimons' public item list from
   `api.rolimons.com` (at most every 30 minutes) with only `RoALT/<version>` as its user agent, and keeps it in the
   database. Nothing about you or your accounts is sent. Rolimons isn't part of Roblox, and its terms don't allow
@@ -508,7 +531,8 @@ In **Settings → Launching**, turn on **Auto-rejoin** (and, if you like, **Auto
 
 > [!IMPORTANT]
 > Your `.ROBLOSECURITY` cookie is the key to your account. RoALT keeps it encrypted, but never share a cookie,
-> a `.roalt` backup or its password with anyone, including people who say they are helping you.
+> a `.roalt` backup or its password, or a Remote pairing QR code or code, with anyone, including people who say
+> they are helping you.
 
 <br>
 
@@ -620,6 +644,8 @@ flowchart LR
     CMD --> LAUNCH["launcher<br/>target · uri · bulk · update"]
     CMD --> INST["instances<br/>tracker · limits · rejoin · metrics"]
     CMD --> DISC["discord<br/>webhook alerts"]
+    CMD --> REM["remote<br/>E2EE · opt-in"]
+    REM --> RELAY(("remote.roalt.dev<br/>relay"))
     VAULT --> DB[("SQLite<br/>roalt.db")]
     LAUNCH --> API
     LAUNCH --> RBX["RobloxPlayerBeta.exe"]
@@ -639,6 +665,7 @@ flowchart LR
 | [`browse.rs`](src-tauri/src/browse.rs) | Browse: roblox.com as a child webview inside the RoALT window, one account at a time; Play links handed to the launcher, the purchase lock, rotated cookies kept. |
 | [`rolimons.rs`](src-tauri/src/rolimons.rs) | Rolimons values (opt-in): its public item list, downloaded while counting limiteds or for Browse › Limiteds, at most every 30 minutes, parsed and kept. |
 | [`mods/`](src-tauri/src/mods) | Modpacks. `pack.rs` what a modpack may hold (paths, file types by their first bytes) and its zip; `library.rs` the imported ones; `runtime.rs` RoALT's own copy of the version folder that modded clients start from, never pruned while a client runs from it. |
+| [`remote/`](src-tauri/src/remote) | Remote: `crypto.rs` pairing and session crypto (P-256, HKDF, AES-GCM); `protocol.rs` the wire types; `dispatch.rs` the allowlist of what a device may do, by role; `preview.rs` preview JPEGs; `mod.rs` the relay connection and pairing. Input goes through `instances/remote_input.rs`. The dashboard is [`web/remote/`](web/remote), the relay [`server/remote-relay/`](server/remote-relay). |
 | [`storage/`](src-tauri/src/storage) | SQLite through `rusqlite` with numbered migrations. Running clients live in memory only. |
 
 <details>
@@ -720,15 +747,17 @@ npm run tauri dev        # run the app with hot reload
 │  ├─ dev/                 mock backend for `npm run dev`, and the ?gallery of every primitive
 │  ├─ styles/              tokens and layered CSS
 │  ├─ ui/                  shared components, the island, motion
-│  └─ features/            dashboard · news · accounts · launch · servers · browse · performance · monitor · discord · mods · crashes · debug · settings · onboarding · splash · vault · donate
+│  └─ features/            dashboard · news · accounts · launch · servers · browse · performance · monitor · discord · mods · crashes · debug · settings · onboarding · splash · vault · donate · remote
 ├─ src-tauri/              Rust backend
 │  ├─ src/
 │  │  ├─ main.rs           builder, plugins, managed state
 │  │  ├─ commands.rs       IPC layer
 │  │  ├─ model.rs          shared types (exported to TS)
-│  │  ├─ vault/  roblox_api/  launcher/  instances/  mods/  storage/
+│  │  ├─ vault/  roblox_api/  launcher/  instances/  mods/  remote/  storage/
 │  │  ├─ browse.rs  discord.rs  news.rs  online.rs  rolimons.rs  rpc.rs  session.rs  watchdog.rs  webview.rs  tray.rs  error.rs
 │  └─ tauri.conf.json
+├─ web/remote/             Remote dashboard (remote.roalt.dev), deployed apart from the app
+├─ server/                 online-counter/ (Cloudflare Worker) · remote-relay/ (Remote's relay, Docker)
 ├─ installer/RoALT.iss     Inno Setup script
 ├─ scripts/                build-installer.ps1 · check-i18n.mjs · test-*.mjs
 ├─ docs/                   images/ · research/fixtures/ (recorded Roblox responses the tests read, no real cookies)
@@ -746,11 +775,15 @@ npm run test:sounds; npm run test:news; npm run test:liquid; npm run test:look
 cd src-tauri
 cargo test --locked                            # Rust unit tests
 cargo clippy --all-targets --locked -- -D warnings
+cd ..
+npm --prefix web/remote ci; npm --prefix web/remote test; npm --prefix web/remote run build   # Remote dashboard
+cargo test --locked --manifest-path server/remote-relay/Cargo.toml                           # Remote relay
 ```
 
 The Rust tests cover link parsing, URI building (byte-for-byte against the website's output), vault and backup
-round-trips, and response parsing from recorded fixtures. They never use real cookies. CI runs all of the above on
-`windows-latest` for every push and pull request.
+round-trips, Remote's crypto, and response parsing from recorded fixtures. They never use real cookies. The
+dashboard's tests check its WebCrypto against vectors from the Rust side. CI runs all of the above for every push
+and pull request: the app on `windows-latest`, the dashboard and the relay on `ubuntu-latest`.
 
 <br>
 
@@ -772,8 +805,10 @@ Bug reports, ideas and pull requests are welcome.
 <br>
 
 Every push to `main` that changes the app is published by the Release workflow as the next patch
-(the latest release's `X.Y.Z+1`), with the commits since the last release as its notes. Installed
-copies are offered it within 6 hours. There is no draft to check first: only push what is ready.
+(the latest release's `X.Y.Z+1`), with its `CHANGELOG.md` section, or else the commits since the last
+release, as its notes. Installed copies are offered it within 6 hours. There is no draft to check
+first: only push what is ready. A push that changes only docs, `web/` or `server/` publishes nothing:
+the Remote dashboard and relay are deployed by hand, and the release still runs their tests.
 
 For a minor or major version:
 

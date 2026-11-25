@@ -108,6 +108,9 @@ fn tick(app: &AppHandle) -> Duration {
     if clients.is_empty() || crate::session::locked() {
         return TICK;
     }
+    if super::remote_input::holding() {
+        return Duration::from_millis(u64::from(IDLE_MS));
+    }
     // A hung client would block this one thread, and the others would get kicked for idling.
     let clients: Vec<_> = clients.into_iter().filter(|c| !process::hung(c.pid)).collect();
     let idle = idle_ms();
@@ -263,6 +266,9 @@ pub(super) fn to_front(hwnd: HWND) -> bool {
     if in_front(hwnd) {
         return true;
     }
+    if crate::session::locked() {
+        return false;
+    }
     let nudge = INPUT {
         r#type: INPUT_MOUSE,
         Anonymous: INPUT_0 { mi: MOUSEINPUT { dx: 0, dy: 0, dwFlags: MOUSEEVENTF_MOVE, ..Default::default() } },
@@ -277,7 +283,7 @@ pub(super) fn to_front(hwnd: HWND) -> bool {
 }
 
 /// One key event through `SendInput`.
-fn key(vk: VIRTUAL_KEY, scan: u16, flags: KEYBD_EVENT_FLAGS) {
+pub(super) fn key(vk: VIRTUAL_KEY, scan: u16, flags: KEYBD_EVENT_FLAGS) {
     let input = INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: vk, wScan: scan, dwFlags: flags, time: 0, dwExtraInfo: 0 } },

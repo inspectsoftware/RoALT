@@ -92,7 +92,12 @@ let settings: Settings = {
   autoUpdate: false, selfUpdate: true, tabLayout: "top", discordPresence: true, discordRpc: { showGame: true, showCount: true, showElapsed: true, showButtons: true, customDetails: "", customState: "" }, onlineCount: true, news: true, restartEveryH: 0, closeAfterH: 0, showSponsor: true, signInWatch: true, toggleHotkey: "", tileHotkey: "", minimizeHotkey: "", minimizeOnLaunch: false, microWidth: 320, microHeight: 240, tinyOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0, lowGraphics: true, skipSplash: false, protectMain: true, muteOnLaunch: false, windowLayout: "off", lighterRendering: true, renderFlags: { msaa: "x1", texture: "lowest", mode: "default", graySky: false, noGrass: true, lowestFrm: true, pauseVoxelizer: false },
   askBrowserLinks: false, customFlags: {}, customFlagsScope: "global", lockPurchases: true, rolimonsValues: false,
   allowPublicNetworks: true, language: "", modsOn: true, modsAck: false, onboarded: false,
+  remote: { enabled: false, pcName: "", blockOnPublicNetwork: false, relayUrl: "wss://remote.roalt.dev/ws/remote", allowViewPreviews: true },
 };
+
+let remoteDevices: import("../api").RemoteDevice[] = [];
+let remotePairing: import("../api").RemotePairSession | null = null;
+let remotePaused = false;
 
 // Mods: two packs, the top one on; how the last launch went (null: none since start).
 let mods: ModItem[] = [
@@ -1630,6 +1635,78 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       return args.options?.directory ? "D:\\RoALT data" : "C:\\Users\\you\\Documents\\RoALT-backup-2026-10-01.roalt";
     case "plugin:window|is_maximized":
       return false;
+    case "remote_status":
+      return {
+        state: !settings.remote.enabled ? "off" : remoteDevices.length || remotePairing ? "connected" : "idle",
+        pcId: "00000000-0000-4000-8000-000000000001",
+        pcName: settings.remote.pcName || "My PC",
+        relayUrl: settings.remote.relayUrl,
+        error: null,
+        devices: remoteDevices,
+        activeViewers: remoteDevices.filter((d) => d.connected).length,
+        watching: 0,
+        paused: remotePaused,
+        pairing: remotePairing,
+      };
+    case "remote_pair_start": {
+      if (!settings.remote.enabled) settings.remote = { ...settings.remote, enabled: true };
+      const pairId = "demo1234abcd5678";
+      remotePairing = {
+        pairId,
+        qrUrl: `https://remote.roalt.dev/#pair=${pairId}.mocksecretkey0123456789abcdef`,
+        manualCode: "ROAL-7429",
+        expiresAt: Date.now() + 120_000,
+        pending: null,
+        aborted: false,
+      };
+      void emit("remote://changed");
+      return remotePairing;
+    }
+    case "remote_pair_cancel":
+      remotePairing = null;
+      void emit("remote://changed");
+      return null;
+    case "remote_pair_approve": {
+      if (args.approve && remotePairing?.pending) {
+        remoteDevices = [
+          {
+            id: remotePairing.pending.deviceId,
+            label: remotePairing.pending.label,
+            role: args.role === "control" ? "control" : "readonly",
+            createdAt: Date.now(),
+            lastSeenAt: Date.now(),
+            connected: true,
+            pending: false,
+          },
+          ...remoteDevices,
+        ];
+        void emit("remote://pairing", { outcome: "paired", label: remotePairing.pending.label });
+      }
+      remotePairing = null;
+      void emit("remote://changed");
+      return null;
+    }
+    case "remote_device_revoke":
+      remoteDevices = remoteDevices.filter((d) => d.id !== args.deviceId);
+      void emit("remote://changed");
+      return null;
+    case "remote_device_update":
+      remoteDevices = remoteDevices.map((d) =>
+        d.id === args.deviceId
+          ? {
+              ...d,
+              label: typeof args.label === "string" && args.label.trim() ? args.label.trim() : d.label,
+              role: (args.role as "control" | "readonly") ?? d.role,
+            }
+          : d,
+      );
+      void emit("remote://changed");
+      return null;
+    case "remote_set_paused":
+      remotePaused = !!args.paused;
+      if (remotePaused) remoteDevices = remoteDevices.map((d) => ({ ...d, connected: false }));
+      void emit("remote://changed");
+      return null;
     default:
       // Window controls, opener and clipboard calls do nothing in the preview.
       if (!/^plugin:(window|opener|clipboard-manager)\|/.test(cmd)) console.warn("[mock ipc] unhandled", cmd);

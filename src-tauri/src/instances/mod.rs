@@ -19,4 +19,5 @@ pub mod window;
 mod tracker;
 
 pub mod rejoin;
+pub mod remote_input;
 pub use tracker::{LOG_SKEW_SECS, Tracker, Transition, auth_failed, challenged, closed, frame_size, hung, layout_batch_done, unexpected, wrong_account};

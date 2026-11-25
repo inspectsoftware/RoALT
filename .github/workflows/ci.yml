@@ -32,6 +32,44 @@ jobs:
           workspaces: src-tauri
       - run: cargo test --locked
         working-directory: src-tauri
+      - name: Committed TypeScript bindings match the Rust types
+        shell: bash
+        run: |
+          changed="$(git status --porcelain -- src/bindings)"
+          if [ -n "$changed" ]; then echo "$changed"; echo "Run npm run bindings and commit src/bindings."; exit 1; fi
       - if: ${{ !cancelled() }}
         run: cargo clippy --all-targets --locked -- -D warnings
         working-directory: src-tauri
+
+  remote-web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web/remote
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/remote/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  remote-relay:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server/remote-relay
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server/remote-relay
+      - run: cargo test --locked
+      - if: ${{ !cancelled() }}
+        run: cargo clippy --all-targets --locked -- -D warnings

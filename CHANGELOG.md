@@ -3,6 +3,42 @@
 What changed in each RoALT release. Patch releases between these list their commits on
 [GitHub Releases](https://github.com/inspectsoftware/RoALT/releases).
 
+## 1.4.0 (unreleased)
+
+### New
+
+- **RoALT Remote (off by default).** Watch and manage your clients from your phone or another PC
+  at [remote.roalt.dev](https://remote.roalt.dev/). Turn it on in Settings › Remote, click Pair
+  device, and scan the QR code or type the 8-character code. Nothing connects until you do.
+- **You approve every device on the PC.** A code pairing also shows a 6-digit code on both
+  screens: approve only when they match. Every new pairing shows a notice, a second device trying
+  the same code stops the pairing, and a PC takes up to 64 devices.
+- **New devices can only watch.** View shows your clients, live previews, the monitor and crashes.
+  Give a device Control in Settings › Remote and it can also launch accounts and favourites, close
+  and arrange clients, change limits, stop every client, schedule a shutdown, and tap, steer and
+  press keys inside a client. Control can spend Robux and trade items in game, so give it only to
+  your own devices, and never show the QR code or the pairing code on a stream or to a "helper".
+- **End-to-end encrypted.** What the PC and the device send each other is encrypted on one and
+  opened only on the other. Cookies, vault passwords, recovery codes, account notes and launch
+  arguments never leave the PC.
+- **The relay** at `wss://remote.roalt.dev/ws/remote` only passes the encrypted traffic on. It sees
+  IP addresses, the PC's RoALT version, when the PC is online, how many devices connect and how much
+  they send. See
+  [Safety and privacy](https://github.com/inspectsoftware/RoALT#-safety-and-privacy) and the
+  [Remote threat model](https://github.com/inspectsoftware/RoALT/blob/main/docs/REMOTE_THREAT_MODEL.md).
+- **Always in view.** A title-bar pill shows which devices are connected, and Revoke removes a
+  device for good. Remote can pause itself on Public networks.
+- **No stuck input.** Held keys, the camera drag and touches are let go when the device goes quiet,
+  Windows locks, or the device loses Control. A RoALT too old for the relay is told to update.
+- **Hall of fame.** The app menu thanks the contributors and beta testers who helped build and
+  test RoALT, with their Discord usernames one click from your clipboard.
+
+### Fixed
+
+- A client no longer stays on "Starting" while its game runs. Roblox can keep an idle copy of
+  itself in the tray and hand the next launch to it; RoALT now closes that idle copy before it
+  launches. Copies that are in a game are left alone.
+
 ## 1.3.0 (2026-11-20)
 
 ### New

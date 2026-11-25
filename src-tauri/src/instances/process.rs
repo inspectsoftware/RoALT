@@ -24,10 +24,18 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{BOOL, Owned};
 
+use super::multi::UnicodeString;
 use crate::error::{AppError, Result};
 
 const CLIENT_EXE: &str = "RobloxPlayerBeta.exe";
 const INSTALLER_EXE: &str = "RobloxPlayerInstaller.exe";
+const TRAY_ARG: &str = "--launch-to-tray";
+const PROCESS_COMMAND_LINE_INFORMATION: u32 = 60;
+
+#[link(name = "ntdll")]
+unsafe extern "system" {
+    fn NtQueryInformationProcess(process: HANDLE, class: u32, info: *mut std::ffi::c_void, len: u32, ret_len: *mut u32) -> i32;
+}
 /// 1601-01-01 (FILETIME's epoch) to 1970-01-01, in 100 ns ticks.
 const UNIX_EPOCH_TICKS: u64 = 116_444_736_000_000_000;
 
@@ -73,6 +81,36 @@ pub fn is_roblox_helper(exe: &str) -> bool {
 /// client, then starts it again.
 pub fn installer_running() -> bool {
     !named(INSTALLER_EXE).is_empty() || !named("RobloxPlayerLauncher.exe").is_empty()
+}
+
+/// Roblox's idle tray copies: started with `--launch-to-tray` (at logon, or as a game window
+/// closes) and showing no window. The next launch hands its game to one and exits at once.
+pub fn idle_tray_copies() -> Vec<ProcInfo> {
+    roblox_processes().into_iter().filter(|p| main_window(p.pid).is_none() && command_line_has(p.pid, TRAY_ARG)).collect()
+}
+
+/// Whether `pid`'s command line contains `needle`. The copy read is wiped: a client's command
+/// line carries its sign-in ticket.
+fn command_line_has(pid: u32, needle: &str) -> bool {
+    let Some(h) = open(pid, PROCESS_QUERY_LIMITED_INFORMATION) else { return false };
+    let mut len = 0u32;
+    // SAFETY: a size query without a buffer; `len` is a local.
+    unsafe { NtQueryInformationProcess(*h, PROCESS_COMMAND_LINE_INFORMATION, std::ptr::null_mut(), 0, &mut len) };
+    if (len as usize) < size_of::<UnicodeString>() {
+        return false;
+    }
+    let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+    let needle: Vec<u16> = needle.encode_utf16().collect();
+    // SAFETY: `buf` is 8-aligned and at least `len` bytes; on success it starts with a
+    // UNICODE_STRING whose buffer lies inside `buf`.
+    let found = unsafe {
+        NtQueryInformationProcess(*h, PROCESS_COMMAND_LINE_INFORMATION, buf.as_mut_ptr().cast(), len, &mut len) >= 0 && {
+            let s = &*buf.as_ptr().cast::<UnicodeString>();
+            !s.buffer.is_null() && std::slice::from_raw_parts(s.buffer, usize::from(s.length) / 2).windows(needle.len()).any(|w| w == needle)
+        }
+    };
+    buf.fill(0);
+    found
 }
 
 /// Running processes whose executable is `exe`.
@@ -404,6 +442,18 @@ mod tests {
 
     fn sleeper() -> Child {
         spawn("PING.EXE", &["-n", "30", "127.0.0.1"])
+    }
+
+    #[test]
+    fn reads_another_process_command_line() {
+        let mut child = sleeper();
+        let pid = child.id();
+        assert!(command_line_has(pid, "-n 30 127.0.0.1"));
+        assert!(!command_line_has(pid, TRAY_ARG));
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(!command_line_has(pid, "PING"), "a gone process has none");
+        assert!(idle_tray_copies().iter().all(|p| p.pid != pid));
     }
 
     #[test]

@@ -1241,6 +1241,7 @@ pub(crate) async fn launch_tracked(
         s.bulk.release(slot);
         return Err(killed());
     }
+    close_idle_tray_copies(s).await;
     retake_multi(s, &v);
     // Holds the shared files until the client is tracked (the poll releases them when idle).
     let launching = s.multi.launching(v.multi_instance && v.protect_shared_login);
@@ -2362,6 +2363,24 @@ async fn close_all(targets: Vec<(u32, Option<u64>)>, force: bool, grace: Duratio
                 .collect()
         })
     }).await
+}
+
+/// Roblox hands a launch to its idle tray copy and the client RoALT started exits at once, so the
+/// card would stay "Starting" while the game runs in a window RoALT doesn't know.
+async fn close_idle_tray_copies(s: &App) {
+    let copies: Vec<_> = crate::instances::process::idle_tray_copies()
+        .into_iter()
+        .filter(|p| !s.tracker.follows(p.pid))
+        .map(|p| (p.pid, Some(p.start_time)))
+        .collect();
+    if copies.is_empty() {
+        return;
+    }
+    log::info!("closing {} idle Roblox tray process(es) before a launch", copies.len());
+    match close_all(copies, true, Duration::ZERO).await {
+        Ok(results) => results.into_iter().filter_map(|r| r.err()).for_each(|e| log::warn!("could not close Roblox's tray process: {e}")),
+        Err(e) => log::warn!("could not close Roblox's tray processes: {e}"),
+    }
 }
 
 #[tauri::command]

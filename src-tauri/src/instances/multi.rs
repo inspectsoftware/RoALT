@@ -421,10 +421,10 @@ struct HandleEntry {
 /// UNICODE_STRING (heads OBJECT_NAME_INFORMATION and OBJECT_TYPE_INFORMATION).
 #[repr(C)]
 #[allow(dead_code)]
-struct UnicodeString {
-    length: u16,
+pub(super) struct UnicodeString {
+    pub(super) length: u16,
     max: u16,
-    buffer: *const u16,
+    pub(super) buffer: *const u16,
 }
 
 /// One handle of the system's handle table. `object` reads 0 where Windows hides kernel

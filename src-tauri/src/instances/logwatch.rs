@@ -54,7 +54,12 @@ pub const SENSITIVE: [&str; 7] = ["gameinfo", "ticket", "placelauncher", "roblos
 /// As Bloxstrap reads it (`ActivityWatcher.cs`); not captured from a log here. If Roblox stops
 /// logging it, a teleport looks like a disconnect again, nothing worse.
 const TELEPORT: &str = "UgcExperienceController: doTeleport";
-const DISCONNECTS: [&str; 6] = [
+/// Not `[DFLog::NetworkClient] Client:Disconnect`: Roblox logs it too when it moves a client to
+/// another server and that works (no join line follows, only "Replicator created").
+const DISCONNECTS: [&str; 7] = [
+    // The last line when a game drops the client ("Disconnected from game, please reconnect"),
+    // with none of the others before it: without it such a client stayed "In game".
+    "Client has been disconnected with reason",
     "Disconnection Notification",
     "Lost connection with reason",
     "Time to disconnect replication data",
@@ -538,6 +543,52 @@ mod tests {
         assert_eq!(done, crate::model::LogsCleaned { files: 1, bytes: CLEAN_BYTES + 1 });
         assert!(!dir.join("big.log").exists() && dir.join("small.log").exists() && dir.join("live.log").exists());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The end of a real client log (Roblox 0.748, 2026-11-24, addresses masked): a server move
+    /// that worked, then the game dropped the client. RoALT kept it "In game" before.
+    const MOVED: [&str; 5] = [
+        "2026-11-24T22:34:14.020Z,1653.020996,6480,6,Info [DFLog::NetworkClient] Client:Disconnect",
+        "2026-11-24T22:34:14.419Z,1653.419800,6480,7 [FLog::Network] NetworkClient:Remove",
+        "2026-11-24T22:34:15.025Z,1654.025269,5d58,6,Info [DFLog::NetworkClient] Connection accepted from x.x.x.x|57333",
+        "2026-11-24T22:34:15.346Z,1654.346191,6480,7 [FLog::Network] serverId: x.x.x.x|57333",
+        "2026-11-24T22:34:15.348Z,1654.348145,6480,7 [FLog::Network] Replicator created for player x.x.x.x|57333",
+    ];
+    const DROPPED: &str = "2026-11-24T22:34:15.354Z,1654.354126,6480,7 [FLog::Network] Client has been disconnected with reason: Disconnected from game, please reconnect";
+
+    fn in_game() -> LogFacts {
+        parsed(&[
+            format!("x [FLog::Output] ! Joining game '{JOB}' place {PLACE} at 1.2.3.4").as_str(),
+            "x [FLog::Network] Replicator created: 0000015109BFC4F0",
+        ])
+    }
+
+    #[test]
+    fn a_server_move_that_works_isnt_a_disconnect() {
+        let mut f = in_game();
+        for l in MOVED {
+            parse_line(l, &mut f);
+        }
+        assert!(f.in_game && !f.disconnected, "{f:?}");
+    }
+
+    #[test]
+    fn a_game_that_drops_the_client_is_a_disconnect() {
+        let mut f = in_game();
+        for l in MOVED.iter().copied().chain([DROPPED]) {
+            parse_line(l, &mut f);
+        }
+        assert!(f.disconnected && !f.left, "{f:?}");
+        assert!(f.reason.as_deref().is_some_and(|r| r.contains("please reconnect")), "{:?}", f.reason);
+    }
+
+    #[test]
+    fn a_dropped_client_that_left_itself_is_still_not_rejoined() {
+        for reason in ["285", "273"] {
+            let mut f = in_game();
+            parse_line(&format!("x [FLog::Network] Client has been disconnected with reason: {reason}"), &mut f);
+            assert!(f.disconnected && f.left, "{reason}: {f:?}");
+        }
     }
 
     #[test]
